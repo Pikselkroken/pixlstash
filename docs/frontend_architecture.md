@@ -1585,6 +1585,7 @@ Load-bearing behaviours:
 - **Save as recipe lists one row per LoRA**, each removable with Restore, and a LoRA the shelf cannot identify is flagged with what a run will do with it. Taking a flagged one off asks **"Take X out of what?"** every time: this recipe (the row goes) or the workflow, which opens `/workflows?workflow=<id>&edit=loras&drop_lora=<filename>` (`loraChain.editLorasRoute(id)`) with that loader already deleted. The saved body holds exactly the rows shown.
 - **A missing model blocks the WHOLE batch**, mirroring `workflow_run_service.blocks_batch`: installing a file is a trip away from the keyboard, so queueing the rest would leave the owner repeating the gesture to catch what was skipped. A group that cannot run stays on screen, faded, with its reason and its count — filtering it out would make the total add up and say nothing about why. `MakeMoreDialog.test.js` pins that.
 - **An empty prompt box is `null`, not `""`.** `apply_prompts` leaves the graph alone on `None` and writes on `""`, so the two are opposite instructions: "leave the graph's own text alone" and "blank every positive-prompt node". Only a box that *had* text in it and was cleared sends `""`. A card and a multi-picture selection read no recipe, so their box is empty because nothing filled it, and sending that would generate from no prompt at all. Such a box is then filled with the workflow's own prompt once the pre-flight has read it (`RunGroup.prompt.positive_text`), and where `positive_settable` is false there is no box at all, only a line saying so, and `prompt` goes as `null`.
+- **Enhance prompt** (`data-testid="rund-enhance"`), a checkbox under the Prompt box with a one-line hint, drawn only where the pre-flight's first group reports `prompt.enhancer` (a `TextGenerate` language model rewrites the prompt before its encoder; the popup runs one workflow, so the first group is the card's). On by default, per run and never remembered, like the stack and the stages. Off is `enhance_prompt: false` in `runBody`, so the pre-flight, the run and Open in ComfyUI all carry it, and the box re-asks the pre-flight, whose answer is about the graph without the enhancer (its model no longer counts as missing). On sends nothing. The server keeps reporting `enhancer: true` with the enhancer cut, so the box does not vanish when turned off, and `false` on a graph with no enhancer is a no-op, so the field is not gated on the box being drawn.
 - **`count` is per RECIPE, unless the recipe takes its pictures.** `_submit_every` runs each card `count` times; the pictures only choose which cards run — except where a card's picture input is fed from them (`fill: "selection"`, #1457), when the run repeats once per picture. `MakeMoreDialog` therefore counts each runnable group once, or once per picture where it feeds them, times `count`, reads that from the pre-flight rather than deciding it, and labels the field plain **"Count"** since it is per recipe for one card and per picture for another. A card it cannot run because it needs a picture chosen is named with `picture_input_unfilled`'s sentence; that dialog has no picture UI of its own.
 - **The ceiling is on the TOTAL, and it is 200.** `MAX_RUNS_PER_REQUEST` (`routes/comfyui.py`) is checked by `_plan` against the sum over every group, so two recipes at 150 each is a 400 although each count is legal. Both popups guard the product and name the number rather than letting the owner find it by pressing Run.
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
@@ -1604,6 +1605,7 @@ Load-bearing behaviours:
   | Any other parameter, fixed ones included | when changed | `values`, always | only when changed |
   | A change waiting in the Workflow tab the form has no control for | yes | as it waits | by the server, from what waits |
   | Prompt, negative prompt, seed, count, stack | no | as before | no |
+  | Enhance prompt, off | no | `enhance_prompt: false` | no |
   | Pictures put in, where results go | no | `inputs`, `destination` | no |
   | People picked, and a LoRA added by hand | no | `add_loras` | no |
   | The person assigned to | no | `character_id` | no |
@@ -1737,14 +1739,19 @@ Escape and Enter do nothing here: cancelling deletes a set.
   photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
   well, `ENGINES[…].sizes`: 4K for all but MiniMax H3 and H3 Image, Small and
-  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set stands
-  where the model draws it), wrapping only on a narrow window, with one line of hints; the
+  Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set, or
+  remembered as picked for that same model (`size_family`), stands where the
+  model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. *Draw a* follows the
   description (`subjectFromDescription`: "man", "he", "his" against "woman",
   "she", "her") until a toggle is picked by hand, as the framing follows its
   suggestion. There is no Body field: the build belongs in the description,
   and a build saved while there was one has its body text joined to the
-  description when it opens. The step reads the
+  description when it opens. *Photo look* (*Natural* / *Off*, a sixth
+  `Segmented`, on by default) is sent as `photo_look` and shows, with its
+  hint, only while the step's `layout` computed is `"prose"` (every engine but
+  MOSS-Image, and every draw from a reference); the route ignores it for
+  MOSS-Image's layout and a sheet copy's regions. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
@@ -1942,11 +1949,12 @@ Focus goes back to the person's row on every close.
 A step with nothing saved, here or on a training set's build screen, starts
 from the choices last made on this machine (`CharacterSheetStep.vue`,
 `localStorage` `pixlstash:characterSheetChoices`): the mode, each mode's
-workflow, the size, the count and, per person, a LoRA other than the default.
+workflow, the size (with the model family it was picked for), the count and, per person, a LoRA other than the default.
 Only a change made after `restore` is remembered, so the mode `load` picks (a
 face drawing from its reference) never is, though a mode switch remembers the
 workflow it lands on; a remembered reference mode applies only to a person with
-a face. A saved `snapshot` stands over all of it.
+a face. The photo look is remembered too, and a saved form without one (saved
+before the toggle) reads as on. A saved `snapshot` stands over all of it.
 
 The same entry keeps, under `recent`, the last twenty values each of Top,
 Bottoms, Shoes and Background was drawn with, newest first, recorded at draw

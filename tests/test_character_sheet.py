@@ -29,6 +29,7 @@ from pixlstash.services.workflow_parameters import BLANK_PICTURE_CLASSES
 from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
+    PHOTO_LOOK,
     SHEET_HEIGHT,
     SHEET_WIDTH,
     agreement,
@@ -246,9 +247,30 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
 
 def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
     layout = json.loads(sheet_prompt(description="x", reference=True))
-    prose = sheet_prompt(description="x", reference=True, layout="prose")
-    assert prose == layout["summary"]["caption"]
+    prose = sheet_prompt(
+        description="x", reference=True, layout="prose", photo_look=False
+    )
+    # The same sentence, with the eye colour among what every photo shares.
+    assert prose == layout["summary"]["caption"].replace(
+        "Identical face, hair", "Identical face, eye colour, hair"
+    )
     assert prose.startswith("Character reference sheet of one and the same woman")
+
+
+def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
+    """Ordinary unedited photographs, not renders: on by default for prose,
+    and the probed MOSS and regions layouts never see it."""
+    look = sheet_prompt(description="x", layout="prose")
+    plain = sheet_prompt(description="x", layout="prose", photo_look=False)
+    assert look.endswith(f" {PHOTO_LOOK}")
+    assert "photorealistic" not in look
+    assert PHOTO_LOOK not in plain and "photorealistic photographs" in plain
+    for layout in ("moss", "regions"):
+        assert sheet_prompt(description="x", layout=layout) == sheet_prompt(
+            description="x", layout=layout, photo_look=False
+        )
+        text = sheet_prompt(description="x", layout=layout)
+        assert "digitals" not in text and "eye colour" not in text
 
 
 def _edit_graph(latent: str) -> dict:
@@ -944,6 +966,33 @@ def test_on_a_seamless_sheet_the_cut_lands_in_the_background_between_people():
     assert clean
 
 
+def test_photos_drawn_touching_are_cut_on_the_seam_not_through_an_arm():
+    """MiniMax H3 draws its photos edge to edge, each on its own backdrop lit
+    top to bottom, so no line between them is even all along; a lit arm as
+    grey as the backdrop is. The cut belongs on the step between backdrops."""
+    ramp = np.linspace(186, 150, SHEET_HEIGHT)[:, None]
+    pixels = np.full((SHEET_HEIGHT, SHEET_WIDTH), 200.0)
+    pixels[:, 1200:1840] = ramp  # the first body photo's backdrop
+    pixels[:, 1840:] = ramp - 20  # the second's, a step darker
+    pixels[230:, 1700:1725] = 170  # an arm, 155 px left of the seam
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    # Cut down the seam's middle, 2 px of it to each side.
+    assert (cells[4][2], cells[5][0]) == (1840 - 2, 1840 + 2)
+    assert clean
+
+
+def test_a_white_gutter_wider_than_a_divider_is_cut_inside_not_on_its_edge():
+    """The edge where a photo meets white is the frame's, not a seam: the cut
+    stays inside the white, blurred edge and all, so the frame trim takes all
+    of it and no panel keeps a strip of frame."""
+    image = _photos([("x", 1150, 1230, 252), ("x", 1229, 1230, 244)])
+    cells, _clean = sheet_cells(image)
+    gray = np.asarray(image.convert("L"), dtype=np.int16)
+    for left, top, right, bottom in (cells[1], cells[4]):
+        for edge in (gray[top:bottom, left], gray[top:bottom, right - 1]):
+            assert _uneven(edge)
+
+
 def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
     """A dark line through a face looks like a divider; with the faces given
     it is never the cut, and with nothing else clear the sheet is not clean."""
@@ -1268,6 +1317,12 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "proportions": "little_person", "layout": "prose"},
     ).json()["prompt"]
     assert "a little person with dwarfism" in little
+    assert little.endswith(character_sheet.PHOTO_LOOK)
+    plain = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "layout": "prose", "photo_look": False},
+    ).json()["prompt"]
+    assert "digitals" not in plain
     giant = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "giant"},

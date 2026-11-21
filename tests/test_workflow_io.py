@@ -852,6 +852,39 @@ def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     assert recipe["positive_prompt"] == "Make the hat purple."
 
 
+@pytest.mark.parametrize(
+    "name", ["MiniMax-H3-Image-Edit.json", "Inpaint-MiniMax-H3-Image.json"]
+)
+def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
+    """Off: the encoder reads the prompt and the enhancer's nodes are gone, its
+    9B loader with them. On, or not asked: the graph runs as it is."""
+    for enhance in (None, True):
+        graph = _load(BUILT_IN / name)
+        report = run_service.apply_prompts(graph, "Make the hat purple.", None, enhance)
+        assert report["enhancer"] is True
+        assert graph["6"]["inputs"]["prompt"] == ["23", 0]
+        assert {"20", "21", "22", "23"} <= set(graph)
+    graph = _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, "Make the hat purple.", None, False)
+    assert report["enhancer"] is True
+    assert graph["6"]["inputs"]["prompt"] == "Make the hat purple."
+    # Those four and nothing else: the picture the enhancer also read stays.
+    assert set(graph) == set(_load(BUILT_IN / name)) - {"20", "21", "22", "23"}
+    assert extract_generation_info(graph)["positive_prompt"] == "Make the hat purple."
+    # No prompt sent: the workflow's own words, still without the enhancer.
+    graph = _load(BUILT_IN / name)
+    run_service.apply_prompts(graph, None, None, False)
+    assert (
+        graph["6"]["inputs"]["prompt"]
+        == _load(BUILT_IN / name)["21"]["inputs"]["replace"]
+    )
+    # A graph with no enhancer says so, and is left alone.
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, False)
+    assert (report["enhancer"], json.dumps(graph)) == (False, before)
+
+
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")

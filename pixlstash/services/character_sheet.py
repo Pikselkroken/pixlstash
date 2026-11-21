@@ -322,6 +322,16 @@ _PROPORTION_WORDS = {
 }
 
 NEGATIVE_PROMPT = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+# The prose sheet as ordinary unedited photographs rather than renders: a model
+# agency's "digitals". MiniMax H3 Image draws a glossy beauty-filter look
+# without it, and exaggerates every skin detail named, so the skin is said
+# once and gently. ponytail: read off the 2026-11-21 probes (MiniMax H3 Image,
+# Qwen-Image); re-probe before adding to it.
+PHOTO_LOOK = (
+    "The photos look like a model agency's digitals: plain unedited camera "
+    "photos, natural colour, true-to-life skin, little or no "
+    "makeup, soft focus falloff, nothing retouched or sharpened."
+)
 
 
 def _phrase(text: str) -> str:
@@ -405,6 +415,7 @@ def sheet_prompt(
     size: Size = "large",
     reference: bool = False,
     layout: Layout = "moss",
+    photo_look: bool = True,
 ) -> str:
     """The prompt for one grid sheet of the character described.
 
@@ -430,6 +441,10 @@ def sheet_prompt(
     and reshapes the body photos' boxes to that figure; the words alone lose
     to boxes laid out for a seven-heads-tall adult.
     The boxes are laid out on the large canvas and scaled to *size*'s.
+    *photo_look* adds :data:`PHOTO_LOOK` to a prose prompt and drops
+    "photorealistic", render vocabulary. A prose prompt also names the eye
+    colour among what every photo shares. The MOSS and regions layouts are
+    the probed ones and stay as they are.
     """
     scale = SIZES[size][0] / SHEET_WIDTH
     p, cap_p = _PRONOUN[subject]
@@ -509,17 +524,20 @@ def sheet_prompt(
         if backdrop
         else "on a plain light-grey studio background, soft even studio lighting"
     )
+    prose = layout == "prose"
+    look = prose and photo_look
     summary = (
         f"Character reference sheet of one and the same {subject} {setting}, "
-        "photorealistic photographs. On the left half, four passport-style "
-        "head-and-shoulders "
+        f"{'' if look else 'photorealistic '}photographs. On the left half, "
+        "four passport-style head-and-shoulders "
         f"photos in two rows of two: {views}. On the right half, two tall "
         f"{_FRAMING_SUMMARY[framing]}: (5) standing, front view at eye level, "
         f"(6) standing, three-quarter view. The {subject} is {character}. "
-        "Identical face, hair, body shape and clothing in every photo."
+        f"Identical face, {'eye colour, ' if prose else ''}hair, body shape and "
+        "clothing in every photo."
     )
-    if layout == "prose":
-        return summary
+    if prose:
+        return f"{summary} {PHOTO_LOOK}" if look else summary
     document = {
         "summary": {"caption": summary},
         "items": items,
@@ -778,9 +796,12 @@ def _find_cut(
 
     The cut lands, in order of preference, in the uniform band nearest
     *nominal* that has a step at its edges (a gutter or a drawn line, trimmed
-    to its edges plus a soft seam's width); at *nominal* moved into the nearest wider
+    to its edges plus a soft seam's width); down the middle of the nearest
+    seam, a step running the cut's length between two photos drawn touching
+    (not off white, which is the frame's edge), a soft seam's width trimmed
+    each side; at *nominal* moved into the nearest wider
     or step-less band (background the photos share, nothing trimmed); or, with
-    neither, on the most uniform line, which is not ``sure``.
+    none, on the most uniform line, which is not ``sure``.
     """
     plane = gray if vertical else gray.T
     size = plane.shape[1]
@@ -812,17 +833,9 @@ def _find_cut(
             runs[-1] = (runs[-1][0], line + 1)
         else:
             runs.append((line, line + 1))
-    if not runs:
-        # ponytail: no clear line anywhere in the window (two photos drawn
-        # touching, an arm across the gutter); the least busy line is a guess.
-        if fenced.all():
-            # Faces across the whole window: the line furthest from them.
-            line = lo + int(np.argmax(clearance))
-        else:
-            line = lo + int(np.argmax(np.where(fenced, -1.0, share[1:-1])))
-        return line, line, False
     gutter = max(1, round(MAX_GUTTER * scale))
     bleed = max(1, round(2 * scale))
+    margin = gutter // 4
 
     def level(line: int) -> float:
         return float(np.median(plane[across[0] : across[1], line]))
@@ -853,8 +866,41 @@ def _find_cut(
     if dividers:
         start, end = min(dividers, key=distance)
         return start - bleed, end + bleed, True
+    # Photos drawn touching, each on its own backdrop (MiniMax H3), meet in a
+    # step that runs the cut's length with no band between them: a backdrop
+    # lit top to bottom is no band, and a lit arm can match it in grey. A
+    # step off white is the frame's own edge, which the frame trim finds:
+    # white is read a margin out, past the edge's blur.
+    span = plane[across[0] : across[1]]
+
+    def side(offset: int) -> np.ndarray:
+        return span[:, np.clip(lines + offset, 0, size - 1)]
+
+    edge = (np.abs(side(bleed) - side(-1 - bleed)) > UNIFORM_LEVELS).mean(axis=0)
+    white = np.maximum(
+        np.median(side(margin), axis=0), np.median(side(-1 - margin), axis=0)
+    )
+    seam = (edge >= UNIFORM_SHARE) & (white <= FRAME_LEVEL) & ~fenced
+    if seam.any():
+        # The nearest seam, cut down its middle: every line within a soft
+        # seam's width of the step reads it.
+        first = last = int(np.argmin(np.where(seam, np.abs(lines - nominal), np.inf)))
+        while first > 0 and seam[first - 1]:
+            first -= 1
+        while last < len(seam) - 1 and seam[last + 1]:
+            last += 1
+        line = lo + (first + last) // 2
+        return line - bleed, line + bleed, True
+    if not runs:
+        # ponytail: no clear line anywhere in the window (an arm across the
+        # gutter or the seam); the least busy line is a guess.
+        if fenced.all():
+            # Faces across the whole window: the line furthest from them.
+            line = lo + int(np.argmax(clearance))
+        else:
+            line = lo + int(np.argmax(np.where(fenced, -1.0, share[1:-1])))
+        return line, line, False
     start, end = min(runs, key=distance)
-    margin = gutter // 4
     line = min(max(nominal, start + margin), end - 1 - margin)
     if line < start:
         line = (start + end) // 2

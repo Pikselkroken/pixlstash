@@ -3053,7 +3053,7 @@ deletable by its old routes, and read once by data step 7.
 
 | Table | Holds |
 |---|---|
-| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it what the save changed, which the version menu's words are made from: `models`, `loras`, `run`, `comfyui`, `mcp`, `revert:<n>`, and `chain` for a LoRA chain edit; "Saving over a workflow", below), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept); versions whose `source` is `comfyui` are counted apart, the newest `MAX_COMFYUI_VERSIONS` (49), prune only each other, and carry the `opening` they were saved from, whose next save supersedes them where nothing was made on them ("Saving over a workflow", below). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by every save over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version, when that version was stored and whether a conversion is stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
+| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it what the save changed, which the version menu's words are made from: `models`, `loras`, `run`, `comfyui`, `mcp`, `revert:<n>`, `chain` for a LoRA chain edit, and `release` for a built-in a release changed; "Saving over a workflow", below), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept); versions whose `source` is `comfyui` are counted apart, the newest `MAX_COMFYUI_VERSIONS` (49), prune only each other, and carry the `opening` they were saved from, whose next save supersedes them where nothing was made on them ("Saving over a workflow", below). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by every save over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version, when that version was stored and whether a conversion is stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
 | `workflow_document` | `workflow_id` PK, `document` (the current version's, see `workflow_version`: as imported, editor or API format, placeholders migrated, `pixlstash_bindings` kept), `api_document` (the API graph an editor document converts into, on its current version row too: ComfyUI's, which `POST /comfyui/workflows/convert` stores on every row holding that document, or the server's own, which `workflow_card_service.converted_manual_document` stores on the first read that needs the graph and never over one already there), `origin` (`import`, `inbox`, `builtin`, `duplicate`, `fixed`, `clone`, `chain`, `recipe`, and `pull`; a CHECK. `pull` is a workflow the removed pull of ComfyUI's saved workflows made: since #1854 no new workflow gets it, bar a file that pull wrote which data step 7 adopts, and `WorkflowCard.origin_category` answers `comfyui` for it, which is how the Workflows view's Origin filter lists the ones left behind for the owner to select and delete), `from_workflow_id` and `from_name` (what a copy or an extract was made from, as it was called then), `created_at`. Name, notes, hidden, defaults, pins and picture inputs are the `workflow_group_*` rows keyed by the same id; there is no `workflow_group` row |
 
 **Its own record, never grouped.** `card_index` appends one `Card` per row
@@ -3188,7 +3188,23 @@ start-up (`routes.comfyui.list_builtin_workflows`, after the inbox reconcile;
 built-in with no `builtin` origin row at all, and deleting one keeps its row,
 `dismissed`, so it is never listed again; the card route is the explicit way
 back, and its upsert clears `dismissed`. A built-in deleted before this kept
-no row and is listed once more. A `.webp` shipped beside a built-in's
+no row and is listed once more. **A release that changes a built-in's file updates
+the copy the owner never edited** (`refresh_builtin_workflow`, from the same
+start-up pass, for each live one): the origin row's `content_hash` is the file
+as last filed, so a file that still hashes so costs one read and a hash. One
+that differs is stored over the workflow as its next version (`source`
+`release`, "updated with PixlStash" in the version menu) through
+`store_over_workflow`, with the origin row's hash moved to the new file in the
+same transaction, **only when the current version's `content_hash` is still
+the filed one**: the graph it replaces stays restorable, and name, notes,
+defaults, pins, saved recipes and pictures (with the version that made them)
+stay keyed to the same id, as for any Save. A copy the owner saved over (any
+version since, a run's save, a LoRA edit, a save from ComfyUI) keeps their
+graph and logs at every start that the release changed it; the way to the new
+file is to remove the workflow and add the built-in back (the card route), or
+go back to the filed version, which the next start then updates. A copy
+already holding the new file only has its hash recorded. Nothing is offered
+in the UI. A `.webp` shipped beside a built-in's
 file becomes its thumbnail, unpinned, whenever it is stored. A stored
 document is capped at `MAX_WORKFLOW_FILE_BYTES` serialised (413). Its saved recipes stay, unfiled. An automatic id
 is a 409: hide it instead.
@@ -10556,7 +10572,12 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   instructions by a `StringReplace`), the prompt is those words:
   `comfyui_utilities.rewritten_prompt_input`, which the Run popup, the bindings'
   `run_targets` and the recipe reader share, so a run keeps the enhancer and a
-  picture's recipe shows what was typed. `Text Multiline` drops its `#` comment lines as the node
+  picture's recipe shows what was typed. A run sent with `enhance_prompt:
+  false` cuts it instead (`apply_prompts(..., enhance=False)`): the encoder's
+  input takes whatever the rewrite read (the typed words, or the link that
+  fed them), and every node only the enhancer read is deleted, its CLIP
+  loader included, so neither the judge nor ComfyUI sees it. The recipe then
+  reads the prompt off the encoder, the same words. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
@@ -12948,7 +12969,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
-  caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
+  caption alone; no probe has measured how their sheets hold the grid or cut.
+  The prose prompt also names the eye colour among what every photo shares
+  (MiniMax H3 Image drifted brown to hazel without it), and with
+  `photo_look` (default on) drops "photorealistic", render vocabulary, and
+  ends with `PHOTO_LOOK`: the photos as a model agency's unedited digitals.
+  Every skin detail named gets exaggerated, so the skin is said once and
+  gently. The MOSS and regions layouts ignore both. Every panel's caption carries the whole character,
   build included (a different build draws a different face), and the summary
   asks for the `background` given, a plain light-grey studio by default (only
   the summary says it; no probe has measured how well each model keeps it, or
@@ -13016,9 +13043,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   line that is at most `MAX_GUTTER` (64 px at 2560) wide and lighter or darker
   than both sides (a gutter, trimmed to its edges plus 2 px of seam; a band
   that only climbs from one level to the next is the seam between a photo and
-  its frame); else the grid line moved into the nearest wider or step-less
-  band, background the photos share, nothing trimmed; else the most uniform
-  line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
+  its frame); else the middle of the nearest *seam*, a step of over
+  `UNIFORM_LEVELS` across the line along `UNIFORM_SHARE` of it with neither
+  side white (MiniMax H3 draws its photos touching, each on its own backdrop
+  lit top to bottom, so no line between them is uniform, while a lit arm as
+  grey as the backdrop is), 2 px of seam trimmed each side; else the grid
+  line moved into the nearest wider or step-less band, background the photos
+  share, nothing trimmed; else the most uniform line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
   shorter side from its centre is never a candidate (stored boxes are widened
   and rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
   when no cut is unsure, no background cut is pressed against its window's

@@ -142,6 +142,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
+from pixlstash.utils.comfyui_utilities import extract_generation_info
 from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
@@ -6256,6 +6257,79 @@ def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     # The card route answers it as a file it could not store, not a 500.
     card = workflow_env.owner.post(f"{API}/comfyui/workflows/A-unreadable.json/card")
     assert card.status_code == 409, card.text
+
+
+def _shipped_builtin(tmp_path, monkeypatch, name: str):
+    """A built-in folder holding a copy of the shipped *name*, for a release
+    to change. Returns the copy's path."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    return builtin / name
+
+
+def _ship_steps(path, steps: int) -> None:
+    """Release a new graph of the built-in edit workflow at *path*."""
+    graph = json.loads(path.read_text(encoding="utf-8"))
+    graph["75:62"]["inputs"]["steps"] = steps
+    path.write_text(json.dumps(graph), encoding="utf-8")
+
+
+def test_a_built_in_a_release_changed_is_updated_as_a_new_version(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a copy the owner never edited keeps the old graph after a
+    release changed the file, or gets it as a new workflow rather than a
+    version, or the graph it replaced cannot be gone back to."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    filed_steps = manual_document(hub, key)["75:62"]["inputs"]["steps"]
+
+    _ship_steps(path, filed_steps + 7)
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == filed_steps + 7
+    versions = workflow_versions.list_versions(hub, key)
+    assert [(v["version"], v["source"]) for v in versions] == [
+        (2, workflow_versions.FROM_RELEASE),
+        (1, "builtin"),
+    ]
+    assert versions[0]["reason"] == "updated with PixlStash"
+    earlier = workflow_versions.document_of(hub, key, 1)
+    assert earlier["75:62"]["inputs"]["steps"] == filed_steps
+    assert _by_key(_cards(workflow_env.owner))[key]["name"] == "Flux2-Klein-Image-Edit"
+
+    # Idempotent: the next start finds the copy holding the file.
+    comfyui_module.list_builtin_workflows(hub)
+    assert len(workflow_versions.list_versions(hub, key)) == 2
+
+
+def test_a_built_in_the_owner_edited_keeps_their_graph_after_a_release(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a release's file is stored over a copy the owner saved over:
+    their graph must stay the one that runs."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    edited = manual_document(hub, key)
+    edited["75:62"]["inputs"]["steps"] = 41
+    comfyui_module.store_over_workflow(hub, key, edited, "mcp", expected_version=1)
+
+    _ship_steps(path, 42)
+    comfyui_module.list_builtin_workflows(hub)
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == 41
+    assert [v["source"] for v in workflow_versions.list_versions(hub, key)] == [
+        "mcp",
+        "builtin",
+    ]
 
 
 def _builtin_edit_graph(steps: int) -> dict:
@@ -13784,6 +13858,7 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "positive_settable": True,
         "negative_settable": False,
         "positive_text": "the saved prompt",
+        "enhancer": False,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -13795,6 +13870,77 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     assert {"code": "prompt_not_applied", "side": "negative"} in (
         r.json()["groups"][0]["flags"]
     )
+
+
+def test_a_run_can_go_without_the_prompt_enhancer(runnable):
+    """`enhance_prompt: false` hands the prompt to the encoder as written and
+    takes the enhancer out, so its model is never loaded; left out, the
+    enhancer rewrites it as before. Wrong if either run sends the other's graph."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document.update(
+        {
+            "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ["23", 0]}},
+            "20": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen.st"}},
+            "21": {
+                "class_type": "StringReplace",
+                "inputs": {
+                    "string": "Expand this: {input text}",
+                    "find": "{input text}",
+                    "replace": "the saved prompt",
+                },
+            },
+            "22": {
+                "class_type": "TextGenerateV2",
+                "inputs": {"clip": ["20", 0], "prompt": ["21", 0]},
+            },
+            "23": {
+                "class_type": "JsonExtractString",
+                "inputs": {"json_string": ["22", 0], "key": "expanded_caption"},
+            },
+        }
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    for class_type in ("CLIPTextEncode", "StringReplace", "JsonExtractString"):
+        info[class_type] = {"input": {"required": {}}}
+    info["TextGenerateV2"] = {"input": {"required": {"clip": ["CLIP", {}]}}}
+    info["CLIPLoader"] = {"input": {"required": {"clip_name": [["qwen.st"], {}]}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    for enhance in (None, True):
+        body = asked if enhance is None else {**asked, "enhance_prompt": enhance}
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+        sent = runnable.submitted.pop()["graph"]
+        assert sent["5"]["inputs"]["text"] == ["23", 0]
+        assert sent["21"]["inputs"]["replace"] == "a lighthouse at dusk"
+        assert {"20", "21", "22", "23"} <= set(sent)
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    # Still said, so the Run popup keeps the switch it was turned off with.
+    assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    assert not {"20", "21", "22", "23"} & set(sent)
+    assert extract_generation_info(sent)["positive_prompt"] == ("a lighthouse at dusk")
+    # The pre-flight judges the graph that would run: no enhancer model.
+    del info["CLIPLoader"]
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
 
 
 def test_more_runs_than_one_request_starts_are_refused(runnable):
@@ -14653,6 +14799,7 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "negative_settable": False,
         "positive_text": "the saved prompt",
         "unplaced": [],
+        "enhancer": False,
     }
 
 
@@ -14683,6 +14830,7 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "negative_settable": False,
         "positive_text": None,
         "unplaced": ["positive"],
+        "enhancer": False,
     }
     assert "positive prompt was not applied" in caplog.text
     # Nothing was sent, so nothing is unplaced: only the popup needs telling.
