@@ -9,8 +9,7 @@ class Review(SQLModel, table=True):
     """A review session: one tag + an optional frozen scope + one queue (a scan's
     results, or a supplied picture list - see ``source``).
 
-    The first-class noun of the tag-review workflow (see
-    ``docs/reviews/2026-07-review-sessions-redesign-draft.md``). A review is
+    The first-class noun of the tag-review workflow. A review is
     created explicitly, runs the near-neighbour scan once, and its receipt
     (``scanned`` / ``found`` / ``prev_reviewed``) becomes the session's cover
     sheet. Suggestions produced by the scan carry this review's id

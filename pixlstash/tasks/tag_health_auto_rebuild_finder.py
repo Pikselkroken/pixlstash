@@ -1,7 +1,6 @@
 """Periodically checks tag_health cache staleness and dispatches a rebuild.
 
-Closes Spec B's loop (``docs/reviews/tag-review-board-redesign-ux-spec.md``
-§4): the persistent header rebuild control (frontend) is the manual escape
+The persistent header rebuild control (frontend) is the manual escape
 hatch; this finder is what makes the board catch up to review activity / new
 pictures / new tagger runs without anyone clicking it. Shape mirrors
 :class:`~pixlstash.tasks.ensure_gfs_snapshot_finder.EnsureGfsSnapshotFinder`'s

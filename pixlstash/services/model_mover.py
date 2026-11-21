@@ -21,8 +21,7 @@ after commit, before the unlink  both paths                 the **destination**
 Both residues are a *duplicate*, which the shelf already models - one ``model``
 row with two ``model_file`` rows is what a file copied into two registered
 folders is, and the next scan of either folder reconciles it. Neither
-residue is a dangling row. That is the acceptance bar (shelf plan §6 item 3),
-and ``tests/test_model_move.py`` interrupts both windows to prove it.
+residue is a dangling row. That is the acceptance bar, and ``tests/test_model_move.py`` interrupts both windows to prove it.
 
 **"A rescan fixes it" means the next background scan.** ``ModelFolderScanFinder``
 scans a folder when a model file in it changes, when its watch comes up (start-up
