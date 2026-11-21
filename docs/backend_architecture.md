@@ -12903,7 +12903,7 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
-  (PixlStash ships seven, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
+  (PixlStash ships nine, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
   `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
   `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
   own H3 text-to-image template can draw sheets: its size is wired from a
@@ -12918,7 +12918,14 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   tokens ahead of the prompt draw cleaner. It stays text to image with no
   reference input, and a blank picture's size is no card default unless it
   sizes the run (`workflow_parameters.BLANK_PICTURE_CLASSES`), so the sheet
-  step does not grow it. In every shipped sheet workflow each
+  step does not grow it. `MiniMax-H3-Image-t2i.json` draws the same way.
+  Every MiniMax H3 Image built-in (these two sheets, and text to image, edit
+  and inpaint) ships an `-nvfp4-TE` twin that loads the NVFP4 quantization
+  of the main text encoder instead of the template's int8 one (the prompt
+  enhancer's encoder and the diffusion model stay): the same graph otherwise,
+  so it reads, lists and offers its downloads alike, and both versions are candidates
+  in the sheet step. `tests/test_workflow_io.py` fails on a twin that drifts
+  from its regular file. In every shipped sheet workflow each
   size but that blank's is a literal 2560×1536 and the encoder and VAE loaded by digest; they
   are cards from start-up, like every built-in) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as

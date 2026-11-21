@@ -442,7 +442,9 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
         ("Sheet-Flux2-Klein-9B.json", 0),
         ("Sheet-Flux2-Klein-9B-Reference.json", 1),
         ("Sheet-MiniMax-H3-Image.json", 0),
+        ("Sheet-MiniMax-H3-Image-nvfp4-TE.json", 0),
         ("Sheet-MiniMax-H3-Image-Reference.json", 1),
+        ("Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json", 1),
         ("Sheet-MiniMax-H3-Reference.json", 1),
         ("Sheet-Qwen-Image-2.1.json", 0),
         ("Sheet-Qwen-Image-2.1-Reference.json", 1),
@@ -483,12 +485,23 @@ _H3_IMAGE_OUTPUTS = {
 
 
 @pytest.mark.parametrize(
-    "name", ["Sheet-MiniMax-H3-Image.json", "Sheet-MiniMax-H3-Image-Reference.json"]
+    "name",
+    [
+        "MiniMax-H3-Image-t2i.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+    ],
 )
-def test_the_h3_image_sheets_draw_with_lcm_and_a_run_still_reaches_them(name):
+def test_the_h3_image_sheets_and_t2i_draw_with_lcm_and_a_run_still_reaches_them(
+    name,
+):
     """euler at 6 steps draws H3 Image faces crunchy; SamplerLCM with its
-    noise easing from 1.1 to 0.9 draws them clean. A run must still find the
-    seed (now RandomNoise's) and splice a LoRA into both readers of the model."""
+    noise easing from 1.1 to 0.9 draws them clean, for a sheet and for a plain
+    text to image alike. A run must still find the seed (now RandomNoise's)
+    and splice a LoRA into both readers of the model."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     by_class = {node["class_type"]: node["inputs"] for node in graph.values()}
     assert by_class["SamplerLCM"] == {
@@ -510,14 +523,23 @@ def test_the_h3_image_sheets_draw_with_lcm_and_a_run_still_reaches_them(name):
     assert {("CFGGuider", "model"), ("BasicScheduler", "model")} <= rewired
 
 
-def test_the_h3_image_text_sheet_conditions_on_a_blank_picture_it_never_draws_from():
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MiniMax-H3-Image-t2i.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+    ],
+)
+def test_the_h3_image_text_workflows_condition_on_a_blank_picture_never_drawn_from(
+    name,
+):
     """A blank picture in image_1 puts the ``<Picture 1>`` label and vision
     tokens ahead of the prompt, which draws H3 Image cleaner from words. With
     no VAE on the conditioning it is not a reference latent, and PixlStash
     must still read the workflow as text to image with no picture to fill."""
-    graph = json.loads(
-        (pathlib.Path(WORKFLOW_BUILTIN_DIR) / "Sheet-MiniMax-H3-Image.json").read_text()
-    )
+    graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     conditioning = graph["6"]["inputs"]
     blank = graph[conditioning["images.image_1"][0]]
     assert blank == {

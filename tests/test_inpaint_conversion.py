@@ -101,11 +101,13 @@ def test_the_klein_crop_node_takes_the_built_ins_settings():
     assert converted["9"]["inputs"]["filename_prefix"] == "Inpaint-Flux2-Klein"
 
 
-def test_the_minimax_h3_image_edit_converts_to_its_inpaint_built_in():
+@pytest.mark.parametrize("twin", ["", "-nvfp4-TE"])
+def test_the_minimax_h3_image_edit_converts_to_its_inpaint_built_in(twin):
     """MiniMax H3 Image's edit reads the picture twice, as its canvas's latent
-    and as <Picture 1>: both take the crop, and the built-in is exactly that."""
-    converted = convert_to_inpaint(_built_in("MiniMax-H3-Image-Edit.json"))
-    assert converted == _built_in("Inpaint-MiniMax-H3-Image.json")
+    and as <Picture 1>: both take the crop, and the built-in is exactly that,
+    for the twin with the nvfp4 text encoder as well."""
+    converted = convert_to_inpaint(_built_in(f"MiniMax-H3-Image-Edit{twin}.json"))
+    assert converted == _built_in(f"Inpaint-MiniMax-H3-Image{twin}.json")
     crop = _one(converted, "InpaintCropImproved")
     conditioning = converted[_one(converted, "MiniMaxH3ImageConditioning")]
     assert conditioning["inputs"]["images.image_1"] == [crop, 1]
