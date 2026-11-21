@@ -981,7 +981,15 @@ Seven rules the client must not re-derive:
    has anywhere to go, and the graph's own positive prompt before the
    request's was written. The Run popup offers no prompt box where
    `positive_settable` is false, and opens an otherwise empty box on
-   `positive_text`.
+   `positive_text`. `prompt.enhancer` is true where a prompt enhancer (a
+   `TextGenerate` language model) rewrites a prompt before its encoder reads
+   it, and stays true on a request that switched it off: it is the Run
+   popup's cue to offer the switch. `enhance_prompt: false` on the body runs
+   without it: the prompt (or the graph's own words) goes to the encoder as
+   written, and the enhancer's nodes, its model loader among them, leave the
+   run's copy, so the pre-flight does not ask for that model and ComfyUI
+   never loads it. Null or true runs the graph as it is. Per run only: no
+   recipe, saved recipe or workflow default stores it.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.

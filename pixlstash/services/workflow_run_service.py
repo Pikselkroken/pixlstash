@@ -317,8 +317,18 @@ def prompt_text_target(
     return node_id, name
 
 
-def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -> dict:
+def apply_prompts(
+    graph: dict,
+    prompt: Optional[str],
+    negative: Optional[str],
+    enhance: Optional[bool] = None,
+) -> dict:
     """Put this run's prompts into the detected prompt nodes, and report on it.
+
+    With *enhance* ``False`` each prompt a ``TextGenerate`` rewrites
+    (:func:`rewritten_prompt_input`) goes to its encoder as written, and the
+    enhancer is cut out of the graph (:func:`_cut_prompt_enhancer`). ``None``
+    and ``True`` leave the graph as it is.
 
     Returns:
         ``positive_settable`` / ``negative_settable``: whether the graph has
@@ -326,14 +336,17 @@ def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -
         prompt the graph held before this call, ``None`` where it holds none
         as a literal or its prompt nodes disagree. ``unplaced``: the sides a
         prompt was given for and had nowhere to go - said, never dropped
-        (#1832).
+        (#1832). ``enhancer``: whether a prompt enhancer rewrote a prompt in
+        the graph as it came in, cut or not.
     """
     report = {
         "positive_settable": False,
         "negative_settable": False,
         "positive_text": None,
         "unplaced": [],
+        "enhancer": False,
     }
+    enhanced: list[tuple[str, str]] = []
     try:
         detected = detect_workflow_io(graph)
     except WorkflowGraphError as exc:
@@ -349,6 +362,8 @@ def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -
             if name is None:
                 continue
             report[f"{side}_settable"] = True
+            if rewritten_prompt_input(graph, node_id, name) != (str(node_id), name):
+                enhanced.append((str(node_id), name))
             literal = _literal_prompt_target(graph, node_id, name)
             held.add(graph[literal[0]]["inputs"][literal[1]] if literal else None)
             if text is None:
@@ -367,7 +382,67 @@ def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -
                 list(detected.ambiguities),
             )
             report["unplaced"].append(side)
+    report["enhancer"] = bool(enhanced)
+    if enhance is False:
+        for node_id, name in enhanced:
+            _cut_prompt_enhancer(graph, node_id, name)
     return report
+
+
+def _cut_prompt_enhancer(graph: dict, node_id: str, field: str) -> None:
+    """Hand the words a prompt enhancer rewrites straight to *node_id*'s *field*.
+
+    The words are whatever sits at the rewrite's input, a literal or a link,
+    so the encoder reads exactly what the enhancer would have. Every node only
+    the enhancer read is then dropped (the ``TextGenerate``, its loader, the
+    ``StringReplace`` and the JSON extraction): left in, its loader would be
+    judged as a model the run needs.
+    """
+    at, name = rewritten_prompt_input(graph, node_id, field)
+    words = (graph[at].get("inputs") or {}).get(name)
+    if words is None:
+        logger.warning(
+            "Prompt enhancer kept for this run: node %s (%s) has no %s input "
+            "holding the words it rewrites for encoder %s's %s.",
+            at,
+            graph[at].get("class_type"),
+            name,
+            node_id,
+            field,
+        )
+        return
+    head = str(graph[node_id]["inputs"][field][0])
+    graph[node_id]["inputs"][field] = deepcopy(words)
+    # ponytail: a node still reading the enhancer (a PreviewAny showing its
+    # rewrite) keeps it alive and loaded; drop such readers if a graph has one.
+    pending = [head]
+    while pending:
+        current = pending.pop()
+        node = graph.get(current)
+        if not isinstance(node, dict) or any(
+            is_link(value) and str(value[0]) == current
+            for other in graph.values()
+            if isinstance(other, dict)
+            for value in (other.get("inputs") or {}).values()
+        ):
+            continue
+        del graph[current]
+        pending.extend(
+            str(value[0])
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value)
+        )
+    (logger.info if head not in graph else logger.warning)(
+        "Prompt enhancer cut for this run: encoder %s's %s reads the words "
+        "from node %s's %s directly; %s.",
+        node_id,
+        field,
+        at,
+        name,
+        "it is gone from the graph"
+        if head not in graph
+        else f"node {head} is still read by another node, so it stays and runs",
+    )
 
 
 # Where the source of a runnable graph came from, in the order tried.

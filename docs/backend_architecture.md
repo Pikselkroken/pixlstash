@@ -10556,7 +10556,12 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   instructions by a `StringReplace`), the prompt is those words:
   `comfyui_utilities.rewritten_prompt_input`, which the Run popup, the bindings'
   `run_targets` and the recipe reader share, so a run keeps the enhancer and a
-  picture's recipe shows what was typed. `Text Multiline` drops its `#` comment lines as the node
+  picture's recipe shows what was typed. A run sent with `enhance_prompt:
+  false` cuts it instead (`apply_prompts(..., enhance=False)`): the encoder's
+  input takes whatever the rewrite read (the typed words, or the link that
+  fed them), and every node only the enhancer read is deleted, its CLIP
+  loader included, so neither the judge nor ComfyUI sees it. The recipe then
+  reads the prompt off the encoder, the same words. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
