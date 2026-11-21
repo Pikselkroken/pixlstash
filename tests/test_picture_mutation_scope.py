@@ -1,21 +1,18 @@
 """Object-scope (BOLA / CWE-639) tests for picture-MUTATION handlers.
 
-Closes finding F1 in ``docs/reviews/feature-slick-grid-updates.md``: the
-picture-mutation handlers (tag add/remove/clear, face create/delete, set-project,
+The picture-mutation handlers (tag add/remove/clear, face create/delete, set-project,
 apply-scores, run-plugin, character face assign/unassign) must enforce object
 scope so a resource-scoped token cannot mutate pictures outside its grant.
 
-**Two enforcement mechanisms after the authz refactor (backend refactor plan
-Steps 4-6):**
+**Two enforcement mechanisms:**
 
-- **Single-picture handlers (``PICTURE_SCOPED``).** The inline
-  ``enforce_picture_scope`` call was removed in Step 5; object authorization now
+- **Single-picture handlers (``PICTURE_SCOPED``).** Object authorization
   lives in the central authz gate. These routes are POST/DELETE/PATCH not in
   ``READ_SAFE_POST_PATHS``, so a real resource-scoped (=READ) share token is
   middleware-blocked (403) before any handler runs - the live guard, exercised
   here with a real scoped token. The gate's per-object membership contract is
   proven in ``tests/test_authz_gate_step4.py``.
-- **Batch handlers (``SCOPED_LIST``).** These still filter their own id list
+- **Batch handlers (``SCOPED_LIST``).** These filter their own id list
   inline via ``fetch_scope_allowed_picture_ids``; those tests keep the
   monkeypatch technique (``_scope_to``) that exercises the inline filter directly.
 
@@ -527,8 +524,7 @@ def test_patch_picture_scoped_token_blocked(env, scoped):
     """PATCH /pictures/{id} mutates score/description/tags. A resource-scoped share
     token cannot reach it (PATCH not in READ_SAFE -> middleware 403); the owner can.
 
-    Regression for CSO finding S1: this mutator must not be reachable by a share
-    token. Its PICTURE_SCOPED object-scope declaration is proven in
+    Its PICTURE_SCOPED object-scope declaration is proven in
     tests/test_authz_gate_step4.py.
     """
     server, client, picture_ids, _ = env

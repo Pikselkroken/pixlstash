@@ -1,4 +1,4 @@
-"""Installing a known node pack through ComfyUI-Manager (#2054).
+"""Installing a known node pack through ComfyUI-Manager.
 
 ComfyUI and its Manager are faked over ``requests``: no live HTTP. Every case
 reads the calls the fake recorded, so a refusal is also proven to have queued

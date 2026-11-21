@@ -1,21 +1,21 @@
 """Apple Silicon: that PixlStash reaches the GPU, and survives running out of it.
 
-The bug these guard is not "MPS is slow", it is **"MPS is invisible"**. Every
-device decision in the codebase was spelled ``torch.cuda.is_available()``, which
-makes "has a GPU" and "has CUDA" the same sentence, so a Mac was told it had no
-GPU and ran the default tagger on the CPU at 5,939 ms per image instead of 251.
+The failure these guard is not "MPS is slow", it is **"MPS is invisible"**: a
+device decision spelled ``torch.cuda.is_available()`` makes "has a GPU" and
+"has CUDA" the same sentence, so a Mac is told it has no GPU and runs the
+default tagger on the CPU.
 
 Two halves, and the second is the one worth the file:
 
 * **Reaching it.** ``StartupChecks._check_device_and_vram`` is the real gate -
   not ``InferenceEngine.create``. Forcing CPU there sets ``forced_cpu``, which
   ``Server.build_vault`` turns into ``force_cpu=True``, which pins the device
-  before any engine-side probe runs. A CUDA-only check here made every other
-  accelerator change dead code, which is exactly what it did on this hardware.
+  before any engine-side probe runs. A CUDA-only check here makes every other
+  accelerator change dead code.
 * **Surviving it.** Unified memory is shared with the OS, torch's default MPS
   high-water mark is above physical RAM on an 8 GB machine, and an MPS OOM says
-  none of CUDA's words - so every "free memory and retry on the CPU" path in
-  the codebase was inert on a Mac. A fast tagger that silently drops a batch is
+  none of CUDA's words - so a "free memory and retry on the CPU" path keyed on
+  CUDA is inert on a Mac. A fast tagger that silently drops a batch is
   worse than a slow one that does not.
 
 The host is simulated throughout, the same way ``test_rocm_device_check.py``
@@ -165,7 +165,7 @@ def test_nvidia_smi_is_not_missing_on_a_mac(patch_runtime, monkeypatch):
 
 
 def test_the_two_device_allowlists_are_one_object():
-    """server.py and startup_checks.py used to keep separate copies, and drifted."""
+    """server.py and startup_checks.py share one allowlist so they cannot drift."""
     from pixlstash import server as server_module
 
     assert server_module.VALID_DEVICE_SETTINGS is VALID_DEVICE_SETTINGS
@@ -196,11 +196,10 @@ def test_a_blank_device_is_a_question_for_the_host_not_a_cpu_request(blank):
     """A blank setting means "unspecified", which the host answers.
 
     ``_HOST_RESOLVED_SETTINGS`` lists ``""`` alongside ``gpu`` and ``auto``, and
-    :func:`resolve_device` documents it - but the value used to be washed through
+    :func:`resolve_device` documents it. Washing the value through
     ``normalise_device``, whose trailing ``or CPU`` turns an empty string into an
-    explicit CPU choice. That made the ``""`` member unreachable and the
-    documented contract false: an empty config value became a silent CPU
-    downgrade, which is the exact failure mode this module exists to remove.
+    explicit CPU choice, would make the ``""`` member unreachable and an empty
+    config value a silent CPU downgrade.
     """
     assert resolve_device(blank, torch_module=_apple_torch()) == MPS
     assert resolve_device(blank, torch_module=_cuda_torch()) == CUDA
@@ -284,12 +283,11 @@ def test_sqlite_out_of_memory_is_still_not_a_gpu_problem():
     ],
 )
 def test_image_concurrency_is_named_per_device(device, expected):
-    """The polarity bug, pinned.
+    """Every device is named, so none inherits another's concurrency.
 
-    ``max_concurrent_images`` read "cpu or else", so ``"mps"`` inherited CUDA's
-    64 - a batch the measured memory model puts near 10.8 GB, reproduced as a
-    real OOM at 32 on an 8 GB machine. The sibling in the tagging workflow read
-    "cuda or else", so the two disagreed about every device neither named.
+    A "cpu or else" rule would hand ``"mps"`` CUDA's 64 - a batch the memory
+    model puts near 10.8 GB, an OOM on an 8 GB machine - and a "cuda or else"
+    sibling would disagree with it about every device neither named.
     """
     engine = InferenceEngine.__new__(InferenceEngine)
     engine.device = device
@@ -351,9 +349,9 @@ def test_coreml_is_requested_as_mlprogram_with_a_cpu_fallback():
     """``ModelFormat: MLProgram`` is mandatory, not a preference.
 
     The provider's own default is ``NeuralNetwork``, which does not fall back on
-    ``wd-convnext-tagger-v3`` - it fails outright with "error code: -1". A
-    regression to the default would therefore lose WD14 tagging entirely on
-    every Mac, which is why the option is asserted rather than assumed.
+    ``wd-convnext-tagger-v3`` - it fails outright with "error code: -1". The
+    default would therefore lose WD14 tagging entirely on every Mac, which is
+    why the option is asserted rather than assumed.
     """
     providers = onnx_execution_providers(
         MPS,
@@ -473,9 +471,9 @@ def test_the_unified_memory_default_budget_is_half_the_ram_capped_at_8gb(
 ):
     """``min(RAM/2, 8 GB)`` - argued from physical RAM, not from Metal.
 
-    The figure this replaces was half of Metal's *recommended working set*,
-    which on an 8 GB machine is 2.67 GB. Both are defensible; the one chosen
-    reflects that the memory being budgeted is the machine's only memory, so
+    The alternative is half of Metal's *recommended working set*, which on an
+    8 GB machine is 2.67 GB. Both are defensible; the one chosen reflects that
+    the memory being budgeted is the machine's only memory, so
     the question "how much may PixlStash claim" is asked of RAM rather than of
     what the driver would hand out.
     """
@@ -536,7 +534,7 @@ def _workflow_on(device):
 
 
 def test_the_tagger_memory_model_follows_the_device():
-    """700 + 90n is a CUDA figure and was being charged on Apple Silicon."""
+    """700 + 90n is a CUDA figure and is not charged on Apple Silicon."""
     assert _workflow_on(MPS)._pixlstash_tagger_memory_model() == (
         PIXLSTASH_TAGGER_MPS_BASE_MB,
         PIXLSTASH_TAGGER_MPS_PER_ITEM_FP16_MB,  # the tagger runs fp16 on MPS
@@ -711,19 +709,16 @@ def _clip_service_on(device, message, monkeypatch):
 def test_a_clip_batch_that_oomed_completes_on_the_cpu(device, message, monkeypatch):
     """The recovery path has to reach its `return`, not raise on the way.
 
-    It raised. ``clip_service`` spills by calling
-    ``empty_device_cache(previous_device)`` - naming the device it is spilling
-    *from*, because by then it has already reassigned its own to ``"cpu"`` -
-    and the wrapper took no argument at all, so the flush raised ``TypeError``
-    from inside the ``except RuntimeError`` block. The ``except Exception``
-    clause beside it is a sibling and cannot catch that, so it escaped the
-    method with the model already moved and ``_device`` already reassigned:
-    the batch lost, and the service left half-spilled.
+    ``clip_service`` spills by calling ``empty_device_cache(previous_device)`` -
+    naming the device it is spilling *from*, because by then it has already
+    reassigned its own to ``"cpu"``. An error raised from inside the
+    ``except RuntimeError`` block escapes the method (the ``except Exception``
+    clause beside it is a sibling and cannot catch it), with the model already
+    moved and ``_device`` already reassigned: the batch lost, and the service
+    left half-spilled.
 
-    CUDA is parametrised in deliberately. This fallback worked there before the
-    accelerator refactor, so the bug was a regression on the primary platform
-    and not only a gap on the new one - which is exactly the case a Mac-only
-    test could not have caught.
+    CUDA is parametrised in deliberately, since it is the primary platform and
+    a Mac-only test could not cover it.
     """
     service = _clip_service_on(device, message, monkeypatch)
 
@@ -743,8 +738,8 @@ def test_a_clip_batch_that_oomed_completes_on_the_cpu(device, message, monkeypat
     ids=["mps", "cuda"],
 )
 def test_a_face_crop_that_oomed_completes_on_the_cpu(device, message, monkeypatch):
-    """The sibling call site. It carried the identical defect, and a fix that
-    only touched the batch path would have left face embedding broken."""
+    """The sibling call site: the face-crop path spills the same way as the
+    batch path, so face embedding must recover too."""
     service = _clip_service_on(device, message, monkeypatch)
 
     results = service.encode_image_crops([object()], pic_desc="a picture")
@@ -768,12 +763,12 @@ def test_the_cache_flush_accepts_the_device_being_spilled_from():
 
 
 def test_device_memory_telemetry_answers_on_unified_memory(monkeypatch):
-    """The settings screen's memory figure, which had no rung that answered here.
+    """The settings screen's memory figure answers on a Mac too.
 
-    pynvml, then torch, then ``nvidia-smi`` - NVIDIA tooling end to end, so a
-    Mac fell through all three and the screen showed no device memory beside a
-    budget slider whose ceiling *was* Metal-derived. The torch rung is the one
-    that can answer for any accelerator, so it does.
+    pynvml, then torch, then ``nvidia-smi`` - with NVIDIA tooling end to end a
+    Mac would fall through all three and show no device memory beside a budget
+    slider whose ceiling *is* Metal-derived. The torch rung is the one that can
+    answer for any accelerator, so it does.
 
     "Total" is the recommended working set and "used" is this process's share
     of it, which is the only honest reading on a pool shared with the OS.

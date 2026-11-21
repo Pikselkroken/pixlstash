@@ -1,9 +1,9 @@
 """Tests for the human-label ledger on TagPrediction.
 
 Verifies that every human accept/reject path records a durable, symmetric POS/NEG
-supervision signal (``label_state``/``label_source='human'``) - including the paths that
-previously dropped the negative entirely (removing a tag, dismissing an "add" suggestion)
-- and that the tagger never clobbers a human label.
+supervision signal (``label_state``/``label_source='human'``) - including removing a
+tag and dismissing an "add" suggestion - and that the tagger never clobbers a human
+label.
 """
 
 import gc
@@ -293,11 +293,11 @@ def _status(server, pic_id, tag):
 def test_retag_status_flip_preserves_accepted_human_label():
     """Re-tagging must not push a human-accepted tag into the rejected pile.
 
-    Regression for the Lightbox re-tag bug: both status-resolution passes
-    (_resolve_pending_predictions and _write_predictions_from_tags) auto-flipped
-    a prediction's status from the freshly-applied tag set, ignoring the durable
-    human POS label. When the new pass didn't re-apply the tag, the accepted row
-    flipped to REJECTED even at 100% confidence.
+    Both status-resolution passes (_resolve_pending_predictions and
+    _write_predictions_from_tags) must respect the durable human POS label when
+    flipping a prediction's status from the freshly-applied tag set. When the
+    new pass doesn't re-apply the tag, the accepted row must not flip to
+    REJECTED, even at 100% confidence.
     """
     temp_dir, client, server = _setup()
     try:
@@ -354,10 +354,10 @@ def test_retag_updates_live_confidence_on_confirmed_human_row():
     """confidence/model_version stay live on a human-CONFIRMED row; only
     status (and the human ledger) is frozen.
 
-    Regression for the over-broad freeze: the status-flip guard added for
-    test_retag_status_flip_preserves_accepted_human_label also froze
-    confidence/model_version, even though TagPrediction's class docstring
-    documents those as live, unlike the frozen label_model_version.
+    The status-flip guard checked by
+    test_retag_status_flip_preserves_accepted_human_label must not also freeze
+    confidence/model_version: TagPrediction's class docstring documents those
+    as live, unlike the frozen label_model_version.
     """
     temp_dir, client, server = _setup()
     try:
@@ -428,10 +428,10 @@ def test_retag_updates_live_confidence_on_rejected_human_row():
 def test_record_human_labels_never_binds_more_parameters_than_sqlite_takes():
     """Both lists go into one statement, so both have to be chunked.
 
-    The picture ids were chunked against a budget the tag list was subtracted
-    from, which bounds nothing once there are more distinct tags than the budget
-    itself: the id chunk floors at 1 and the tag list carries the statement past
-    the cap on its own. A folder-structure commit's tags are one per tag-mapped
+    Chunking the picture ids against a budget the tag list is subtracted from
+    bounds nothing once there are more distinct tags than the budget itself:
+    the id chunk floors at 1 and the tag list carries the statement past the
+    cap on its own. A folder-structure commit's tags are one per tag-mapped
     folder, so it is the library that decides how many there are.
 
     Asserted on the parameter count rather than on a raised error: the cap is a

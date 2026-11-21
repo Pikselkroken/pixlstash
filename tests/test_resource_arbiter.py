@@ -340,7 +340,7 @@ def test_a_slow_read_never_overwrites_a_newer_one():
     """The arbiter thread's pass can read the card, stall, and store late.
 
     Stored over a newer reading, the stale one makes the next request wait on
-    memory that was already freed (a CI flake of the test above).
+    memory that was already freed.
     """
     arb, fake, _ = make(used_mb=23000, thread=False)
     read_taken, go = threading.Event(), threading.Event()
@@ -680,7 +680,7 @@ def _quit_scene(need_mb, **comfy):
 
 
 def test_comfyui_is_quit_only_with_the_owners_yes_and_only_once_it_unloaded():
-    """#2558: /free cannot release ComfyUI's CUDA context. A run short by
+    """/free cannot release ComfyUI's CUDA context. A run short by
     less than ComfyUI holds, but more than an unload frees, waits for it to be
     closed, and is offered the quit; the ladder quits it only once allowed."""
     arb, probe, lease, settle = _quit_scene(8000, can_quit=True)
@@ -1255,7 +1255,7 @@ def test_comfyuis_figure_is_its_process_when_its_weights_live_outside_torch(
 def test_comfyui_keeps_the_least_it_held_and_quits_only_its_own_idle_process(
     monkeypatch,
 ):
-    """#2558: ``kept_mb`` is the floor /free cannot go under, and ``quit``
+    """``kept_mb`` is the floor /free cannot go under, and ``quit``
     terminates the process listening on ComfyUI's port, only when idle."""
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe

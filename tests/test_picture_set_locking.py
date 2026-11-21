@@ -1,4 +1,4 @@
-"""Backend tests for picture-set locking (see docs/reviews/2026-07-picture-set-locking-plan.md).
+"""Backend tests for picture-set locking.
 
 A locked set is a hard, whole-set freeze: neither the set's own fields/membership
 nor the label data of any member picture may change until it is unlocked. These
@@ -151,7 +151,7 @@ def _force_variable_limit(server, limit=999):
 
 
 def test_large_lock_lookups_survive_sqlite_variable_ceiling():
-    """Regression for #694: reference scans can submit over 100k picture ids."""
+    """Lock lookups survive reference scans that submit over 100k picture ids."""
     temp_dir, client, server = _setup()
     try:
         picture_ids = _first_n_pictures(server, 1001)
@@ -1185,12 +1185,12 @@ def test_legacy_suggestion_queue_withholds_locked_pending_rows():
 def _seed_stack_directly(server, picture_ids):
     """Put *picture_ids* in one stack by writing ``stack_id`` straight to the DB.
 
-    Deliberately bypasses ``POST /stacks``: that route now reconciles set
+    Deliberately bypasses ``POST /stacks``: that route reconciles set
     membership across the stack (and refuses to grow a locked set), so it cannot
     produce the state under test here - a picture that *shares a stack with* a
-    locked-set member without being a member itself. That state exists in any
-    database written before the lock guards landed, and is still reachable
-    through the restore path, so the finders must handle it.
+    locked-set member without being a member itself. That state exists in
+    older databases and is reachable through the restore path, so the finders
+    must handle it.
     """
 
     def seed(session):
@@ -1209,13 +1209,12 @@ def _seed_stack_directly(server, picture_ids):
 
 
 def test_finders_exclude_stack_sibling_of_locked_member():
-    """Regression: an unbounded GPU re-queue loop.
+    """Finders exclude what the write guards exclude, or the GPU re-queues forever.
 
-    Both finders used a narrow ``PictureSetMember -> PictureSet.locked`` join with
-    no stack arm, while their write guards (``locked_picture_ids``) expand to the
-    whole stack. A picture sharing a stack with a locked-set member was therefore
-    selected, ran full tagging/captioning inference, had its write skipped, kept
-    its sentinel, and was selected again on the next sweep - forever.
+    The write guards (``locked_picture_ids``) expand to the whole stack. A
+    finder without that stack arm would select a picture sharing a stack with a
+    locked-set member, run full tagging/captioning inference, have its write
+    skipped, keep its sentinel, and select it again on the next sweep.
 
     Asserts both directions: the stack sibling is NOT selected, and an unrelated
     unlocked picture still IS (over-blocking would be its own regression).
@@ -1465,9 +1464,8 @@ def test_locked_set_refuses_every_route_that_detaches_a_stack_member():
     The membership is seeded row-by-row for that reason. ``POST
     /picture_sets/{id}/members/{picture_id}`` is stack-atomic, so adding the
     frozen picture through the API would pull the sibling into the set too and
-    the test would pass against a per-named-id guard, which is the exact
-    narrowing that would reintroduce the bug. The asserted membership below is
-    the guard against that regression re-entering the test.
+    the test would pass against a per-named-id guard. The asserted membership
+    below guards against that narrowing entering the test.
     """
     temp_dir, client, server = _setup()
     try:
@@ -1538,18 +1536,18 @@ def test_unlocked_stacks_still_split_unstack_and_lose_members():
 
 
 def test_detaching_cannot_be_used_to_escape_a_locked_set():
-    """Regression for the two-call lock escape, proved to fail at the FIRST call.
+    """The two-call lock escape, proved to fail at the FIRST call.
 
-    Before the guard: ``DELETE /pictures/{sibling}`` answered 423 because the
-    freeze reached it through the stack; ``POST .../unstack`` then returned 200,
-    severed the stack, and the same delete returned 200. Two calls turned a hard
-    freeze into a soft delete. The chain must now break on step one, and the
-    freeze must still be intact afterwards.
+    ``DELETE /pictures/{sibling}`` answers 423 because the freeze reaches it
+    through the stack; if ``POST .../unstack`` could sever the stack, the same
+    delete would then succeed, turning a hard freeze into a soft delete. The
+    chain must break on step one, and the freeze must still be intact
+    afterwards.
 
     Seeded row-by-row (see
     :func:`test_locked_set_refuses_every_route_that_detaches_a_stack_member`):
     only ``frozen`` is a member, so the sibling's 423 can come from nothing but
-    the stack, which is the state this regression is named for.
+    the stack.
     """
     temp_dir, client, server = _setup()
     try:

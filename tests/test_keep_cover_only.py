@@ -699,10 +699,10 @@ def _stack_facet_events(emitted) -> list[dict]:
 def test_the_covers_stack_change_is_announced_even_when_the_union_added_nothing():
     """The cover's STACK always changes; its metadata only sometimes does.
 
-    The announcement used to be gated on ``tags_added or scores_lifted``, which
-    tests the wrong property: a collapse whose union found nothing new said
-    nothing at all about the cover, so every view kept drawing it as a stack of
-    three around a picture that was now on its own (the owner's report). The two
+    Gating the announcement on ``tags_added or scores_lifted`` tests the wrong
+    property: a collapse whose union found nothing new would say nothing at all
+    about the cover, so every view would keep drawing it as a stack of three
+    around a picture that is now on its own. The two
     halves stay separate ``change_kind``s, the copies ``removed`` and the covers
     ``updated``, because merging them would tell the grid a scrapheaped picture
     was merely updated and leave a 404-clickable card behind.
@@ -952,11 +952,11 @@ def test_a_forged_batch_id_cannot_graft_two_collapses_into_one_undo():
 
 
 def test_the_selection_cap_bounds_the_request_not_the_deduplicated_set():
-    """Two ways the cap used to be no cap at all, and the shape that still works.
+    """Two ways a cap can be no cap at all, and the shape that still works.
 
-    It was applied to the de-duplicated set, so a body of a million repeats of
-    one id passed; and it was applied per list, so `stack_ids` plus
-    `picture_ids` legitimately carried twice it in one request.
+    Applied to the de-duplicated set, a body of a million repeats of one id
+    would pass; applied per list, `stack_ids` plus `picture_ids` could carry
+    twice it in one request.
     """
     temp_dir, client, server = _env()
     try:

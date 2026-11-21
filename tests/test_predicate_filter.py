@@ -236,7 +236,7 @@ def test_unscored_with_a_range_adds_the_unrated_to_it(session):
 def test_unscored_with_a_range_spanning_every_rating_is_everything(session):
     """Decided, not inherited: ``max_score=5`` (the sidebar's "any rating") or
     ``min_score=0`` beside ``unscored`` is "any rating or unrated", so no picture
-    is left out. Under the old AND it was the score-0 pictures only."""
+    is left out. An AND would give the score-0 pictures only."""
     never = _add_picture(session, file_path="never.jpg", score=None)
     cleared = _add_picture(session, file_path="cleared.jpg", score=0)
     three = _add_picture(session, file_path="three.jpg", score=3)
@@ -509,8 +509,8 @@ def test_stack_state_unresolved_drops_a_group_thinned_by_the_scrapheap(session):
 
     The group has already left the Duplicates queue and the sidebar badge the
     moment one of its two members is soft-deleted (``live_groups_filter``), so a
-    grid that still called the survivor "unresolved" was quoting a decision that
-    no longer exists. Both directions: the thinned group's survivor drops out,
+    grid that still called the survivor "unresolved" would be quoting a decision
+    that does not exist. Both directions: the thinned group's survivor drops out,
     the intact group's members stay in.
     """
     thinned_survivor = _add_picture(session, file_path="a.jpg")
@@ -711,9 +711,9 @@ def test_from_query_params_runs_against_db(session):
 def test_from_query_params_malformed_score_raises_422_not_500(param):
     """A non-numeric min/max score is a client error (422), not an unhandled 500.
 
-    Pre-fix, ``from_query_params`` ran a bare ``int(raw)`` so ``?min_score=abc``
-    raised an unhandled ValueError and the route returned 500. It must raise an
-    HTTPException with a 4xx status and a clear message instead.
+    A bare ``int(raw)`` in ``from_query_params`` would raise an unhandled
+    ValueError on ``?min_score=abc`` and the route would return 500. It must
+    raise an HTTPException with a 4xx status and a clear message instead.
     """
     from fastapi import HTTPException
 

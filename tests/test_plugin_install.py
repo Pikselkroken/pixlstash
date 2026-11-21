@@ -151,7 +151,7 @@ def test_installing_twice_needs_force(tmp_path, plugin_root):
 
 
 def test_reinstalling_a_plugin_over_itself_never_destroys_it(tmp_path, plugin_root):
-    """`install <the installed file> --force` used to delete it and then crash."""
+    """`install <the installed file> --force` must not delete it."""
     source = _write(tmp_path / "a.py", IMAGE_PLUGIN)
     assert _install(source) == cli.EXIT_OK
     installed = plugin_root / "image-plugins" / "user" / "my_filter.py"
@@ -534,7 +534,7 @@ def test_a_repository_folder_captioner_installs_as_a_folder(
 
 
 def test_the_repository_folder_slug_still_installs(plugin_root, fake_repository):
-    """The directory name was the only name accepted before; keep it working."""
+    """The directory name is still accepted."""
     assert _install("my_captioner_plugin") == cli.EXIT_OK
     assert (
         plugin_root / "tagger-plugins" / "user" / "my_captioner" / "__init__.py"
@@ -1162,9 +1162,8 @@ def test_image_runs_the_plugin_over_a_picture(tmp_path, capsys):
     it cannot fail this. It seeds ``self._device = "cpu"`` in ``__init__`` and
     falls back to ``max_tokens or 128``, so a caption reading
     ``(128 tokens, cpu)`` is exactly what you get when ``setup()``, ``init()``
-    and the merged defaults are all skipped - every assertion here passed with
-    each of those three deleted from plugin_check until the sentinels below
-    were spliced in.
+    and the merged defaults are all skipped - hence the sentinels spliced in
+    below.
     """
     source = _write(
         tmp_path / "mine.py",
@@ -1214,8 +1213,8 @@ def test_image_loads_no_model_for_a_plugin_nothing_will_ever_call(tmp_path, caps
     """No capability flag means no method to call, so there is nothing to load.
 
     `init()` is made to raise, so the run reports `init() raised` and fails the
-    command if it is reached at all - which it was, before the capability check
-    moved above the download-and-init pair.
+    command if it is reached at all; the capability check sits above the
+    download-and-init pair.
     """
     source = _write(
         tmp_path / "mine.py",
@@ -1796,7 +1795,7 @@ def test_without_a_declaration_the_console_script_is_still_the_name(monkeypatch)
 def test_the_windows_desktop_derives_its_name_since_nothing_declares_one(
     monkeypatch, tmp_path
 ):
-    """Issue #1058: on Windows the app declares nothing, on purpose.
+    """On Windows the app declares nothing, on purpose.
 
     The command that works there is this very interpreter, so it is derived
     rather than announced - and through the same helper that fills the Settings
@@ -2032,7 +2031,7 @@ def test_a_direct_url_requirement_is_installed_from_that_url(
 def test_an_indexed_requirement_is_pinned_to_the_artefact_pip_resolved(
     pip_report, tmp_path, monkeypatch
 ):
-    """An index entry is a substitution vector too, and used to be missed.
+    """An index entry is a substitution vector too.
 
     A `--index-url`, `--extra-index-url` or `--find-links` line inside the
     plugin's own requirements.txt resolves against *that* source, and pip marks
@@ -2108,11 +2107,10 @@ def test_an_entry_without_a_usable_url_falls_back_to_name_and_version(
 
     Every spelling of "the report did not say where this came from" takes the
     fallback, not only a missing `download_info`: an empty object, and one
-    carrying a hash but no url, reach it too. This branch is the pre-#1177
-    behaviour and therefore the vulnerable one, so this pins exactly how narrow
-    it is.
+    carrying a hash but no url, reach it too. This branch is the vulnerable
+    one, so this pins exactly how narrow it is.
 
-    Pinning the fallback is half the contract; the other half (issue #1223) is
+    Pinning the fallback is half the contract; the other half is
     that the fallback path emits a single warning line so an operator can
     tell the safe path from the unsafe path at install time.
     """
@@ -2186,8 +2184,8 @@ def test_the_cli_prints_the_option_warning_before_resolving(
 ):
     """The consent text is only a control if something asserts it reaches screen.
 
-    `plugin_install.pip_options` had its own test while the CLI wiring had
-    none, so replacing the call with `options = []` left the whole suite green.
+    `plugin_install.pip_options` has its own test; this covers the CLI wiring,
+    so replacing the call with `options = []` turns it red.
     """
     pip_report(("flask", "3.1.3"), installed={})
     folder = tmp_path / "pkg"
@@ -2217,14 +2215,13 @@ def test_the_cli_stays_quiet_for_an_ordinary_requirements_file(
 def test_the_listing_names_a_find_links_source_the_user_never_asked_for(
     pip_report, tmp_path, capsys
 ):
-    """The consent half of item 14, found by #1201's adversarial review.
+    """The consent half of pinning: the user sees where a package comes from.
 
     A plugin's own requirements.txt can carry `--find-links` / `--index-url`,
     and an ordinary NAMED requirement resolved through one is reported by pip
-    with `is_direct == False`. Keying the display on `is_direct` printed
-    nothing, so a package silently replacing an installed one read exactly like
-    the PyPI project of the same name - while the pin faithfully installed the
-    plugin author's artefact. Named on the resolved host instead.
+    with `is_direct == False`. Keying the display on `is_direct` would print
+    nothing, so a package silently replacing an installed one would read exactly
+    like the PyPI project of the same name. Named on the resolved host instead.
     """
     hostile = {
         "url": "file:///srv/plugin-wheels/requests-99.0.0-py3-none-any.whl",
@@ -2272,13 +2269,13 @@ def test_the_listing_surfaces_every_pip_option_from_the_requirements(tmp_path):
 
 
 def test_the_listing_follows_includes_and_joins_continuations(tmp_path):
-    """#1206 item 8: pip honours both, and the warning read neither.
+    """pip honours both, so the warning reads both.
 
     ``-r deps/base.txt`` pulls the second file's options in as if they had been
     written in the first, and a line ending in a backslash is one option to
-    pip. Showing the include line and the bare ``--index-url`` was true and
-    incomplete: the URL that decides where packages come from was the part not
-    on screen.
+    pip. Showing only the include line and the bare ``--index-url`` would be
+    true and incomplete: the URL that decides where packages come from would be
+    the part not on screen.
     """
     plugin = tmp_path / "plugin"
     (plugin / "deps").mkdir(parents=True)
@@ -2296,17 +2293,16 @@ def test_the_listing_follows_includes_and_joins_continuations(tmp_path):
 
 
 def test_the_listing_follows_a_quoted_include_and_a_colon_in_a_name(tmp_path):
-    """Two ways the target was read wrong, both ending in a silent short list.
+    """Two ways the target can be read wrong, both ending in a silent short list.
 
     pip parses these lines with shlex, so a quoted target containing spaces is
-    a legal include; the pattern captured ``\\S+`` and stopped at the first
-    space, so the file was never opened. And the URL guard used
-    ``urlparse(...).scheme``, which reads ``base:1.txt`` as scheme "base" - a
-    legal relative filename refused for looking like a URL.
+    a legal include and must not stop at the first space. And
+    ``urlparse(...).scheme`` reads ``base:1.txt`` as scheme "base" - a legal
+    relative filename that must not be refused for looking like a URL.
 
-    In both cases the include LINE was still listed, so nothing was hidden;
-    what went missing is the option inside the file it names, which is the
-    whole point of following it.
+    In both cases the include LINE would still be listed; what would go missing
+    is the option inside the file it names, which is the whole point of
+    following it.
     """
     plugin = tmp_path / "plugin"
     (plugin / "with space").mkdir(parents=True)
@@ -2374,8 +2370,8 @@ def test_the_listing_refuses_to_follow_an_include_out_of_the_plugin(tmp_path):
 def test_the_listing_refuses_to_follow_a_symlink_out_of_the_plugin(tmp_path):
     """``_include_target``'s docstring names "a symlink out" as refused.
 
-    The absolute, ``..`` and URL spellings each had a case above; this one did
-    not, and it is the spelling that defeats a lexical containment check - the
+    The absolute, ``..`` and URL spellings each have a case above; this is the
+    spelling that defeats a lexical containment check - the
     include names a plain relative filename inside the plugin folder, and only
     resolving it shows it landing elsewhere.
     """
@@ -2398,11 +2394,11 @@ def test_the_listing_refuses_to_follow_a_symlink_out_of_the_plugin(tmp_path):
 def test_one_file_reached_by_two_names_is_read_once(tmp_path):
     """ "Each file is read once" must mean the file, not the spelling.
 
-    The read set was keyed on ``resolve()``, which does not case-canonicalise,
-    so on a case-insensitive filesystem ``base.txt`` and ``BASE.TXT`` were two
-    keys for one file and its options were listed twice. A hardlink is the same
-    bug reachable on every platform: two paths, one inode, ``resolve()``
-    canonicalises neither into the other.
+    ``resolve()`` does not case-canonicalise, so on a case-insensitive
+    filesystem ``base.txt`` and ``BASE.TXT`` would be two keys for one file and
+    its options listed twice. A hardlink is the same case reachable on every
+    platform: two paths, one inode, ``resolve()`` canonicalises neither into
+    the other.
     """
     plugin = tmp_path / "plugin"
     plugin.mkdir()

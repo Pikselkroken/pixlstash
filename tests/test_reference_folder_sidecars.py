@@ -403,7 +403,7 @@ def _late_tag_write(server, task, pic_id):
 
 
 def test_scan_sidecar_sync_drops_a_tag_task_that_read_the_old_tags(server, tmp_path):
-    """#1361: a sidecar replacing an existing picture's tags is a reset, so a
+    """A sidecar replacing an existing picture's tags is a reset, so a
     task that read the picture before it must not add its tags beside them."""
     folder_dir = str(tmp_path / "refs")
     folder_id = _make_folder(server, folder_dir)
@@ -420,7 +420,7 @@ def test_scan_sidecar_sync_drops_a_tag_task_that_read_the_old_tags(server, tmp_p
 
 
 def test_metadata_import_drops_a_tag_task_that_read_the_old_tags(server, tmp_path):
-    """#1361, through the metadata import route."""
+    """The same reset rule, through the metadata import route."""
     client = _login_client(server)
     folder_dir = str(tmp_path / "refs")
     folder_id = _make_folder(server, folder_dir)

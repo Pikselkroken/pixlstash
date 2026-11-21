@@ -8,8 +8,8 @@ implementation hits - a Pillow round-trip re-encodes the JPEG, drops the PNG
 text chunks, and loses the camera EXIF - so each gets its own assertion rather
 than being folded into "the file still opens".
 
-Browser support was measured out-of-band on 2026-08-15 (Chromium 148, Firefox
-150) and is recorded in :mod:`pixlstash.utils.image_processing.orientation`'s
+Browser support (Chromium 148, Firefox 150) is recorded in
+:mod:`pixlstash.utils.image_processing.orientation`'s
 docstring; it cannot be asserted here because it is a property of the renderer,
 not of this code. That is exactly why WebP is excluded despite writing cleanly,
 and :func:`test_webp_is_not_offered_in_place` pins the exclusion so it is not
@@ -273,7 +273,7 @@ def test_png_rotate_copies_idat_through_byte_for_byte(png_with_comfy_metadata):
 
 
 def test_png_rotate_keeps_comfyui_prompt_and_workflow(png_with_comfy_metadata):
-    """The regression this whole module's design is built around.
+    """The failure this whole module's design is built around.
 
     ``Image.open(...).transpose(...).save(...)`` silently drops every text
     chunk, and those chunks are how the library recovers which workflow and
@@ -315,8 +315,7 @@ def test_png_rotated_twice_has_exactly_one_exif_chunk(png_with_comfy_metadata):
 def test_rotating_back_restores_the_image_exactly(request, fixture):
     """Undo is the inverse write, so no backup copy of the original is needed.
 
-    The issue proposed backing the source up until the user confirmed the
-    result. This is why that mechanism is unnecessary: a rotate and its inverse
+    No backup is kept until the user confirms the result: a rotate and its inverse
     restore the pixels and the displayed image exactly, so Ctrl+Z is exact
     rather than approximate.
     """
@@ -523,7 +522,7 @@ def test_supports_in_place_rotation(name, expected):
 
 
 def test_webp_is_not_offered_in_place(tmp_path):
-    """WebP writes cleanly but no browser reads it back - verified 2026-08-15.
+    """WebP writes cleanly but no browser reads it back.
 
     piexif handles WebP and the backend's ``exif_transpose`` honours the result,
     so this looks like an oversight from inside Python. It is not: Chromium 148
@@ -566,8 +565,7 @@ def test_import_records_the_orientation_up_front(tmp_path, stored, expected):
     Asserted against ``create_picture_from_bytes`` directly, NOT through an
     upload: with a server running, the backfill finder fills the column either
     way, so an end-to-end assertion passes whether or not the import does its
-    job. That version of this test was written first and proved to be vacuous -
-    removing the import-time write left it green.
+    job.
     """
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 

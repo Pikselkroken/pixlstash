@@ -1,4 +1,4 @@
-"""Tests for the append-only operation log and metadata undo/redo (DAM 1.2).
+"""Tests for the append-only operation log and metadata undo/redo.
 
 Covers the three things the design rests on:
 
@@ -87,22 +87,17 @@ def _disable_conflicting_backfill(server):
     adds real labels beside the seeded tag, and recomputes the two
     derived score columns beside them.
 
-    The per-test servers this module used to build hid the race. A vault that
-    had just come up had nothing to backfill and no model loaded, so the sweep
-    was still in a long backoff when the test ended. The shared server is warm
-    and its work pool only grows (``reset_operation_log`` never wipes
-    ``picture``), so the sweep lands *inside* a test instead: a run of this file
-    submits several ``TagTask`` batches, and a batch that lands between a seed
-    and its assertion fails it. Two or three failures per run, never the same
-    ones.
+    The shared server is warm and its work pool only grows
+    (``reset_operation_log`` never wipes ``picture``), so the sweep can land
+    *inside* a test: a ``TagTask`` batch that lands between a seed and its
+    assertion fails it.
 
     Only these finders go, and the planner keeps running. Detaching the whole
     set the way ``tests/test_picture_mutation_scope.py`` does is not an option
     here: that module imports its library once up front, whereas nearly every
     test in this one uploads, and the import endpoint refuses a picture outright
     with ``Cannot import: no TaskType.FACE_EXTRACTION finder is registered with
-    the work planner.`` Adding ``FACE_EXTRACTION`` to the tuple above was tried
-    and turned 51 of these 63 tests red.
+    the work planner.``, so ``FACE_EXTRACTION`` cannot join the tuple above.
 
     Returns the names of the finders it removed, so ``reset_operation_log`` can
     re-check before every test that they are still gone.
@@ -121,8 +116,8 @@ def _env():
     Building a Server (migrations, vault start-up, route registration) and
     tearing it down again costs well over a second, and minting the login
     credential costs another half-second in deliberately slow password
-    hashing. Both used to be paid ~50 times over. They are paid once here
-    instead, and per-test isolation comes from ``reset_operation_log`` below.
+    hashing. They are paid once here, and per-test isolation comes from
+    ``reset_operation_log`` below.
     """
     temp_dir = tempfile.TemporaryDirectory()
     try:
@@ -847,7 +842,7 @@ def test_stacking_is_recorded_and_undone(client, server):
 
 
 def test_undo_of_stack_creation_deletes_the_emptied_stack_row(client, server):
-    """Issue #643 (CSO finding C3): undoing a stack creation must not leave an
+    """Undoing a stack creation must not leave an
     orphaned empty PictureStack row behind - the mirror of undo-of-dissolve
     recreating the row."""
     ids = [_upload(client) for _ in range(2)]
@@ -892,8 +887,8 @@ def test_undo_keeps_a_stack_an_outside_picture_still_points_at(client, server):
 
 
 def test_undo_of_a_dissolve_recreates_the_row_and_redo_deletes_it_again(client, server):
-    """The pre-existing dissolve-undo behaviour (row recreation) still holds,
-    and its redo now removes the recreated row again - matching the forward
+    """The dissolve-undo behaviour (row recreation) holds, and its redo removes
+    the recreated row again - matching the forward
     dissolve, which deletes the row itself."""
     ids = [_upload(client) for _ in range(2)]
     resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
@@ -1409,12 +1404,11 @@ def test_scrapheap_move_is_recorded_and_undo_brings_the_picture_back(client, ser
 def test_scrapheap_lifecycle_announces_restored_not_added(client, server):
     """End to end: the WS envelope calls a scrapheap comeback ``restored``.
 
-    Both the op-log undo path and the explicit restore endpoint put a card back,
-    and both used to say ``added`` - which the SPA reads as "new to the vault"
-    and answers with the sidebar's NEW marker on the counts that grew. That is a
-    lie for a picture that has been in the library all along, so the comeback
-    gets its own kind. Genuine imports keep ``added``; a re-scrapheap on redo
-    keeps ``removed``.
+    Both the op-log undo path and the explicit restore endpoint put a card back.
+    ``added`` would read in the SPA as "new to the vault" and earn the sidebar's
+    NEW marker, a lie for a picture that has been in the library all along, so
+    the comeback gets its own kind. Genuine imports keep ``added``; a
+    re-scrapheap on redo keeps ``removed``.
     """
     picture_id = _upload(client)
     emitted: list[dict] = []
@@ -1687,7 +1681,7 @@ ANOMALY_TAG = "watermark"
 
 
 def test_reject_is_recorded_and_undo_clears_the_human_negative(client, server):
-    """The reported gap: a reject raised no receipt and could not be undone.
+    """A reject raises a receipt and can be undone.
 
     Undo must leave the ledger as if the reject never happened - status back to
     PENDING and ``label_source`` back to null. A row still carrying a human NEG
@@ -1851,7 +1845,7 @@ def test_undo_recomputes_the_derived_uncertainty_and_drops_the_cached_score(
 
 
 def test_removing_a_tag_chip_end_to_end_is_fully_undoable(client, server):
-    """The overlay gesture the bug was reported against, start to finish.
+    """The overlay's tag-chip removal gesture, start to finish.
 
     Removing a chip is two requests - ``tags/remove_all`` then the reject that
     makes the removal durable supervision. Each records its own operation (no
@@ -1899,7 +1893,7 @@ def test_removing_a_tag_chip_end_to_end_is_fully_undoable(client, server):
 
 
 def test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step(client, server):
-    """The fix: one user gesture, one history step, one Ctrl+Z.
+    """One user gesture, one history step, one Ctrl+Z.
 
     The lightbox stamps both requests of the chip delete with the same
     ``X-Operation-Batch-Id``. They still record two operations - the log stays a
@@ -1982,8 +1976,8 @@ def test_the_batch_undo_endpoint_reverts_a_client_gesture_in_one_call(client, se
 def test_a_malformed_gesture_batch_header_is_ignored_never_a_500(client, server):
     """A header is attacker-controllable: bad values degrade, they do not fail.
 
-    Each rejected value records an unbatched operation - exactly the behaviour
-    every caller had before the header existed.
+    Each rejected value records an unbatched operation - exactly as if no
+    header had been sent.
     """
     picture_id = _upload(client)
     for i, bad in enumerate(
@@ -2138,8 +2132,8 @@ def _raw_tags(server, picture_id):
 
 
 def test_a_manual_tag_added_while_tagging_is_pending_survives_the_write(client, server):
-    """The reported race: the task captured the picture, the owner tagged it,
-    and the task's write then deleted the tag the owner had just added."""
+    """The race: the task captures the picture, the owner tags it, and the
+    task's write must not then delete the tag the owner has just added."""
     picture_id = _upload(client)
     assert _raw_tags(server, picture_id) == ["__tag"]
 
@@ -2186,7 +2180,7 @@ def test_a_retag_replaces_model_tags_and_keeps_tags_other_writers_added(client, 
 
 
 def test_a_task_that_read_the_picture_before_a_retag_writes_nothing(client, server):
-    """#1361: an older task finishing after a retag must neither land its tags
+    """An older task finishing after a retag must neither land its tags
     nor its predictions, or the retag's own task keeps them as another
     writer's and the picture ends up with both models' output."""
     picture_id = _upload(client)
@@ -2312,8 +2306,8 @@ def test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch(client, 
     """The generic seam a feature uses to reopen what an operation also decided.
 
     An operation can change state the recorded picture facets do not cover (the
-    v1.9 duplicate verdict is the first). Without a hook, undo restored the
-    pictures and left that decision standing. The contract asserted here is what
+    duplicate verdict, for one). Without a hook, undo would restore the
+    pictures and leave that decision standing. The contract asserted here is what
     the feature relies on: called once per restore, with **every** operation of
     its own op_type, with the direction, and never for a foreign op_type.
     """

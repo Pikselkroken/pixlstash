@@ -814,8 +814,8 @@ def _add_manual_face(session, pic_id, bbox, face_index, character_id=None):
 def test_finder_ignores_manual_face_without_embedding(tmp_path):
     """A picture whose only face is a manual box (no embedding) is never stale.
 
-    Regression: the manual row has model_pack NULL, which the finder previously
-    read as "stale pack" and scheduled a destructive re-detect that wiped the box.
+    The manual row has model_pack NULL, which the finder must not read as
+    "stale pack", or it would schedule a destructive re-detect that wipes the box.
     """
     engine = _make_sqlite(tmp_path)
     with Session(engine) as session:
@@ -1309,11 +1309,10 @@ def _patch_detection(monkeypatch, task):
 
 
 def test_run_task_blocks_until_writes_commit(tmp_path, monkeypatch):
-    """C1: run() must not return before the model_pack writes have committed.
+    """run() must not return before the model_pack writes have committed.
 
-    With the old fire-and-forget code, _run_task returned while the write was
-    still queued, so the still-stale row would be re-selected. The fix blocks on
-    the submit futures, so by the time run() returns the new pack is persisted.
+    _run_task blocks on the submit futures, so by the time run() returns the new
+    pack is persisted and the row is not re-selected as still stale.
     """
     engine = _make_sqlite(tmp_path)
     img_root = tmp_path / "imgs"
@@ -1348,11 +1347,9 @@ def test_run_task_blocks_until_writes_commit(tmp_path, monkeypatch):
 
 
 def test_commit_failure_surfaces_and_excludes_picture(tmp_path, monkeypatch):
-    """C2: a persistent commit failure is logged and NOT counted as changed.
+    """A persistent commit failure is logged and NOT counted as changed.
 
-    The previous code swallowed the generic exception and ran dead no-op code,
-    so the failure was invisible and the row stayed stale forever with no signal.
-    Now _commit re-raises, the failure surfaces on the future, and _run_task
+    _commit re-raises, the failure surfaces on the future, and _run_task
     excludes the picture from changed_ids (the row stays stale, so the finder
     re-selects it - a genuine retry, not silent masking).
     """
@@ -1391,7 +1388,7 @@ def test_commit_failure_surfaces_and_excludes_picture(tmp_path, monkeypatch):
 
 
 def test_commit_reraises_on_unexpected_error(tmp_path):
-    """C2 (unit): _commit re-raises a non-Integrity failure instead of swallowing it."""
+    """_commit re-raises a non-Integrity failure instead of swallowing it."""
     engine = _make_sqlite(tmp_path)
     pic_id = _seed_stale_picture(engine)
 

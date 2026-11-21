@@ -109,10 +109,8 @@ def test_alembic_upgrade_from_v1_4_1_preserves_data():
        existing rows so the post-flush hook regenerates them);
     3. creates the ``changelog`` and ``snapshot`` tables.
 
-    Regression test: prior to this test, only fresh-DB upgrades were
-    exercised, so a future migration that broke pre-existing rows could
-    land green. Every user upgrading from 1.4.1 runs these migrations
-    against a non-fresh DB.
+    Every user upgrading from 1.4.1 runs these migrations against a non-fresh
+    DB, which a fresh-DB upgrade does not exercise.
     """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
@@ -367,7 +365,7 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
 
 def test_alembic_0087_backfills_entity_project_membership():
     """A deployed DB whose characters / picture sets carry the legacy single
-    ``project_id`` FK gains one join row per assignment (issue #125).
+    ``project_id`` FK gains one join row per assignment.
 
     The migration is additive: the scalar FKs must survive untouched, because
     they stay the "primary project" pointer until a post-1.12 cleanup drops them.
@@ -1106,7 +1104,7 @@ def test_0122_hands_back_every_picture_that_carries_a_workflow():
     Nothing re-keys a filed picture in place -- the extraction finder selects on
     ``workflow_hash_version IS NULL`` -- so without this every A1111 picture
     already in a library would keep a ControlNet model's name in its instance
-    document, which is #1375 itself. Broad on purpose: no column says which
+    document. Broad on purpose: no column says which
     recipe came from A1111, and a picture with no workflow is left alone.
     """
     with tempfile.TemporaryDirectory() as tmp:
@@ -1260,7 +1258,7 @@ def test_0121_creates_saved_recipe_on_a_fresh_and_on_an_existing_vault():
 
     A fresh vault gets ``saved_recipe`` from the baseline's ``create_all()``, so
     the migration must find it already there and do nothing; a vault upgraded
-    from before B6 has no such table and the migration has to create it. The
+    from before the table existed has none and the migration has to create it. The
     same run covers both, and the shape is asserted **twice**: once against
     the table the baseline built from the model and once against the one the
     migration created, because those are two definitions of one table that
@@ -1554,7 +1552,7 @@ def test_0139_adds_keep_workflow_on_export_on_a_fresh_and_a_populated_vault():
 
 def test_0136_adds_comfyui_connections_and_keeps_the_saved_address():
     """The column arrives either way and an existing user's ``comfyui_url`` is
-    left as it was, reading NULL for the list (one connection, #2167)."""
+    left as it was, reading NULL for the list (one connection)."""
 
     def has_column(conn):
         return "comfyui_connections" in {
@@ -1970,7 +1968,7 @@ def test_0125_resets_only_recipes_on_a_hand_made_workflow():
 
 
 def test_the_migration_chain_has_exactly_one_head():
-    """The v1.8.1 merge left two 0086 revisions; only one may be a head.
+    """The chain holds two 0086 revisions; only one may be a head.
 
     ``0086_reissue_api_tokens`` has already run on released v1.8.1 installs, so
     it keeps its identifier and its parent, and ``0086_add_operation_log`` (1.9
@@ -2086,12 +2084,12 @@ def test_a_populated_library_upgrades_through_the_picture_table_rebuild():
     with ``PRAGMA foreign_keys=ON`` (``database.init_database``), so that
     ``DROP`` raises "FOREIGN KEY constraint failed" as soon as any row
     references the table - which is every real library, and the committed e2e
-    fixture. It brought the whole `e2e` lane down: the server could not boot.
+    fixture.
 
     A fresh database has nothing referencing ``picture``, so `upgrade head` on
     an empty file passes either way; only a populated upgrade catches this.
-    The fixture is used because it is the artefact that actually failed, and
-    the e2e job already treats its absence as a coverage failure.
+    The committed e2e fixture is used because it is a real populated library,
+    and the e2e job already treats its absence as a coverage failure.
 
     Goes through ``VaultDatabase`` deliberately: the standalone
     ``PIXLSTASH_DB_URL`` path builds its engine from ``alembic.ini`` with no

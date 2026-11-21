@@ -15,19 +15,12 @@ its release update writes one manifest per ``Server.INSTALL_TYPES`` entry):
 4. ``site/latest-version/<bucket>.json`` decides whether the version-check URL
    for that bucket answers JSON or a 404 page.
 
-Adding a bucket to some-but-not-all of those is the exact shape of the bug this
-file exists to stop, and it has already happened once: the metrics collector was
-taught to classify a declared ``dev`` machine into its own excluded bucket while
-(1) still rejected ``PIXLSTASH_INSTALL_TYPE=dev`` as invalid. A developer who set
-it was reported as an ordinary ``pip`` install, so the cohort the change existed
-to subtract was never marked.
+Adding a bucket to some-but-not-all of those is what this file exists to stop:
+a bucket one holder accepts and another rejects is silently reported as some
+other install type.
 
 (4) is the one with teeth, because a missing manifest is not merely a lost
-signal. The bucket answers 404 *HTML*, and the client used to stamp its
-24-hour throttle only after parsing JSON, so the first machine to ask for a
-bucket with no file would have re-checked on every page load. That combination
-never shipped -- every released bucket had a manifest, so every check got JSON --
-and ``useVersionCheck.js`` now stamps before the request.
+signal: the bucket answers 404 *HTML* instead of JSON.
 
 A fifth holder, ``INSTALL_BUCKETS`` in the pixlstash-metrics collector, lives in
 a third repository and nothing checks it. It is the *consumer*: a
@@ -148,7 +141,7 @@ def test_the_shell_sets_the_marker_only_for_a_dev_backend():
     """The declaration must be wired up in the shell, not just readable here.
 
     A test that only exercised the Python side would pass with the desktop app
-    never setting the marker at all, which is the bug being fixed.
+    never setting the marker at all.
     """
     source = (
         REPO_ROOT / "electron" / "src" / "backend" / "ServerProcess.ts"
@@ -172,7 +165,7 @@ def test_e2e_suite_blocks_the_production_host():
     ``useVersionCheck.js``'s 24h throttle lives in ``localStorage``, and every
     fresh Playwright context starts with empty storage - so a context that
     reaches the live version-check endpoint is a real check-in against
-    production, not just a latent flake (issue #1213). The fix is a route
+    production, not just a latent flake. The guard is a route
     block registered once, on the shared ``browser`` fixture that every spec's
     context (including the handful minted by hand with
     ``browser.newContext()``) is funnelled through, so a future spec author
@@ -274,9 +267,8 @@ def test_the_docker_smoke_declares_the_container_and_still_checks_detection():
     A container does not inherit the runner's environment, so the workflow's
     declaration has to be forwarded with ``-e`` or the container reports as a
     real docker install. The declaration then hides ``running_in_docker()``
-    from ``/version``, the only place a real container's detection used to be
-    observed, so the smoke must re-run detection inside the container with the
-    declaration blanked and expect ``docker``.
+    from ``/version``, so the smoke must re-run detection inside the container
+    with the declaration blanked and expect ``docker``.
     """
     docker = _job("docker-build.yml", "build")
     run_steps = "\n".join(
@@ -333,11 +325,10 @@ def test_detection_explains_itself_once_not_once_per_request(monkeypatch, caplog
     """The reason for the bucket is logged once, not on every request.
 
     ``detect_install_type()`` runs per request - ``GET /version`` and every SPA
-    document the frontend fallback answers - and it used to log its reasoning
-    each time. On a machine declaring ``PIXLSTASH_TELEMETRY_DEV`` a grid of
-    thumbnails produced thousands of identical INFO lines and the log became
-    unreadable. The value still has to be explained; it has to be explained
-    once.
+    document the frontend fallback answers. On a machine declaring
+    ``PIXLSTASH_TELEMETRY_DEV``, logging its reasoning each time, a grid of
+    thumbnails would produce thousands of identical INFO lines. The value still
+    has to be explained; it has to be explained once.
     """
     monkeypatch.setenv(Server.DEV_MACHINE_ENV_VAR, "1")
 
@@ -372,13 +363,12 @@ def test_every_detection_line_is_said_once_not_per_request(
 ):
     """The once-only treatment covers the whole class, not just the dev line.
 
-    The dev-machine line is the one that was reported, and it is the one
-    nobody but a maintainer ever sees. The desktop shell exports
+    The dev-machine line is the one nobody but a maintainer ever sees. The
+    desktop shell exports
     ``PIXLSTASH_INSTALL_TYPE=electron`` on *every* launch
     (``electron/src/backend/ServerProcess.ts``), so the override line is the
     same flood in every shipped desktop install; the invalid-override warning
-    is the same flood for a mistyped declaration. Deduplicating only the
-    reported instance would have left both of them running.
+    is the same flood for a mistyped declaration.
     """
     for name, value in setup.items():
         monkeypatch.setenv(name, value)
@@ -398,10 +388,10 @@ def test_an_unreadable_app_data_path_is_said_out_loud(monkeypatch, tmp_path, cap
     """A marker directory that cannot be read must warn, not read as "absent".
 
     The errno matters, and it is not the obvious one: `Path.exists()` re-raises
-    a PermissionError, so an unreadable *directory* was never the silent case.
+    a PermissionError, so an unreadable *directory* is not the silent case.
     It swallows ENOENT, ENOTDIR, EBADF and ELOOP - so an app-data path that is
-    a FILE rather than a directory (or a symlink loop) reported "no marker" and
-    quietly turned a maintainer machine back into a counted install. That is
+    a FILE rather than a directory (or a symlink loop) would report "no marker"
+    and quietly turn a maintainer machine back into a counted install. That is
     the case `stat()` surfaces and this pins.
     """
     not_a_directory = tmp_path / "app-data-is-a-file"

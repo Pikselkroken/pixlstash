@@ -2,8 +2,7 @@
 
 A move is one path disappearing and another appearing in the same scan pass.
 Handled as a removal plus an import it costs the picture id, and with it the
-tags, score, faces and set/stack membership hanging off it, so reorganizing
-your own folders used to wipe everything PixlStash had added. The scan now
+tags, score, faces and set/stack membership hanging off it. The scan therefore
 matches the two halves by pixel hash and updates ``file_path`` instead.
 
 Ambiguous matches are deliberately not followed: identical pixels at several
@@ -438,7 +437,7 @@ def test_ambiguous_pixel_match_is_not_followed(server, tmp_path):
 
 
 def test_a_move_in_a_laid_out_folder_is_queued_for_reconciliation(server, tmp_path):
-    """v1.11 Phase 5: a laid-out root's move is a fact worth reconciling.
+    """A laid-out root's move is a fact worth reconciling.
 
     The queue only needs the file to have moved and the root to have a
     layout - classifying what it means happens later, live, in
@@ -720,11 +719,11 @@ def test_applying_a_move_to_a_non_unique_set_name_is_skipped_not_guessed(
 
 
 def test_a_reference_folder_cannot_be_given_a_layout_over_http(server, tmp_path):
-    """v1.11 ships the field disarmed.
+    """The field is disarmed for reference folders.
 
     Arming it turns the automatic mover loose inside a tree the owner curates
     by hand, with no UI, no preview and no migration route in front of it. The
-    Phase 5 machinery behind it is still exercised at the service level above -
+    machinery behind it is still exercised at the service level above -
     those tests insert the layout directly - so refusing here disarms the
     reachable surface without giving up the coverage.
     """
@@ -761,7 +760,7 @@ def test_a_reference_folder_cannot_be_given_a_layout_over_http(server, tmp_path)
 
 
 def test_removing_a_folder_deletes_its_pictures_and_keeps_its_files(server, tmp_path):
-    """DELETE /reference-folders/{id} deletes the rows, never the files (#2355).
+    """DELETE /reference-folders/{id} deletes the rows, never the files.
 
     The pictures go for good, curation included, not to the Scrapheap. A second
     folder's picture is the control: removal is scoped to the folder named.

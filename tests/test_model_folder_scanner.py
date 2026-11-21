@@ -467,12 +467,12 @@ class TestStates:
     def test_a_deliberately_removed_copy_is_not_re_labelled_missing(
         self, hub, scanner, tmp_path
     ):
-        """The fact that survives the file (#1439).
+        """The fact that survives the file.
 
         A copy the owner removed to keep one of several is recorded ``removed``,
         and the scan will keep finding it absent for the rest of the folder's
-        life. Every sweep therefore skips it: without that, the first scan after
-        the merge turns "I removed this on purpose" into the scanner's own
+        life. Every sweep therefore skips it: without that, the next scan
+        turns "I removed this on purpose" into the scanner's own
         "I looked and it was gone", and the distinction is destroyed by the one
         thing that runs unattended.
         """
@@ -912,9 +912,9 @@ class TestWriteCadence:
 
     ``MissingCheckpointHashFinder`` is a second worker that can only start once a
     checkpoint row exists. With ``_WRITE_BATCH`` alone, a 91-file folder is one
-    commit at the very end and a measured 6.11 GB scan showed the finder **zero**
-    rows at any point while it ran: the two workers went nose to tail instead of
-    overlapping. The count still bounds the transaction; time bounds the wait.
+    commit at the very end, so the finder sees **zero** rows while the scan runs
+    and the two workers go nose to tail instead of overlapping. The count still
+    bounds the transaction; time bounds the wait.
     """
 
     def _folder_with(self, tmp_path, count):
@@ -973,7 +973,7 @@ class TestWriteCadence:
 
 
 class TestHeaderFacts:
-    """``family``, ``quant`` and ``weights_id`` (#1314): header reads, never hashes."""
+    """``family``, ``quant`` and ``weights_id``: header reads, never hashes."""
 
     @staticmethod
     def _vae(path, dtype="BF16"):
@@ -1225,7 +1225,7 @@ class TestFilesWithNoReadableHeader:
 
 
 class TestPickingUpALateFile:
-    """A model that landed after its folder's last scan (#1985)."""
+    """A model that landed after its folder's last scan."""
 
     def test_only_an_unregistered_file_of_a_wanted_name_is_found(
         self, hub, scanner, tmp_path
@@ -1484,7 +1484,7 @@ class TestCuratedBaseModel:
 
 
 class TestScansThatRunByThemselves:
-    """A scan now runs whenever a folder changes, which is while a download is
+    """A scan runs whenever a folder changes, which is while a download is
     landing in it, and says what it found so the shelf can be told."""
 
     def test_a_file_still_arriving_is_left_for_a_later_scan(
@@ -1822,8 +1822,8 @@ class TestModelFolderScanFinder:
 
     def test_the_managed_store_is_walked_not_redeclared(self, hub, tmp_path):
         """It shares PixlStash's owner with the declared roots but holds plain
-        files: read as declared, a file deleted from it stayed ``present`` and
-        a PixlStash loader was sent to fetch bytes that were gone."""
+        files: read as declared, a file deleted from it would stay ``present``
+        and a PixlStash loader would be sent to fetch bytes that are gone."""
         from pixlstash.services.managed_model_store import ensure_managed_folder
         from pixlstash.tasks.model_folder_scan_finder import scanned_folders
 

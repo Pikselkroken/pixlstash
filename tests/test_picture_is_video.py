@@ -97,8 +97,7 @@ class TestPictureIsVideoImport:
 
         This is the direction the Python field default cannot fake: without the
         ``is_video=`` argument on the ``Picture(...)`` constructor the record
-        comes back ``False`` here, which is exactly the classification bug the
-        column exists to prevent.
+        comes back ``False`` here.
         """
         monkeypatch.setattr(
             "pixlstash.utils.image_processing.image_utils.cv2.VideoCapture",
@@ -120,10 +119,9 @@ class TestIsVideoColumnShape:
 
     This is a correctness constraint, not style. SQLite sorts NULL FIRST, so a
     nullable ``is_video`` lets a row of unknown type outrank a genuine still
-    image in ``fetch_best_picture_id`` -- something the CASE this column
-    replaced could never do, since it only ever yielded 0 or 1. A NULL would
-    also slip past the ``is_video = 0`` guard in migration 0096 and never be
-    classified. Both regressions are silent, so assert the schema directly.
+    image in ``fetch_best_picture_id``. A NULL would also slip past the
+    ``is_video = 0`` guard in migration 0096 and never be classified. Both
+    failures are silent, so assert the schema directly.
     """
 
     def test_column_is_not_nullable_with_server_default(self):

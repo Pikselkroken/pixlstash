@@ -1,12 +1,12 @@
-"""Regression test for GitHub issue #585 - "Invalid Images break tasks".
+"""A corrupt/undecodable image must not be retried forever.
 
-A corrupt/undecodable image used to be retried forever: a ``Missing*Finder``
-re-selects any picture whose target column is unset, the task cannot decode the
-file, and nothing durably marks it done (``ImageEmbeddingTask`` writes an *empty*
-embedding blob that ``fetch_work`` still treats as missing), so the same picture
-is picked up on every sweep.
+A ``Missing*Finder`` re-selects any picture whose target column is unset, the
+task cannot decode the file, and nothing else durably marks it done
+(``ImageEmbeddingTask`` writes an *empty* embedding blob that ``fetch_work``
+still treats as missing), so without suppression the same picture is picked up
+on every sweep.
 
-The fix is an in-memory, process-lifetime ``UnprocessableImageRegistry`` (owned by
+Suppression is an in-memory, process-lifetime ``UnprocessableImageRegistry`` (owned by
 the database, reachable from both task and finder threads via ``self._db``):
 
 * a decode failure in an image-reading task calls ``mark_unprocessable`` (the
@@ -16,7 +16,7 @@ the database, reachable from both task and finder threads via ``self._db``):
 * suppression is keyed on the file signature, so rewriting the file (the "still
   being written" / repaired case) lifts it and the picture is retried.
 
-These tests assert the FIXED behavior. They exercise the real decode-failure path
+These tests exercise the real decode-failure path
 (``ImageEmbeddingTask._process_preloaded`` with a ``None`` image, which never
 touches CLIP) and the real suppression path (``_filter_and_claim`` /
 ``count_remaining``). ML-free: no CLIP / insightface / tagger inference is run.
@@ -110,7 +110,7 @@ def _run_failed_decode(vault, pic_id: int, file_path: str) -> None:
 
 
 def test_585_corrupt_image_is_suppressed_after_failed_decode(tmp_path):
-    """#585 (fixed): a corrupt image is NOT re-selected after a failed decode."""
+    """A corrupt image is NOT re-selected after a failed decode."""
     corrupt_path = _write_corrupt_jpeg(tmp_path / "corrupt.jpg")
 
     with Vault(image_root=str(tmp_path)) as vault:
@@ -152,7 +152,7 @@ def test_585_corrupt_image_is_suppressed_after_failed_decode(tmp_path):
 
 
 def test_585_suppression_lifts_when_file_is_modified(tmp_path):
-    """#585 "until modified": rewriting the file makes the picture selectable again."""
+    """ "Until modified": rewriting the file makes the picture selectable again."""
     corrupt_path = _write_corrupt_jpeg(tmp_path / "corrupt.jpg")
 
     with Vault(image_root=str(tmp_path)) as vault:
@@ -192,12 +192,12 @@ def test_585_suppression_lifts_when_file_is_modified(tmp_path):
 
 
 def test_585_filter_and_claim_never_reads_file_path(tmp_path):
-    """#585 regression: ``_filter_and_claim`` must not touch ``picture.file_path``.
+    """``_filter_and_claim`` must not touch ``picture.file_path``.
 
-    The CI failure was a ``DetachedInstanceError``: some finders' candidate
-    queries return detached ``Picture`` objects whose ``file_path`` is deferred,
-    and the suppression check used to read it while claiming, crashing the
-    WorkPlanner thread. Suppression now looks the picture up by id against the
+    Some finders' candidate queries return detached ``Picture`` objects whose
+    ``file_path`` is deferred, so reading it while claiming raises
+    ``DetachedInstanceError`` on the WorkPlanner thread. Suppression looks the
+    picture up by id against the
     registry's own stored path, so ``file_path`` is never accessed here.
     """
 
@@ -223,12 +223,11 @@ def test_585_filter_and_claim_never_reads_file_path(tmp_path):
 
 
 def test_585_thumbnail_task_suppresses_corrupt_image(tmp_path):
-    """#585 follow-up: ThumbnailGenerationTask must mark undecodable sources.
+    """ThumbnailGenerationTask must mark undecodable sources.
 
-    Reported against v1.8.0: the original fix marked decode failures only in
-    ImageEmbeddingTask, so a corrupt picture whose thumbnail columns were NULL
-    (e.g. after the v1.8.0 thumbnail-regeneration reset) was re-selected by
-    MissingThumbnailFinder on every sweep forever.
+    Otherwise a corrupt picture whose thumbnail columns are NULL (e.g. after a
+    thumbnail-regeneration reset) is re-selected by MissingThumbnailFinder on
+    every sweep forever.
     """
     corrupt_path = _write_corrupt_jpeg(tmp_path / "corrupt.jpg")
 
@@ -257,11 +256,12 @@ def test_585_thumbnail_task_suppresses_corrupt_image(tmp_path):
 
 
 def test_585_quality_metadata_backfill_marks_instead_of_raising(tmp_path):
-    """#585 follow-up: an undecodable file must not abort quality backfill.
+    """An undecodable file must not abort quality backfill.
 
-    ``_backfill_missing_picture_metadata`` used to raise on the first corrupt
-    picture, killing the whole batch (good pictures included) and leaving every
-    column unset, so the finder re-selected the same batch on every sweep.
+    Raising on the first corrupt picture in
+    ``_backfill_missing_picture_metadata`` would kill the whole batch (good
+    pictures included) and leave every column unset, so the finder would
+    re-select the same batch on every sweep.
     """
     from PIL import Image as PILImage
 
@@ -295,7 +295,7 @@ def test_585_quality_metadata_backfill_marks_instead_of_raising(tmp_path):
 
 
 def test_the_suppressed_set_is_built_once_per_window_and_drops_on_a_mark(tmp_path):
-    """#1206 item 9b: four finders rebuilt this set on every planner sweep.
+    """The suppressed set is cached per window, not rebuilt on every sweep.
 
     Each rebuild re-stats every entry, and an entry whose volume has gone away
     costs a mount timeout per stat - on the planner thread. The answer is

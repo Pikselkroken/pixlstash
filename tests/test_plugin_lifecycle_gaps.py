@@ -1,18 +1,17 @@
-"""The host must actually use the plugin lifecycle methods it declares (#967).
+"""The host must actually use the plugin lifecycle methods it declares.
 
-Two gaps this pins, both "the contract declares a method and nothing calls it":
+Two contracts this pins, both "the contract declares a method and the host
+calls it":
 
-* ``unload()`` is abstract on ``TaggerPlugin`` - every plugin implements it and
-  nothing used to call it, so a plugin's model stayed resident for the life of
-  the process and *Keep models in memory = off* could not free it. That is a
-  multi-GB problem for a VLM captioner. The registry walk now runs from the
+* ``unload()`` is abstract on ``TaggerPlugin`` - every plugin implements it, and
+  the host calls it so *Keep models in memory = off* frees a plugin's model, a
+  multi-GB matter for a VLM captioner. The registry walk runs from the
   vault's idle sweep, which is the process-wide decision; hanging it off
   ``InferenceEngine.close()`` would have made reaping a throwaway CPU spillover
   engine unload the *GPU* engine's plugins, because the registry is bound to
   the vault's engine and the spillover reap runs before every batch.
-* ``estimated_vram_mb()`` existed and was never called: the description gate
-  charged the Florence-2 figure whichever plugin was about to run, so it billed
-  for a model that was not loading and nothing for the one that was.
+* ``estimated_vram_mb()`` is what the description gate charges, rather than the
+  Florence-2 figure whichever plugin is about to run.
 
 Deliberately Server-free and model-free: stub plugins and a stub engine are
 everything these paths touch (CLAUDE.md, "reuse the environment"), so the file
@@ -212,10 +211,9 @@ def test_closing_a_spillover_engine_does_not_touch_the_registry(install_plugins)
 
 @pytest.mark.parametrize("task_name", ["TagTask", "DescriptionTask"])
 def test_a_spillover_engine_runs_the_configured_plugins(monkeypatch, task_name):
-    """The CPU spillover engine is built with no plugin settings, so a spilled
-    batch ran the default tagger and captioner: a WD14 owner got PixlStash
-    tagger tags (#2748). It runs the settings of the workflow that spilled,
-    on a reused engine too."""
+    """The CPU spillover engine is built with no plugin settings, yet a spilled
+    batch must not run the default tagger and captioner. It runs the settings
+    of the workflow that spilled, on a reused engine too."""
     from pixlstash.inference.engine import InferenceEngine
     from pixlstash.tasks.description_task import DescriptionTask
     from pixlstash.tasks.tag_task import TagTask
@@ -340,7 +338,7 @@ def test_a_plugin_that_cannot_caption_is_billed_for_florence(install_plugins):
 def test_a_plugin_that_declines_to_answer_leaves_the_old_estimate(
     install_plugins, declines
 ):
-    """Unchanged behaviour, and deliberately so (#967): the plugin *does* run
+    """Deliberate behaviour: the plugin *does* run
     here, so the Florence figure is wrong - but the host cannot invent a number
     for a model it knows nothing about, and a plugin that overrides the method
     gets a correct budget. ``plugin_template.py`` says as much to authors."""
@@ -407,10 +405,9 @@ def test_the_vault_idle_sweep_is_the_caller(install_plugins):
 
 
 def test_joycaption_charges_for_a_cold_start():
-    """The shipped VLM is the case the budget exists for: it used to return 0
-    while its weights were merely not loaded yet, which - now that the host
-    reads 0 as "no answer" - would bill ~1 GB of Florence for the 8 GB it is
-    about to allocate."""
+    """The shipped VLM is the case the budget exists for: returning 0 while its
+    weights are merely not loaded yet would - since the host reads 0 as "no
+    answer" - bill ~1 GB of Florence for the 8 GB it is about to allocate."""
     from pixlstash.tagger_plugins.joycaption import (
         _BASE_VRAM_MB,
         JoyCaptionPlugin,

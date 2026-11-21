@@ -1,20 +1,17 @@
-"""``GET /picture_sets`` costs a constant number of queries (issue #651).
+"""``GET /picture_sets`` costs a constant number of queries.
 
-The endpoint used to read the COMPLETE member id list of every listed set into
-Python, pass it back as an ``IN`` bind list to filter hidden tags, count it with
-``len(set(...))``, and pass it back a third time to pick the top 3 previews.
-Two consequences, both covered here:
+The endpoint must not read the COMPLETE member id list of every listed set into
+Python and pass it back as an ``IN`` bind list. Two properties, both covered
+here:
 
-* the query count grew with the number of sets, so the sidebar's set list was
-  the dominant read on a large library;
-* the bind list was unbounded, so a set with more visible members than
-  ``SQLITE_LIMIT_VARIABLE_NUMBER`` (a compile-time constant: 250k on the build
-  this was measured on, but as low as 32766 on others) failed the request
-  outright.
+* the query count does not grow with the number of sets, since the sidebar's
+  set list is read on every library;
+* no bind list grows with membership, so a set with more visible members than
+  ``SQLITE_LIMIT_VARIABLE_NUMBER`` (a compile-time constant, as low as 32766 on
+  some builds) still answers.
 
-The counts, the preview ids and the hidden-tag rule are unchanged, so the tests
-below assert the OUTPUT is identical as well as the cost, per CLAUDE.md's rule
-that a performance fix must not quietly change behaviour.
+The tests assert the counts, the preview ids and the hidden-tag rule as well as
+the cost, so a performance change cannot quietly change behaviour.
 """
 
 import gc
@@ -100,9 +97,8 @@ def _seed_scoped_sets(server):
 
     ``member_conditions`` in ``GET /picture_sets`` carries three filters. The
     hidden-tag one is covered by the tests above; the other two, ``deleted IS
-    FALSE`` and the ``project_id`` membership predicate, survived deletion by
-    every test in this file (R13 and R14 of the PR #706 QA review), because the
-    fixture seeded no soft-deleted member and no project.
+    FALSE`` and the ``project_id`` membership predicate, need a soft-deleted
+    member and a project to be seeded.
 
     Two sets, so both branches of the project filter are reachable:
 
@@ -111,8 +107,8 @@ def _seed_scoped_sets(server):
       soft-deleted, one outside it.
     * ``Unscoped Set`` belongs to no project, so it is the set listed under
       ``?project_id=UNASSIGNED``. That sentinel is a second branch of the same
-      handler, and its character equivalent was a live scope bypass once, so it
-      gets its own case rather than riding on the numeric one. Members mirror
+      handler, so it gets its own case rather than riding on the numeric one.
+      Members mirror
       the above: one unassigned, one in the project, one unassigned but
       soft-deleted.
 
@@ -170,7 +166,7 @@ def _seed_scoped_sets(server):
 
 
 def test_soft_deleted_members_are_excluded_from_counts_and_previews():
-    """R14: the listing must not count or preview a soft-deleted member.
+    """The listing must not count or preview a soft-deleted member.
 
     Asserted in both directions. A count of 3 means ``deleted IS FALSE`` was
     dropped from ``member_conditions``; a count of 1 means it over-filtered and
@@ -198,7 +194,7 @@ def test_soft_deleted_members_are_excluded_from_counts_and_previews():
 
 
 def test_project_filter_applies_to_counts_and_previews():
-    """R13: ``project_id`` narrows the members, not just the listed sets.
+    """``project_id`` narrows the members, not just the listed sets.
 
     The set-level filter and the member-level filter are separate conditions
     built from the same parameter, so a set can be correctly listed while its
@@ -238,11 +234,9 @@ class _MemberQueryCounter:
 
     Deliberately NOT a count of every statement on the engine. The listener
     fires for all threads, and the WorkPlanner is running finders throughout a
-    test, so a raw total measures background work rather than this request (an
-    early version of this test failed for exactly that reason: 5 statements for
-    2 sets and 28 for 10, none of the growth from the endpoint).
+    test, so a raw total measures background work rather than this request.
 
-    The two queries this fix introduced are the only ones that read
+    The endpoint's two membership queries are the only ones that read
     ``picturesetmember`` through a ``DISTINCT`` subquery, which is what makes
     them separable from a finder's per-picture membership lookup.
     """
@@ -268,9 +262,8 @@ class _MemberQueryCounter:
 def test_query_count_does_not_grow_with_the_number_of_sets():
     """The N+1 itself: two membership reads, whether there are 2 sets or 10.
 
-    The old shape issued one members query per listed set (plus a hidden-tag
-    query per set when the filter was on), so this count tracked the set count
-    exactly.
+    One members query per listed set (plus a hidden-tag query per set when the
+    filter is on) would make this count track the set count exactly.
     """
     tmp, client, server = _setup_server()
     try:
@@ -361,7 +354,7 @@ def test_hidden_tags_are_excluded_from_counts_and_previews():
 
 
 def test_set_thumbnail_applies_the_same_hidden_tag_rule():
-    """The single-set thumbnail path had the same shape and the same fix.
+    """The single-set thumbnail path follows the same rule.
 
     It picks the top 3 for the composite, so a hidden picture leaking into that
     selection would render a thumbnail the list endpoint says is not there.

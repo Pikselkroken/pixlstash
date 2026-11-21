@@ -808,10 +808,9 @@ class TestInspect:
     ):
         """The blocklist compares literals, so it has to see the resolved path.
 
-        Checking the string the caller sent let `~/link-to-etc` through, and
-        `POST /libraries` on the result chmods the folder 0700 and writes a
-        database into it. Reproduced before the fix: a 200 reading
-        `{"verdict": "empty", "can_add": true}` for `/etc`.
+        Checking the string the caller sent would let `~/link-to-etc` through,
+        and `POST /libraries` on the result chmods the folder 0700 and writes a
+        database into it.
         """
         if os.name == "nt":
             pytest.skip("the blocklist is drive-rooted on Windows")
@@ -1335,9 +1334,7 @@ class TestTheNameRuleDoesNotStrandARow:
         `_register` reaches its write by one of three routes, and the flag has
         to hold on each: a fresh row, a revive (the path's detached row is
         provably the same library), and the path-mismatch branch that frees the
-        path first. The #1096 review caught the third ignoring the flag; the
-        revive had the identical bug one branch above it, on the same start-up
-        path.
+        path first.
         """
         registry = server.library_registry
         added_libraries(_add(_owner(server), tmp_path / "holder", name="Contested"))
@@ -1377,11 +1374,10 @@ class TestCountingMediaFiles:
     def test_the_walk_stops_at_its_cap_and_says_so(self, tmp_path):
         """A picker has to answer while somebody is looking at it.
 
-        The count must be **short of the total**, not merely capped-flagged: the
-        first version of this counted every file in a directory before testing
-        the cap, so a flat folder of half a million images - the exact shape
-        this release is about - was walked in full while reporting `capped`.
-        `0 < count <= 12` passed against that. `count < 12` does not.
+        The count must be **short of the total**, not merely capped-flagged:
+        counting every file in a directory before testing the cap would walk a
+        flat folder of half a million images in full while reporting `capped`.
+        `0 < count <= 12` would pass against that. `count < 12` does not.
         """
         for index in range(12):
             _write_picture(tmp_path / f"{index}.jpg")
@@ -1425,8 +1421,8 @@ class TestCountingMediaFiles:
     def test_our_own_thumbnails_are_never_counted_as_pictures(self, tmp_path):
         """One indexed thumbnail earns a thumbnail, and that one earns another.
 
-        Found four generations deep in a real library (``x_thumb_thumb_thumb_
-        thumb.webp``) after its folder was re-indexed in place.
+        Re-indexing a folder in place must not produce
+        ``x_thumb_thumb_thumb_thumb.webp``.
         """
         _write_picture(tmp_path / "IMG_1231.PNG")
         _write_picture(tmp_path / "IMG_1231_thumb.webp")
@@ -1479,10 +1475,10 @@ class TestTheRequestContract:
 class TestCliHintIsShort:
     """The hint is read at a glance in a settings panel, so it stays short.
 
-    It used to print the absolute interpreter path of the environment the server
-    was started from. That is the most precise answer and the least useful one:
-    on a venv install it wrapped the panel, and the verb (the part being taught)
-    ended up behind boilerplate the reader already knows.
+    The absolute interpreter path of the environment the server was started from
+    is the most precise answer and the least useful one: on a venv install it
+    wraps the panel, and the verb (the part being taught) ends up behind
+    boilerplate the reader already knows.
     """
 
     def _module(self):
@@ -1565,7 +1561,7 @@ class TestCliHintIsShort:
         """A launcher's own quoting must survive untouched.
 
         Re-quoting or stripping any of it would break the one instruction the
-        Libraries panel gives (multi-library plan §3.6 acceptance 8).
+        Libraries panel gives.
         """
         mod = self._module()
         declared = "& 'C:\\Program Files\\PixlStash\\PixlStash.exe' cli"
@@ -1593,7 +1589,7 @@ class TestCliHintIsShort:
     def test_the_windows_desktop_names_its_console_interpreter_not_the_launcher(
         self, monkeypatch, tmp_path
     ):
-        """Issue #1058, the half that made the output overlap the prompt.
+        """The CLI's output must not land on top of the returned prompt.
 
         ``PixlStash.exe`` is linked for the Windows GUI subsystem, so no shell
         waits for it: the prompt returns and the CLI's output then lands on top

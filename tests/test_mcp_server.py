@@ -517,7 +517,7 @@ def test_a_recipe_links_to_its_workflow():
 
 
 def test_no_tool_or_instruction_speaks_of_cards():
-    """The owner sees workflows (#1623); a card is internal storage."""
+    """The owner sees workflows; a card is internal storage."""
     texts = [mcp_server.INSTRUCTIONS, mcp_server.WRITE_INSTRUCTIONS]
     for tool in mcp_server.tools_for(allow_write=True):
         texts.append(tool["description"])
@@ -783,7 +783,7 @@ def test_a_picture_scoped_token_sees_collections_only_where_its_scope_allows(env
 
 @pytest.mark.parametrize("token", ["owner", "reader", "scoped"])
 def test_list_picture_workflows_answers_every_read_token(env, token):
-    """The read-only token's workflow listing (#1616) is open to it.
+    """The read-only token's workflow listing is open to it.
 
     These pictures carry no workflow, so the list is empty; that the route
     filters by scope is asserted on real recipes in
@@ -912,10 +912,10 @@ RUNNING = {"status": "running", "message": None, "stopped": False, "picture_ids"
 
 
 def test_a_failed_run_answers_with_the_node_that_failed(monkeypatch):
-    """The message the app shows is the tool's answer, as an error (#1839).
+    """The message the app shows is the tool's answer, as an error.
 
-    It was "queued": the run route answers once ComfyUI has the prompt, and a
-    node that raises two seconds later was never heard of.
+    The run route answers once ComfyUI has the prompt, so a node that raises
+    two seconds later must still be reported rather than "queued".
     """
     monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
     fetch, seen = _run_fetch({"p1": [dict(RUNNING), dict(FAILED)]})
@@ -1091,7 +1091,7 @@ def test_import_posts_json_through_http_fetch(monkeypatch):
 
 
 def test_an_import_naming_a_workflow_saves_the_graph_over_it():
-    """#1849: with a `workflow_id` the graph is that workflow's next version,
+    """With a `workflow_id` the graph is that workflow's next version,
     through the whole-graph write; without one it is a new workflow, as before."""
     seen = []
 

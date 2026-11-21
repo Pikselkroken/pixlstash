@@ -129,8 +129,8 @@ def test_closed_models_are_marked():
 
 
 def test_minimax_h3_has_a_family():
-    """A workflow on it said its base model was not known, though the shelf
-    named it."""
+    """A workflow on it names the base model the shelf names, rather than
+    saying it is not known."""
     assert family_of("MiniMax H3") == family_of("minimax_h3") == "minimax_h3"
     assert modality_of("MiniMax H3") == "video"
 

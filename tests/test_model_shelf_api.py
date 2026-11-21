@@ -1,4 +1,4 @@
-"""The model shelf's read API (shelf plan B5): behaviour and both authz directions.
+"""The model shelf's read API: behaviour and both authz directions.
 
 Environment sharing
 -------------------
@@ -10,13 +10,13 @@ re-mints every credential - so no test can inherit another test's token, and a
 negative assertion cannot pass because the credential was dead rather than
 because the scope was refused.
 
-The seeded shelf is deliberately shaped around the three decisions B5 had to
-make, so a regression in any of them is a failing assertion rather than a
+The seeded shelf is deliberately shaped around three decisions the read API
+makes, so a regression in any of them is a failing assertion rather than a
 judgement call:
 
 * two adapters **with** a base model and two **without** - a null base model is a
-  bulk state (37 % of a measured 91-file folder), so it is carried by the filter
-  as an explicit ``UNASSIGNED`` rather than dropped;
+  bulk state, so it is carried by the filter as an explicit ``UNASSIGNED``
+  rather than dropped;
 * one ``file_kind='unknown'``, which must appear in neither list by default and
   must **never** be returned by ``/checkpoints``;
 * one checkpoint with ``sha256`` NULL, which is what a 24 GB file looks like
@@ -559,7 +559,7 @@ def test_unknown_is_neither_adapter_nor_checkpoint_by_default(shelf_env):
 
 def test_the_checkpoint_list_says_which_shelf_its_ids_are_of(shelf_env):
     """A row id means nothing on another PixlStash, so the list names the
-    shelf beside it (#1912): one id, made once and the same from then on."""
+    shelf beside it: one id, made once and the same from then on."""
     first = shelf_env.owner.get(f"{API}/checkpoints").json()["shelf"]
     assert re.fullmatch(r"[0-9a-f]{32}", first), first
     assert shelf_env.owner.get(f"{API}/checkpoints").json()["shelf"] == first
@@ -655,7 +655,7 @@ def test_character_and_set_filters_read_the_vault_attachment_table(shelf_env):
 
 def test_attachments_are_returned_on_the_list_not_one_row_at_a_time(shelf_env):
     """The shelf shows who uses a LoRA. Serving that on the list is what keeps
-    F3 from issuing one detail request per row."""
+    the UI from issuing one detail request per row."""
     _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
     rows = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
     by_name = {row["filename"]: row for row in rows}
@@ -1209,7 +1209,7 @@ def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
 
 
 def _seed_run(server, prompt_id: str, model_ids) -> None:
-    """One finished ComfyUI run, as `record_comfyui_history` stores it (#1518)."""
+    """One finished ComfyUI run, as `record_comfyui_history` stores it."""
     with server.hub.transaction() as conn:
         conn.executemany(
             "INSERT INTO comfyui_history_model (prompt_id, model_id) VALUES (?, ?)",
@@ -1231,7 +1231,7 @@ def _vae_and_encoder(shelf_env) -> tuple[int, int]:
 
 
 def test_workflow_sets_serve_a_set_that_only_ran_in_comfyui(shelf_env):
-    """#1565: a checkpoint + VAE + text encoder no picture was made with, but
+    """A checkpoint + VAE + text encoder no picture was made with, but
     that ComfyUI ran, is a set with no cover - not three files in `no_set`."""
     ckpt = shelf_env.model_ids["base_xl.safetensors"]
     vae, encoder = _vae_and_encoder(shelf_env)
@@ -1606,7 +1606,7 @@ def test_workflow_templates_answer_the_owner_and_a_made_set_covers_its_template(
 
 
 def test_hiding_a_workflow_set_is_the_librarys_own_answer(shelf_env, monkeypatch):
-    """A hidden set is per-library (#1869): the same hub, another library, and
+    """A hidden set is per-library: the same hub, another library, and
     the set is still on the grid - and the key the grid hides it under is the
     set's own, whether it was computed or hand-made."""
     server = shelf_env.server
@@ -2053,8 +2053,8 @@ def test_a_set_is_renamed_and_its_name_cleared(shelf_env):
 
 def test_undo_puts_a_member_back_even_after_its_file_was_re_kinded(shelf_env):
     """The sha256 form restores a member as it was. Re-applying the kind rules
-    there refused a checkpoint the owner had since re-kinded, rolled back the
-    whole re-post and lost the set (#1520 review)."""
+    there would refuse a checkpoint the owner had since re-kinded, roll back
+    the whole re-post and lose the set."""
     ids = shelf_env.model_ids
     server = shelf_env.server
     ckpt = ids["base_xl.safetensors"]
@@ -2231,7 +2231,7 @@ def _held(entry) -> dict[str, dict]:
 def test_a_set_on_a_checkpoint_covers_its_pictures_and_holds_what_they_used(
     shelf_env,
 ):
-    """#1972: a set holding only a checkpoint holds every model the pictures
+    """A set holding only a checkpoint holds every model the pictures
     on it ran with, covers every combination it heads (so the automatic card
     leaves the grid), counts their pictures, and reads automatic."""
     ids = shelf_env.model_ids
@@ -2666,7 +2666,7 @@ def test_two_sets_on_one_checkpoint_share_its_pictures(shelf_env):
 
 
 def test_a_two_checkpoint_set_holds_each_checkpoints_pictures(shelf_env):
-    """#1690: a set holding a two-model workflow's pair follows the pictures
+    """A set holding a two-model workflow's pair follows the pictures
     of either checkpoint, and a second checkpoint the pictures used joins the
     Checkpoint slot after the set's own, which still names the set. A
     combination is the checkpoint's that heads it, as the grid names its card:
@@ -2732,7 +2732,7 @@ def test_a_two_checkpoint_set_holds_each_checkpoints_pictures(shelf_env):
 
 
 def test_a_run_only_combination_joins_the_set(shelf_env):
-    """#1565: a combination only ComfyUI ran is evidence like any other, so
+    """A combination only ComfyUI ran is evidence like any other, so
     the set on its checkpoint covers it and holds its models."""
     ids = shelf_env.model_ids
     server = shelf_env.server
@@ -3416,7 +3416,7 @@ def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
 
 
 def test_pick_up_registers_a_late_file_only_when_asked(shelf_env, tmp_path):
-    """A model that landed after its folder's last scan (#1985): looking finds
+    """A model that landed after its folder's last scan: looking finds
     it and writes nothing, registering puts it on the shelf, a folder that is
     taken from or built in is never looked in, a file still arriving is left,
     and a running move holds the registration back."""
@@ -3677,7 +3677,7 @@ def test_the_vault_data_folder_is_refused(shelf_env):
 
 
 def test_a_folder_containing_the_vault_data_folder_names_it(shelf_env):
-    """The reported case (#1986): the library kept inside Downloads, and
+    """The library kept inside Downloads, and
     Downloads offered as a model folder."""
     image_root = shelf_env.server.vault.image_root
     downloads = os.path.dirname(os.path.normpath(image_root))
@@ -3690,8 +3690,8 @@ def test_a_folder_containing_the_vault_data_folder_names_it(shelf_env):
 
 
 def test_a_folder_inside_the_vault_data_folder_names_it(shelf_env):
-    """The refusal says which folder and which way round (#1986): a library
-    kept inside Downloads used to answer a bare "overlaps"."""
+    """The refusal says which folder and which way round, not a bare
+    "overlaps", for a library kept inside Downloads."""
     image_root = shelf_env.server.vault.image_root
     inner = os.path.join(image_root, "issue-1986-models")
     os.makedirs(inner, exist_ok=True)
@@ -3862,7 +3862,7 @@ def test_patch_changes_the_bind_path_but_never_the_registered_path(shelf_env):
 
 
 def test_forgetting_a_folder_tombstones_and_keeps_every_model(shelf_env):
-    """Shelf plan §7: removal drops the location rows and keeps the model rows
+    """Removal drops the location rows and keeps the model rows
     with their curation, which is what lets it skip a confirmation prompt. If
     this ever hard-deletes, the confirmation has to come back."""
     before = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
@@ -3931,7 +3931,7 @@ def test_the_background_scan_of_the_huggingface_cache_drops_a_deleted_repo(
     shelf_env, tmp_path, monkeypatch
 ):
     """The cache is declared, never walked, so its background scan is the
-    declaration again. Before it was, a repo deleted from the cache stayed
+    declaration again; otherwise a repo deleted from the cache would stay
     `present` until the server restarted."""
     import huggingface_hub
 
@@ -4313,8 +4313,7 @@ def test_folder_list_is_owner_only_in_both_directions(shelf_env):
 
 def test_local_owner_reaches_every_folder_mutator(shelf_env):
     """The positive direction of the §16.3 tier: loopback, RFC1918 LAN and
-    Tailscale CGNAT all pass. Over-blocking is its own regression, and the
-    Tailscale case is the one that was a false deny before the scoped predicate."""
+    Tailscale CGNAT all pass. Over-blocking is its own regression."""
     for method, path, kwargs in _FOLDER_MUTATORS:
         for headers in ({}, _xff(LAN_IPV4), _xff("100.64.0.5")):
             r = shelf_env.owner.request(method, path, headers=headers, **kwargs)
@@ -4366,32 +4365,21 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
     the middleware). So the 403 below is the **middleware's**, and the gate's
     ``LOCAL_OWNER_ONLY`` owner half is defence in depth that no HTTP request can
     observe independently - there exists no credential that reaches the gate on
-    these routes and fails its owner check. Verified by mutation: deleting
-    ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch does
-    **not** turn this file red, and that is a property of the system rather than
-    a hole in this test. It is flagged to the adversarial review rather than
-    papered over, and it is not specific to the shelf.
+    these routes and fails its owner check. Deleting ``_enforce_unscoped_owner``
+    from the gate's ``LOCAL_OWNER_ONLY`` branch does **not** turn this test red,
+    and that is a property of the system rather than a hole in this test.
 
-    **What is NOT true - corrected by the 2026-08-09 security review:** the tier
-    is not all non-GET. ``GET /filesystem/browse`` and
+    **The tier is not all non-GET.** ``GET /filesystem/browse`` and
     ``GET /reference-folders/detect-sidecars`` are both ``LOCAL_OWNER_ONLY``, and
     for those two the middleware's non-GET rule says nothing. What refuses a
     share token there is ``READ_BLOCKED_GET_PATHS``, a hand-maintained frozenset
-    with no guardrail tying it to ``ROUTE_POLICIES``: the review dropped one path
-    from it and a resource-scoped READ token got a full host filesystem listing
-    (200, not 403). So the reasoning above holds for **these four routes**
-    because they are non-GET, not for the tier. A GET added to the tier without
-    a matching ``READ_BLOCKED_GET_PATHS`` entry is a real hole and nothing goes
-    red. Tracked as a follow-up; do not read this docstring as saying the tier
-    is safe by construction.
-
-    **Updated 2026-08-15:** "nothing goes red" is no longer true of this file.
-    ``test_no_share_token_can_download_a_model_file`` covers a GET on this tier
-    directly - ``GET /adapters/{sha256}/file``, whose templated path
-    ``READ_BLOCKED_GET_PATHS`` could not match in any case - and deleting
+    with no guardrail tying it to ``ROUTE_POLICIES``. So the reasoning above
+    holds for **these four routes** because they are non-GET, not for the tier:
+    a GET added to the tier without a matching ``READ_BLOCKED_GET_PATHS`` entry
+    is a real hole. ``test_no_share_token_can_download_a_model_file`` covers a
+    GET on this tier directly - ``GET /adapters/{sha256}/file`` - and deleting
     ``_enforce_unscoped_owner`` from the gate's ``LOCAL_OWNER_ONLY`` branch
-    fails it. The gap the paragraph above describes is real for a *new*
-    undeclared GET; it is not currently unmeasured.
+    fails it.
 
     What this test does own: the block is real, the credential is live, and the
     routes exist. ``assert_real_route`` is load-bearing - middleware answers 403
@@ -4451,11 +4439,10 @@ def _await_scan(shelf_env, folder_id, timeout=30.0) -> dict:
 def test_a_scan_is_a_task_with_progress_a_denominator_and_one_scan_per_folder(
     shelf_env, tmp_path, monkeypatch
 ):
-    """The three things the bare daemon thread could not give.
+    """Progress, a denominator, and one scan per folder.
 
-    It ran unobserved: a 57 GB folder is minutes of hashing with nothing to
-    show, a crash looked exactly like a slow read, and the thread was alive at
-    interpreter shutdown - the shape #856's teardown gate exists to catch. As a
+    A large folder is minutes of hashing, so it must be observable, and a
+    thread alive at interpreter shutdown is what the teardown gate catches. As a
     ``TaskRunner`` task the scan reports file progress on the same
     ``/workers/progress`` lane every other task uses, and the runner owns its
     lifecycle.
@@ -4529,8 +4516,8 @@ def test_a_crashed_scan_reports_failed_rather_than_looking_slow(
     shelf_env, tmp_path, monkeypatch
 ):
     """The scanner logs its exception and returns without stamping
-    ``last_checked``, so a timestamp cannot tell a crash from a slow read - which
-    is why the UI had to guess with a ten-minute ceiling. The task's status can.
+    ``last_checked``, so a timestamp cannot tell a crash from a slow read. The
+    task's status can.
     """
 
     def die(self, *args, **kwargs):
@@ -4803,7 +4790,7 @@ def test_stack_aggregates_are_on_the_row(shelf_env):
 
 def test_nulls_sort_last_in_both_directions(shelf_env):
     """Two of six rows in the design's own mock have no name and no base model,
-    and 37 % of a measured real folder records neither. A user who flips the
+    and a real folder often records neither. A user who flips the
     direction is not asking for 900 unnamed rows at the top."""
     ascending = _order(shelf_env, sort="name", direction="asc")
     descending = _order(shelf_env, sort="name", direction="desc")
@@ -4880,7 +4867,7 @@ def test_an_unknown_sort_key_is_refused_before_it_reaches_the_sql(shelf_env):
 
 
 def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
-    """The claim B5 left standing and B7 had to keep: the list is one SELECT for
+    """The list is one SELECT for
     the rows and one for the locations, whatever the sort and *whatever the row
     count*. 1,806 rows sorted by "the total size of the stack this row belongs
     to" is otherwise the textbook N+1."""
@@ -5227,9 +5214,9 @@ def test_a_move_is_refused_before_the_first_byte_when_it_cannot_work(
 def test_a_move_and_an_import_share_one_job_slot(
     shelf_env, move_folders, import_folders
 ):
-    """They used to hold **separate** locks, which serialized each against
+    """One slot, not **separate** locks, which would serialize each against
     itself and neither against the other: both could find one destination
-    filename free and whichever wrote second won in silence.
+    filename free and whichever wrote second would win in silence.
 
     Held deterministically rather than by racing two threads - the slot is the
     contract, and a timing test would prove less and flake more. Both directions
@@ -5488,21 +5475,14 @@ def test_a_sample_inside_the_registered_root_is_served(shelf_env, import_folders
 def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
     """The containment itself, asserted where it can actually be made to fail.
 
-    **Not over HTTP, and that is the finding rather than a shortcut.** Starlette
-    percent-decodes the path before matching, so `{filename}` is structurally
-    incapable of carrying a `/`: a literal `../` is collapsed by the client, and
-    `..%2F` becomes an extra path segment that matches no route. Three
-    measurements got this wrong before it was pinned down -
+    **Not over HTTP, deliberately.** Starlette percent-decodes the path before
+    matching, so `{filename}` is structurally incapable of carrying a `/`: a
+    literal `../` is collapsed by the client, and `..%2F` becomes an extra path
+    segment that matches no route - and with a built frontend such a request is
+    answered **200 by the SPA catch-all** without reaching the API at all.
 
-      1. the plain-`../` version stayed green with `resolve_path_within` deleted;
-      2. so did the percent-encoded version;
-      3. and `tests/authz_guard.py::no_spa_fallback` then caught the reason on
-         CI: the request was not reaching the API at all, it was being answered
-         **200 by the SPA catch-all**. It passed locally only because a dev
-         checkout has no built frontend to fall back to.
-
-    So an HTTP-level traversal test here asserts nothing and was removed rather
-    than kept as reassurance. The guard is still real and still load-bearing on
+    So an HTTP-level traversal test here would assert nothing. The guard is
+    still real and still load-bearing on
     **Windows**, where a backslash is both an ordinary URL character and a path
     separator, and where four CI shards run - which is why this asserts the join
     directly, and why it fails on every platform when the guard is removed.
@@ -5528,14 +5508,11 @@ def test_the_sample_join_refuses_a_name_that_climbs_out(tmp_path):
 def test_the_filename_segment_cannot_carry_a_slash_through_routing(shelf_env):
     """Pin the routing SHAPE, which is what makes the HTTP traversal unreachable.
 
-    The test that used to assert this over HTTP was deleted: the request never
-    reached the API, so it asserted nothing (see the docstring above). The
-    adversarial review of #878 asked for a structural replacement, on the
-    grounds that `{filename}` matching one path segment was left guarded by a
-    prose comment alone.
+    Over HTTP the request never reaches the API, so an HTTP test asserts
+    nothing (see the docstring above); this pins the structure instead.
 
-    Measured while writing it, the property turns out to be guarded twice, and
-    the stronger guard is the one nobody wrote for this purpose: switching to
+    The property is guarded twice, and the stronger guard is incidental:
+    switching to
     `{filename:path}` changes the route's *effective path*, which then no longer
     matches its `ROUTE_POLICIES` key, and `AuthzGate.enforce_startup` refuses to
     boot the server at all. The deny-by-default registry pins the route shape as
@@ -5571,10 +5548,6 @@ def test_a_symlinked_samples_directory_is_not_its_own_safe_base(tmp_path):
     the owner merely pointed at, and both tarballs and git repositories carry
     symlinks. A directory symlink or an NTFS junction does the same on Windows,
     where four CI shards run.
-
-    Found by the adversarial review of this PR, which is the point of having
-    one: the author had already convinced himself the containment held, and the
-    module docstring said so.
     """
     run_dir = tmp_path / "Clementine"
     run_dir.mkdir()
@@ -5588,9 +5561,9 @@ def test_a_symlinked_samples_directory_is_not_its_own_safe_base(tmp_path):
 
 
 def test_a_symlinked_sample_file_is_refused_too(tmp_path):
-    """The sibling case, kept so a fix to the directory hinge cannot quietly
+    """The sibling case, kept so a change to the directory hinge cannot quietly
     drop the file hinge: a real `samples/` holding a symlink OUT is the other
-    half, and it was already closed."""
+    half."""
     run_dir = tmp_path / "Clementine"
     (run_dir / "samples").mkdir(parents=True)
     outside = tmp_path / "outside"
@@ -5847,7 +5820,7 @@ def test_the_model_sample_join_refuses_a_name_that_climbs_out(tmp_path):
 
 
 def test_a_symlinked_model_samples_directory_is_not_its_own_safe_base(tmp_path):
-    """The hinge the run-sample route had to learn twice.
+    """The same hinge as the run-sample route.
 
     `resolve_path_within` realpaths the base it is handed, so containing the
     filename against the derived directory alone would make a symlinked
@@ -6102,12 +6075,12 @@ def test_forgetting_an_ordinary_folder_still_works(shelf_env, managed_folder):
 def test_forgetting_a_folder_takes_the_same_job_slot_as_a_move_and_an_import(
     shelf_env, managed_folder
 ):
-    """One shelf I/O slot machine-wide (#1017).
+    """One shelf I/O slot machine-wide.
 
     Forgetting a folder deletes exactly the ``model_file`` rows a running move is
     repointing. Let it interleave and the move's UPDATE matches nothing, which
-    SQL reports as success - so the source got unlinked and the destination bytes
-    ended up registered nowhere. The mover refuses such a commit on its own side
+    SQL reports as success - so the source would be unlinked and the destination
+    bytes registered nowhere. The mover refuses such a commit on its own side
     too; this is the half that stops the interleaving from ever starting.
     """
     assert SHELF_IO_LOCK.acquire(blocking=False), "the slot was left held"
@@ -6303,11 +6276,8 @@ def test_a_symlink_into_a_system_directory_is_refused_not_followed(
 ):
     """The blocklist is canonicalized, not lexical.
 
-    Two reviews disagreed. The security sign-off filed the lexical check under
-    "explicitly not a finding" because owner-chosen paths are trusted and an
-    owner who may name ``/usr`` directly gains nothing by naming a link to it.
-    That is right about boundaries and beside the point about *this* check:
-    there is no non-owner principal, so the blocklist is not a boundary, it is
+    An owner who may name ``/usr`` directly gains nothing by naming a link to
+    it, but there is no non-owner principal, so the blocklist is not a boundary, it is
     the guard against the owner relocating the store onto a system directory by
     accident - and a symlink is exactly the accident the owner cannot see in the
     path they typed. Lexically checked, this route would ``makedirs`` under
@@ -6344,8 +6314,8 @@ def test_a_symlink_into_a_system_directory_is_refused_not_followed(
 def test_a_relocation_target_must_be_absolute_and_off_the_system_blocklist(
     shelf_env, relocatable_store
 ):
-    """The only caller-supplied host path in the whole B7 stack, and it had no
-    test at all: nulling the guard left the suite green.
+    """The only caller-supplied host path among the shelf's move routes, so
+    nulling the guard must turn this red.
 
     Owner-chosen paths are trusted here (the reference-folder precedent), so the
     guard is narrow on purpose - absolute, and not a system directory - but it
@@ -6525,7 +6495,7 @@ def relocatable_downloads(shelf_env, tmp_path, monkeypatch):
     declaration gives a ``model_file`` row to the engine file alone, so the mover
     - which moves rows - never sees the label set beside it. A relocation that
     only moved the rows would leave a tagger that cannot load and would be
-    downloaded again, which is the failure #905 exists to prevent.
+    downloaded again.
 
     ``_pixlstash_data_dir`` is redirected rather than the env override, because
     the override wins over the recorded location and this fixture is here to
@@ -6635,7 +6605,7 @@ def test_a_root_only_folder_with_no_relocate_route_is_still_refused(
 ):
     """The InsightFace packs carry the same kind, owner and `movable` as the
     download folder - `declare_folder` writes all three the same way - so the
-    route cannot key on those columns. #906 is what opens this one."""
+    route cannot key on those columns."""
     packs = tmp_path / "insightface" / "models"
     packs.mkdir(parents=True)
     with shelf_env.server.hub.transaction() as conn:
@@ -7023,8 +6993,8 @@ def test_an_unhashed_checkpoint_cannot_be_called_an_adapter(shelf_env):
 def test_clearing_the_algorithm_of_an_adapter_is_refused(shelf_env):
     """Named no `file_kind` at all, so it never looked like the CHECK guard's
     business - and the row is already an adapter, so `kind = NULL` violates
-    `CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)`. Reported by the CSO
-    review of #869; it was a 500 before the guard read the post-write state."""
+    `CHECK (file_kind <> 'adapter' OR kind IS NOT NULL)`; the guard reads the
+    post-write state so this is a refusal, not a 500."""
     alice = shelf_env.model_ids["alice.safetensors"]
     r = shelf_env.owner.patch(f"{API}/models", json={"ids": [alice], "kind": None})
     assert r.status_code == 400, r.text
@@ -7064,29 +7034,23 @@ def test_forget_reads_its_gate_inside_the_write_transaction(shelf_env):
     through it leaves a window in which a background scan can flip a row from
     `missing` back to `present` before the DELETE lands - and the model is
     forgotten anyway. Counting the reads that go OUTSIDE the transaction is the
-    assertion, because the race itself cannot be scheduled reliably. Reported by
-    the CSO review of #869.
+    assertion, because the race itself cannot be scheduled reliably.
 
     **Counted per THREAD, and that is what makes the count mean anything.**
     `hub.fetchall` is patched on the shared, module-scoped server, so every
     caller in the process goes through it - including the background finders,
     and `MissingCheckpointHashFinder` queries `model` on the hub in both
     `progress()` and `find_task()`. A sweep landing inside the request window
-    put its SQL in this list and failed the test with a diagnostic pointing at
-    the forget, which had done nothing wrong. Measured: red once in four runs of
-    a loaded four-file combination.
+    would put its SQL in this list and fail the test for the wrong reason.
 
     The allowlist is the same one the N+1 guard above uses, and for the same
     reason: Starlette serves a sync handler on its own threadpool, whose threads
-    are named "AnyIO worker thread", and nothing else in this process is. A
-    denylist of background worker names was tried twice there and lost twice.
+    are named "AnyIO worker thread", and nothing else in this process is.
 
-    Pinning to the TEST's thread id instead does not work and is worth recording
-    - it was tried here first. The handler is `def`, so FastAPI runs it in that
-    threadpool rather than on the caller, which means an ident match excludes
-    every read the request makes and turns this into a green assertion about
-    nothing. It was caught by moving the builtin gate out of the transaction and
-    watching the test stay green.
+    Pinning to the TEST's thread id instead does not work: the handler is
+    `def`, so FastAPI runs it in that threadpool rather than on the caller,
+    which means an ident match excludes every read the request makes and turns
+    this into a green assertion about nothing.
 
     **This assertion is satisfied by an empty list, and that is intended**: a
     correct `forget_models` makes NO `hub.fetchall` call at all, because every
@@ -7306,7 +7270,7 @@ def test_deciding_the_kind_stops_the_offer_and_suggest_again_restores_it(
 def test_a_loader_is_offered_its_models_suggestion_only_where_it_takes_that_kind(
     shelf_env, gguf_encoder
 ):
-    """The Workflow tab's offer (#1962): the shelf's suggestion, on the loaders
+    """The Workflow tab's offer: the shelf's suggestion, on the loaders
     of its kind, until somebody decides."""
     server = shelf_env.server
     _seed_loader(server, "r-te", "clip_name", "t5-xxl-q8_0.gguf", "CLIPLoader")
@@ -7330,7 +7294,7 @@ def test_a_loader_is_offered_its_models_suggestion_only_where_it_takes_that_kind
 def test_a_name_match_is_refiled_only_where_no_workflow_says_otherwise(
     shelf_env, gguf_encoder
 ):
-    """The weaker evidence (#1962 after #1966) gives way to any recorded load
+    """The weaker evidence gives way to any recorded load
     of the file under its own name, and to the owner's say."""
     hub = shelf_env.server.hub
     assert may_refile_by_name(hub, gguf_encoder, "text_encoder")
@@ -7629,8 +7593,7 @@ def test_a_band_is_named_by_its_volume_label_when_it_has_one(
 def test_a_mount_point_holding_a_backslash_still_matches_its_device():
     """`/proc/mounts` escapes a literal backslash as `\\134`, which a pattern
     written for `\\040` and `\\011` does not cover. Left undecoded the mount
-    point never matches its device and the drive silently loses its label.
-    Reported by the review of #868."""
+    point never matches its device and the drive silently loses its label."""
     from pixlstash.utils.system_utils import _unescape_mount_field
 
     assert _unescape_mount_field(r"/mnt/My\040Disk") == "/mnt/My Disk"
@@ -7888,12 +7851,10 @@ def test_setting_the_file_kind_and_the_features_at_once_keeps_both(shelf_env):
 def test_a_model_in_a_shared_cache_that_we_did_not_choose_is_the_owners_to_correct(
     shelf_env,
 ):
-    """The refusal above is right about an engine and was wrong about everything
+    """The refusal above is right about an engine and wrong about everything
     else in the HuggingFace cache, which is shared with every other tool on the
-    machine. Setting the Kind of a checkpoint the OWNER downloaded came back "1
-    of these are engines PixlStash downloaded for itself", about a file
-    PixlStash has never loaded. `builtin_caches` no longer calls those rows
-    engines, so the guard no longer reaches them."""
+    machine. `builtin_caches` does not call a checkpoint the OWNER downloaded
+    there an engine, so the guard does not reach it."""
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
             "INSERT INTO model_folder (id, path, kind, owner, movable, created_at) "
@@ -7956,14 +7917,12 @@ def test_forget_reads_a_removed_copy_as_gone_rather_than_as_still_declared(
     shelf_env,
 ):
     """The engine gate's predicate is "something still declares it", spelled as
-    "not missing" - and `removed` satisfies that while meaning the opposite
-    (#1439).
+    "not missing" - and `removed` satisfies that while meaning the opposite.
 
     Left in, an engine every copy of which had been merged away would be refused
     forever as declared, with no verb able to clear the row. Closed here, by
-    construction: it is unreachable today only because the merge refuses an engine
-    outright, which is a gate in another file, and "dead by argument" is the class
-    this repo keeps shipping.
+    construction, rather than relying on the merge refusing an engine outright,
+    which is a gate in another file.
     """
     engine = _declare_engine(shelf_env, display_name="Tongyi-MAI/Z-Image-Turbo")
     _set_states(shelf_env, engine, "removed")
@@ -8166,7 +8125,7 @@ def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
 
 
 def test_a_row_carries_the_tile_a_workflow_card_draws_it_with(shelf_env):
-    """The server names the tile (#1951), so every client draws the same one:
+    """The server names the tile, so every client draws the same one:
     a known release by its short name and role, an adapter of it by its base's
     tile and its own tab, and a row of no known base model not at all."""
     huge = shelf_env.model_ids["huge_unhashed.safetensors"]
@@ -8256,7 +8215,7 @@ def test_the_ceiling_counts_unique_ids_not_repeats(shelf_env):
     """`apply_stack` de-dupes, so the guard has to as well.
 
     A client that repeated an id would otherwise be told it sent too many
-    models while its actual selection was two. Reported by the review of #882.
+    models while its actual selection was two.
     """
     bob = shelf_env.model_ids["bob.safetensors"]
     noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
@@ -8758,7 +8717,7 @@ def test_the_add_file_route_is_declared_local_owner_only():
 def test_a_loose_file_lands_in_the_managed_store_and_is_listed_without_a_rescan(
     shelf_env, loose_file
 ):
-    """The whole of F6's `Add file`: one call, and the row is there.
+    """The whole of the shelf's `Add file`: one call, and the row is there.
 
     No `destination_folder_id`, so this also pins the ruled default - the managed
     store - rather than the caller having to name it.
@@ -9334,9 +9293,8 @@ def test_the_download_is_declared_local_owner_only(shelf_env):
 
 
 def test_a_local_owner_downloads_from_loopback_lan_and_tailscale(shelf_env, tmp_path):
-    """The positive half of the tier. The Tailscale case is the one that was a
-    false deny before the scoped predicate, and it is the realistic deployment
-    for this route: a generator on the owner's own network."""
+    """The positive half of the tier. The Tailscale case is the realistic
+    deployment for this route: a generator on the owner's own network."""
     folder = tmp_path / "local"
     folder.mkdir()
     write_adapter(folder / "alice.safetensors")
@@ -9387,7 +9345,7 @@ def test_no_share_token_can_download_a_model_file(shelf_env, tmp_path):
     `test_share_tokens_never_reach_a_folder_mutator` explains why its own
     refusals come from the auth middleware's non-GET rule, and warns in as many
     words that a **GET** added to this tier without a `READ_BLOCKED_GET_PATHS`
-    entry is a real hole that turns nothing red. This route is that GET, and its
+    entry is a real hole. This route is that GET, and its
     path is templated, so that frozenset - which matches literal paths - could
     not cover it even if one were added. So the gate's owner check is the only
     thing standing here, and this is the test that says whether it holds.
@@ -9560,7 +9518,7 @@ def test_delete_never_touches_a_directory_pixlstash_did_not_write(
     is doing the natural thing, and on `permanent=true` this route would `rmtree`
     it with no trash and no undo. The importer refuses the mirror image of the
     same guess - it will not merge into a directory "they may have put there
-    themselves" - so without this the two halves of one PR contradict each other.
+    themselves" - so without this the two halves contradict each other.
 
     Deliberately **not** keyed on `provenance`: that is a fact about the model's
     *content*, one value shared by every copy of it, while the risk is per
@@ -9721,7 +9679,7 @@ def test_delete_refuses_a_copy_in_a_folder_that_is_not_the_owners(
 def test_delete_takes_a_leftover_out_of_the_folder_we_download_into(
     shelf_env, fake_trash, tmp_path, monkeypatch
 ):
-    """The other side of that line, and the reason #927 declared these rows.
+    """The other side of that line, and the reason these rows are declared.
 
     PixlStash's download folder is `foreign` exactly as the HuggingFace cache
     is, so the kind cannot separate them and the path does. What protects the
@@ -11263,7 +11221,7 @@ def test_merge_refuses_every_share_token(shelf_env, two_copies, fake_trash):
 def test_a_set_with_a_template_head_is_offered_the_rest_and_can_answer_it(
     shelf_env, monkeypatch
 ):
-    """#1999 §3 through the routes: the offer is served, its on-shelf model is
+    """Through the routes: the offer is served, its on-shelf model is
     added by the members route, and a file off the shelf is kept out by the
     declines route under the key the offer gave it."""
     monkeypatch.setattr(

@@ -240,11 +240,11 @@ def test_the_location_guard_is_released_before_the_restore_swap(server, monkeypa
 
     Windows refuses to replace a file the process holds an open handle on
     (WinError 5), so the guard retained for POSIX lock-lifetime (the WAL
-    split-brain fix) must be released inside the swap's exclusive section,
+    split-brain guard) must be released inside the swap's exclusive section,
     strictly after ``engine.dispose()``. Linux performs that replace happily
-    with the fd open, which is exactly why this regression reached CI: no
-    Linux test could fail on it. This pins the invariant Linux CAN see -
-    at the moment of the replace, the guard is gone.
+    with the fd open, so no Linux test fails on the replace itself. This pins
+    the invariant Linux CAN see - at the moment of the replace, the guard is
+    gone.
     """
     _create_file(server, "guarded.jpg")
     _add_picture(server, filename="guarded.jpg", description="x")
@@ -288,8 +288,8 @@ def test_full_restore_leaves_live_db_owner_only_under_group_umask(server):
 
     ``VACUUM INTO`` creates the snapshot at 0644 & ~umask and ``copy2``
     preserves that mode, so under the Debian/Ubuntu umask 002 the swapped-in
-    ``vault.db`` used to come out group-writable - and the trusted-location
-    check then refused it at the next startup, bricking the library.
+    ``vault.db`` could come out group-writable - and the trusted-location
+    check would then refuse it at the next startup, bricking the library.
     """
     _create_file(server, "perm.jpg")
     pic = _add_picture(server, filename="perm.jpg")
@@ -437,11 +437,11 @@ def test_restore_resource_invalid_type_raises(server):
 def test_restore_resource_picture_replaces_dependents(server):
     """Picture restore must mirror the snapshot's Face/Tag/PSM/PPM state.
 
-    This is the H3 fix: previously, ``_upsert_rows`` merged Faces / picture
-    set members / picture project members by snapshot PK. That left live-only
-    rows in place (so the restored picture wasn't really reverted) and could
-    overwrite an unrelated live Face that reused the same surrogate id. The
-    fix is delete-then-insert keyed by ``picture_id``.
+    Merging Faces / picture set members / picture project members by snapshot
+    PK would leave live-only rows in place (so the restored picture wouldn't
+    really be reverted) and could overwrite an unrelated live Face that reused
+    the same surrogate id, so these are delete-then-insert keyed by
+    ``picture_id``.
     """
     _create_file(server, "h3_pic.jpg")
     other = _add_picture(server, filename="h3_other.jpg")
@@ -1048,7 +1048,7 @@ def test_restore_batch_skips_project_entries(server):
 
 
 def test_compare_hashes_backfills_null_live_and_returns_identical(server):
-    """The snapshot-side hash now comes from the manifest's precomputed map
+    """The snapshot-side hash comes from the manifest's precomputed map
     (so an interactive compare never decompresses the archive). The live side
     may still be NULL on pre-migration rows; ``compare_hashes`` must compute
     and persist the live hash, then report the picture identical because the
@@ -1517,8 +1517,9 @@ def test_full_restore_preserves_newer_snapshots_in_index(server):
     target was taken - and because ``VACUUM INTO`` copies the live DB *before*
     a snapshot records its own row, an old snapshot's file doesn't even list
     itself. Without the post-swap reconciliation the whole list would
-    disappear, stranding the user with no way to roll forward. The fix
-    re-inserts every captured snapshot whose file still exists on disk.
+    disappear, stranding the user with no way to roll forward. The
+    reconciliation re-inserts every captured snapshot whose file still exists
+    on disk.
     """
     _create_file(server, "rollfwd.jpg")
     pic = _add_picture(server, filename="rollfwd.jpg", description="state_a")
@@ -1929,7 +1930,7 @@ def test_snapshot_is_compressed_on_disk(server):
 
 
 def test_full_restore_keeps_embeddings_no_regen(server):
-    """The expensive blobs (image embedding + scores) now ride inside the
+    """The expensive blobs (image embedding + scores) ride inside the
     snapshot, so restoring brings them back instead of NULL-resetting them
     for the WorkPlanner to regenerate.
     """
@@ -2098,8 +2099,7 @@ def test_preview_full_classifies_recreate_and_delete(server):
 
 def test_preview_full_detects_set_membership_change(server):
     """A picture whose only post-snapshot change is set membership must still
-    surface as changed - membership is folded into metadata_hash, so the
-    preview no longer reports it as unchanged."""
+    surface as changed - membership is folded into metadata_hash."""
     _create_file(server, "memb.jpg")
     pic = _add_picture(server, filename="memb.jpg", description="same")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
@@ -2163,12 +2163,10 @@ def test_full_restore_keeps_live_reference_picture_in_ledger(server):
     disk must survive restore even when its path is in deleted_file_log from an
     earlier scrapheap purge.
 
-    Regression for ~145 reference-folder rows vanishing on a
-    snapshot->immediate-restore: their absolute paths were in the ledger (a
-    protected-folder purge logged the path but kept the file), the pictures were
-    later re-indexed and alive again, and restore's permanent-deletion
-    cross-check dropped them by path_sha even though the user was actively using
-    them. The live-active cross-check must keep them."""
+    Such paths are in the ledger because a protected-folder purge logged the
+    path but kept the file, and the pictures were later re-indexed and alive
+    again. Restore's permanent-deletion cross-check must not drop them by
+    path_sha: the live-active cross-check keeps them."""
     from pixlstash.db_models.reference_folder import (
         ReferenceFolder,
         ReferenceFolderStatus,
@@ -2380,7 +2378,7 @@ def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
 def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
     """The other direction: a ``file_removed=True`` ledger entry (genuine purge,
     file gone) must STILL be dropped on restore and never resurrected - the
-    never-resurrect guarantee holds after the meaning split."""
+    never-resurrect guarantee holds."""
     _create_file(server, "gone.jpg")
     pic = _add_picture(server, filename="gone.jpg", description="doomed")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
@@ -2405,7 +2403,7 @@ def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
 
 
 def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
-    """Invariant (Change 2 safety): an explicit reference-folder re-import only
+    """Invariant: an explicit reference-folder re-import only
     resurfaces files PRESENT on disk. A genuinely-gone file (absent on disk,
     logged file_removed=True) must NOT be re-imported by the fresh-folder scan,
     its ledger entry must survive, and a restore must still drop it and never
@@ -2692,7 +2690,7 @@ def test_reference_folder_emptied_then_last_scanned_reset_no_override(server):
 
 
 def test_full_restore_ledger_rescue_drops_when_content_differs(server):
-    """CSO purge-evasion: a ledger-matched snapshot row must NOT be rescued when
+    """Purge evasion: a ledger-matched snapshot row must NOT be rescued when
     DIFFERENT content now sits at the same path.
 
     Content C1 was purged (its path AND pixel_sha are in the ledger); different
@@ -2954,10 +2952,10 @@ def test_compare_hashes_upgrades_intermediate_schema_snapshot(server):
     """A snapshot that *has* ``metadata_hash`` but predates ``tags_file`` must
     still be alembic-upgraded before its hashes are read.
 
-    The old code probed for ``metadata_hash`` alone, concluded the file was
-    current, and then blew up with ``no such column: picture.tags_file`` on the
-    ORM entity load - swallowing the error and reporting every picture as
-    changed. An unmodified picture must come back as *identical*.
+    Probing for ``metadata_hash`` alone would conclude the file was current and
+    then fail with ``no such column: picture.tags_file`` on the ORM entity load,
+    reporting every picture as changed. An unmodified picture must come back as
+    *identical*.
     """
     _create_file(server, "intermediate.jpg")
     pic = _add_picture(server, filename="intermediate.jpg", description="same")
@@ -3039,9 +3037,9 @@ def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(serve
     """``backfill_all_snapshot_hashes`` must repair an intermediate-schema
     snapshot rather than failing on it.
 
-    The old single-column probe took the "column already exists" branch and ran
-    the hash fill straight against the un-upgraded file, which raised on the
-    ORM load and left the snapshot permanently broken.
+    A single-column probe would take the "column already exists" branch and run
+    the hash fill straight against the un-upgraded file, which raises on the
+    ORM load and leaves the snapshot permanently broken.
     """
     from sqlmodel import create_engine
 
@@ -3096,8 +3094,8 @@ def _make_legacy_snapshot(server, filename: str):
 def test_snapshot_engine_is_configured_like_the_vault_engine(server):
     """A snapshot engine is not a bare ``create_engine``.
 
-    Before #709 these nine engines ran on SQLite's defaults: a 5 s busy
-    timeout, a 2 MiB page cache and no FK enforcement.
+    A bare engine runs on SQLite's defaults: a 5 s busy timeout, a 2 MiB page
+    cache and no FK enforcement.
     """
     from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, SQLITE_CACHE_SIZE_KIB
     from pixlstash.services.restore.schema_upgrade import snapshot_engine
@@ -3148,9 +3146,8 @@ def test_full_restore_rebuilds_the_live_engine_with_the_startup_configuration(
 ):
     """The engine rebuilt after the DB swap is configured like the startup one.
 
-    This is issue #651 itself: ``_swap_database`` disposes the live engine and
-    builds a replacement, and for a while that replacement was written out by
-    hand, so the two definitions drifted. Settings are read back from a real
+    ``_swap_database`` disposes the live engine and builds a replacement, which
+    must not drift from the startup definition. Settings are read back from a real
     pooled connection of the rebuilt engine, because they are per-connection
     state applied by ``connect_args`` and the ``connect`` listener; asserting
     that some constructor was called would prove nothing.
@@ -3369,8 +3366,8 @@ def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
     violate constraints (an orphaned tag, a dangling parent reference). The
     hash backfill only ever updates ``picture.metadata_hash``, which is
     neither a child key nor a parent key, so SQLite runs no FK check and the
-    write must still succeed. This is the assertion that made it safe to leave
-    FK enforcement ON for snapshot engines rather than silently off (#709).
+    write must still succeed. This is what makes it safe to leave FK
+    enforcement ON for snapshot engines rather than silently off.
 
     Both directions are asserted. The positive one alone would also pass with
     ``foreign_keys=OFF``, which would leave the setting pinned by nothing but a
@@ -3487,7 +3484,7 @@ def _empty_scrapheap_via_http(server):
 def test_full_restore_does_not_hard_delete_file_readded_after_snapshot(server):
     """A scrapheap row in the snapshot must not delete a live re-added file.
 
-    Reproduces the live-instance data loss: a picture is soft-deleted at
+    A picture is soft-deleted at
     ``shared.jpg`` before the snapshot; after the snapshot the same path is
     re-used by a NEW active picture (content added after the snapshot, and NOT
     recorded in deleted_file_log). Restoring the snapshot must not resurrect the
@@ -3542,7 +3539,7 @@ def test_full_restore_does_not_hard_delete_file_readded_after_snapshot(server):
 
 
 def test_full_restore_preserves_genuine_scrapheap_picture(server):
-    """The fix must not over-drop: a real scrapheap entry still round-trips.
+    """The guard must not over-drop: a real scrapheap entry still round-trips.
 
     A picture soft-deleted before the snapshot whose file is NOT re-used by any
     live active picture must still be resurrected by restore (so it remains
@@ -3657,8 +3654,7 @@ def test_full_restore_rearms_the_scrapheap_retention_clock(server):
     snapshot older than the window that deadline is already expired, so the first
     sweep after the restore would permanently destroy the very scrapheap the user
     just restored - and write ``file_removed=True``, so a second restore could
-    not bring it back. Same failure family as the logged restore data-loss
-    incident.
+    not bring it back.
     """
     from pixlstash.services import scrapheap_service
 
@@ -3748,7 +3744,7 @@ def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
 
 
 def test_restore_can_resurrect_a_picture_whose_file_removal_failed(server):
-    """F5 - a ledger corrected to file_removed=False must NOT block restore.
+    """A ledger corrected to file_removed=False must NOT block restore.
 
     ``file_removed=True`` is written before the file is touched, so a failed
     ``os.remove`` would otherwise leave the ledger permanently asserting a
@@ -3785,7 +3781,7 @@ def test_restore_can_resurrect_a_picture_whose_file_removal_failed(server):
 
 
 def test_restore_still_refuses_a_genuinely_purged_picture(server):
-    """The other direction: the F5 correction must not weaken the real guard."""
+    """The other direction: the ledger correction must not weaken the real guard."""
     _create_file(server, "genuinely_gone.jpg")
     pic = _add_picture(server, filename="genuinely_gone.jpg")
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
@@ -3817,11 +3813,11 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
 ):
     """The consequence the write-ownership bound protects.
 
-    Reviewer's variant 2: picture A's content was genuinely destroyed at path P
+    Picture A's content was genuinely destroyed at path P
     and logged file_removed=True. Different content is later written at P and
     purged with a failing os.remove. If that second purge were allowed to
     downgrade A's row to False, restore would resurrect A - bound to the WRONG
-    file. The purge now only corrects rows it wrote, so A's row stays True and
+    file. The purge only corrects rows it wrote, so A's row stays True and
     restore keeps refusing.
     """
     _create_file(server, "collision.jpg")
@@ -3865,12 +3861,11 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
 
 def test_restore_resource_rebuilds_entity_project_membership(server):
     """A restored parent character comes back with its project membership rows,
-    not just its scalar ``project_id`` (issue #125).
+    not just its scalar ``project_id``.
 
     The join table is the read model: a character restored with the FK alone
     would be silently invisible to ``GET /characters?project_id=…`` and refused
-    by a project-scoped share token, which is the same "restored but unusable"
-    failure class as the 2026-07-22 snapshot-restore incident.
+    by a project-scoped share token: "restored but unusable".
     """
     from pixlstash.db_models import CharacterProjectMember, Project
     from pixlstash.services.project_membership_service import set_character_projects
@@ -4624,7 +4619,7 @@ def test_full_restore_neither_reinstates_nor_clears_the_ai_toolkit_python(
     never touches. So after a restore the trainer still reads the value saved
     last, not the snapshot's, and the restore neither reinstates an old
     interpreter nor clears the current one. If the config ever moves into the
-    vault, the swap would carry it and this test fails (review F1).
+    vault, the swap would carry it and this test fails.
     """
     from fastapi.testclient import TestClient
 

@@ -1,4 +1,4 @@
-"""Text read out of pictures (#1197): matching, search, the text routes, the task."""
+"""Text read out of pictures: matching, search, the text routes, the task."""
 
 import json
 import tempfile
@@ -554,10 +554,10 @@ def test_the_finder_probe_reads_the_partial_index(server):
 def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pictures):
     """Reading is neither queued behind captioning nor switched off with it.
 
-    Both together stalled the sweep for good: the planner holds a finder until
-    every finder it depends on reports no work left, so `DESCRIPTION` blocked
-    reading while any picture was uncaptioned, and switching captioning off to
-    clear that closed the guard instead.
+    Either would stall the sweep for good: the planner holds a finder until
+    every finder it depends on reports no work left, so `DESCRIPTION` would
+    block reading while any picture was uncaptioned, and switching captioning
+    off to clear that would close the guard instead.
     """
 
     assert (

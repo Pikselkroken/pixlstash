@@ -2,12 +2,11 @@
 
 It is a row id in one vault's character table, so a per-user copy silently names
 a different person after a library switch: character 7 in Family Photos and
-character 7 in Client Work are not the same face. This is the one setting from
-the §5 candidate list that moved to the vault (decided 2026-08-02); hidden tags,
-the tag filter and the penalised-tag weights stay in the hub as user preferences.
+character 7 in Client Work are not the same face. Hidden tags, the tag filter
+and the penalised-tag weights stay in the hub as user preferences.
 
-The API surface is unchanged, so the tests assert the seam is invisible from
-outside: one flat config object, two databases behind it.
+The tests assert the seam is invisible from outside: one flat config object,
+two databases behind it.
 """
 
 import json
@@ -146,11 +145,10 @@ class TestTheApiSeamIsInvisible:
 
 class TestItFollowsTheLibrary:
     def test_each_library_keeps_its_own_selection(self, server, tmp_path):
-        """The bug this move exists to prevent, end to end.
+        """Two libraries, two selections, end to end.
 
-        Two libraries, two selections. Before the move both would have read the
-        same per-user number, so switching would have sorted against whoever
-        happened to hold that id in the new library.
+        A per-user number would make switching sort against whoever happened to
+        hold that id in the new library.
         """
         client = _owner(server)
         original = server.library_registry.active_library()

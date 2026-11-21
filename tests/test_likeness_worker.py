@@ -199,7 +199,7 @@ def test_likeness_worker():
 
 
 def test_write_blob_updates_skips_hard_deleted_pictures():
-    """Regression: a likeness batch containing a picture hard-deleted mid-flight
+    """A likeness batch containing a picture hard-deleted mid-flight
     (e.g. scrapheap 'delete forever' racing a queued LikenessParametersTask)
     must skip the missing id and still persist the survivors, not raise
     StaleDataError and lose the whole batch."""

@@ -1,9 +1,8 @@
 """Every runtime data file under ``pixlstash/data`` must ship in the wheel.
 
 A data folder missing from ``[tool.setuptools.package-data]`` works from a
-source checkout and fails only once installed, as the training presets did on
-the Windows desktop build (issue #2630: ``FileNotFoundError`` on
-``data/training-presets`` when checking AI-toolkit). This test catches that
+source checkout and fails only once installed (``FileNotFoundError``). This
+test catches that
 drift without building a wheel, by resolving the declared patterns the way
 setuptools does (glob relative to the package directory) and comparing them
 with the files git tracks there. ``MANIFEST.in`` is checked the same way for

@@ -1,4 +1,4 @@
-"""Convert to Inpainting workflow: the Crop & Stitch graph transform (#2446)."""
+"""Convert to Inpainting workflow: the Crop & Stitch graph transform."""
 
 from __future__ import annotations
 

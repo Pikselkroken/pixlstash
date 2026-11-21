@@ -1,7 +1,7 @@
 """The model-shelf fixture generator produces files the shelf's readers accept.
 
 This is the acceptance test for ``scripts/generate_model_shelf_fixtures.py``.
-The fixtures exist so B4's scanner and the F1+ shelf UI are built against
+The fixtures exist so the scanner and the shelf UI are built against
 realistic data instead of invented data, and that is only true while the two
 readers that will consume them -
 :mod:`pixlstash.utils.adapter_header` and :mod:`pixlstash.utils.aitoolkit_run` -
@@ -73,7 +73,7 @@ class TestAdapterFolder:
             assert info.param_count > 0, path.name
 
     def test_marker_free_files_read_as_unknown_never_checkpoint(self, tree):
-        """`unknown` must never be stored or shown as checkpoint (plan §6.5).
+        """`unknown` must never be stored or shown as checkpoint.
 
         The generator writes a few marker-free adapters deliberately. They are
         small, so the parameter-count rule must leave them unknown rather than
@@ -98,11 +98,10 @@ class TestAdapterFolder:
     def test_both_the_metadata_rich_and_the_bare_case_are_present(self, tree):
         """All three provenances, with the informative one in the majority.
 
-        Measured 2026-08-09 over a real 91-file folder: 57 carried trainer
-        ``ss_*`` metadata, 22 carried only ``format``, 9 carried no block at
-        all. The generator used to have that backwards, which made the shelf's
-        "you will have to name this yourself" path look like the common case
-        when it is the minority one. The direction is pinned here; the exact
+        In a real folder most adapters carry trainer ``ss_*`` metadata, fewer
+        carry only ``format``, and few carry no block at all, so the shelf's
+        "you will have to name this yourself" path is the minority case. The
+        direction is pinned here; the exact
         ratio is not, because it moves with how much of a library was
         downloaded rather than trained.
         """
@@ -146,12 +145,11 @@ class TestAdapterFolder:
     def test_no_two_adapters_are_the_same_file(self, tree):
         """Every adapter is its own file, checked on the bytes that were written.
 
-        This is the regression: real adapters cluster hard on shape, so the
-        generator repeats shapes on purpose, and a sparse payload is all zeroes.
-        That made a file's SHA-256 a pure function of its header, and 1,800
-        fixtures collapsed onto 478 distinct files - the shelf then showed 478
-        rows and one model carried 202 locations. The payload slug is what fixes
-        it, so this hashes the header *and* the slug behind it, straight off
+        Real adapters cluster hard on shape, so the generator repeats shapes on
+        purpose, and a sparse payload is all zeroes - which would make a file's
+        SHA-256 a pure function of its header and collapse fixtures onto
+        duplicate files. The payload slug is what prevents it, so this hashes
+        the header *and* the slug behind it, straight off
         disk. Everything after them is a hole the header itself measures, which
         is why reading the whole 4 GB file would prove nothing extra.
 

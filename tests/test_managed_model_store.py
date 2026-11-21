@@ -1,4 +1,4 @@
-"""The one model folder PixlStash owns (shelf plan B7).
+"""The one model folder PixlStash owns.
 
 Exactly one ``kind='managed'`` folder always exists, so a fresh install has a
 place to drop a file into and a place to import a run into. It is created on
@@ -59,7 +59,7 @@ def test_first_run_creates_exactly_one_managed_folder(hub, tmp_path):
 
 def test_the_store_lives_beside_the_config_not_at_a_fixed_platform_path(hub, tmp_path):
     """The hub already follows ``--server-config`` rather than sitting at
-    ``user_data_dir`` (issue #168), and the reason is stronger for a directory
+    ``user_data_dir``, and the reason is stronger for a directory
     files are copied into and unlinked from: a fixed path would have every test
     run writing into the owner's real store."""
     config_dir = str(tmp_path / "elsewhere")

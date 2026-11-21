@@ -1,6 +1,6 @@
-"""Reviewer checklist (throughput plan §8) and stage-boundary regressions.
+"""Pipeline invariants and stage-boundary behaviour.
 
-Mechanical checks that the row-granular pipeline kept its invariants: one GPU
+Mechanical checks that the row-granular pipeline keeps its invariants: one GPU
 worker, every CUDA ORT session bounded by the budget, the two maintenance
 finders still gated on a global barrier - plus what happens at a stage boundary
 when the upstream task raises or its rows have not landed yet. No Server, no
@@ -107,13 +107,9 @@ def test_every_cuda_ort_session_site_is_built_from_the_budget():
     ``VramBudget.ort_cuda_provider_options`` (which `test_vram_batch_budget`
     proves carries ``gpu_mem_limit`` whenever a budget is set).
 
-    WD14 used to be three sites here - a CPU one, an OpenVINO one and a CUDA
-    one - written as an inline provider chain that knew about OpenVINO, CUDA
-    and ROCm and therefore fell through to the CPU on a host advertising
-    CoreML. It is now one site whose providers come from
-    ``accelerator.onnx_execution_providers``. The invariant did not move, but
-    the evidence for it did: the budget is no longer visible in the six lines
-    around the session, so it is checked where it now lives - the ladder is
+    WD14 is one site whose providers come from
+    ``accelerator.onnx_execution_providers``. The budget is not visible in the
+    lines around the session, so it is checked where it lives - the ladder is
     what picks the providers, it is handed the budget's CUDA options, and it
     puts them on the CUDA provider rather than losing them in the indirection.
     """
@@ -181,12 +177,13 @@ def test_every_cuda_ort_session_site_is_built_from_the_budget():
 
 
 def test_the_wd14_session_says_so_when_it_did_not_get_the_accelerator(monkeypatch):
-    """#1206 item 3b: only the session knows which provider actually loaded.
+    """Only the session knows which provider actually loaded.
 
     ``ort.get_available_providers()`` reports what the onnxruntime build
     supports. A provider whose shared libraries are missing - the CUDA one
     needs ``libcublasLt`` - is listed there, is requested, and is then dropped
-    without an error, so the old check passed while every tag ran on the CPU.
+    without an error, so checking that list passes while every tag runs on the
+    CPU.
     """
     from pixlstash.tagger_plugins import wd14 as wd14_module
 
@@ -377,10 +374,9 @@ def test_a_finished_face_batch_is_not_re_selected_while_its_rows_are_in_flight(
 def test_a_full_card_is_never_recorded_as_no_faces():
     """An ORT allocation failure must propagate to the runner's OOM retry.
 
-    Swallowed, it returned "no faces" for the whole batch, and inside
+    Swallowed, it would return "no faces" for the whole batch, and inside
     FaceExtractionTask that is a sentinel row per picture - permanent, because
-    sentinels are never re-scanned. Seen 2026-08-27 with another process
-    holding the card: 70 pictures in four batches, all reported faceless.
+    sentinels are never re-scanned.
     """
     import numpy as np
 
@@ -412,7 +408,7 @@ def test_a_full_card_is_never_recorded_as_no_faces():
 
 
 def test_a_non_memory_detector_failure_still_degrades_to_no_faces():
-    """The swallow stays for what it was written for: a genuinely bad image."""
+    """The swallow still covers a genuinely bad image."""
     import numpy as np
 
     from pixlstash.tasks.face_extraction_task import FaceExtractionTask
@@ -535,8 +531,8 @@ def test_a_non_memory_detector_failure_on_a_video_degrades_to_no_faces(
 
     ``detect_faces_in_images`` splits detector failures in two: a VRAM OOM is
     re-raised so the runner retries it, anything else is a bad frame and
-    degrades to "no faces". The video branch had neither half, so a decoder
-    error on ONE clip escaped ``_extract_features`` and cost the whole chunk -
+    degrades to "no faces". The video branch needs both halves, or a decoder
+    error on ONE clip escapes ``_extract_features`` and costs the whole chunk -
     up to 100 pictures - their Face rows, on every sweep, for ever.
     """
     task, pic = _clip_with_failing_runner(
@@ -636,8 +632,8 @@ def test_an_animated_gif_takes_the_video_face_path(tmp_path):
 def test_face_export_crops_only_faces_measured_on_frame_0(tmp_path):
     """Export crops from the decoded first frame, so a later frame's box is skipped.
 
-    Before #1487 every GIF face was on frame 0; now an animated GIF also has
-    faces on later frames, whose boxes would crop the wrong region.
+    An animated GIF can have faces on later frames, whose boxes would crop the
+    wrong region.
     """
     import zipfile
 
@@ -718,12 +714,12 @@ class _FailingTagEngine:
 
 
 def test_a_scrapheaped_picture_leaves_the_tag_window_and_the_tag_count(tmp_path):
-    """#1206 item 3: the count and the selection disagreed about the scrapheap.
+    """The count and the selection agree about the scrapheap.
 
-    ``TagTask.count_missing_tags`` excluded soft-deleted pictures; the query
-    the planner acts on did not. So "awaiting tagging" could read zero while
-    the GPU went on tagging pictures the owner had deleted. Both sides now come
-    from ``taggable_picture_clauses``, so they cannot drift apart again.
+    If ``TagTask.count_missing_tags`` and the query the planner acts on
+    disagreed, "awaiting tagging" could read zero while the GPU went on tagging
+    pictures the owner had deleted. Both sides come from
+    ``taggable_picture_clauses``, so they cannot drift apart.
     """
     with Vault(image_root=str(tmp_path)) as vault:
         live, scrapheaped = _seed_pending(vault, tmp_path, ["live.png", "gone.png"])
@@ -797,7 +793,7 @@ def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
     payload is built and the pending sentinel survives, so the finder claims
     it again on every sweep.
 
-    The fix must hold it out of the finders, never retire it. Deleting the
+    It must be held out of the finders, never retired. Deleting the
     sentinel would be permanent - only import and an explicit retag ever write
     one - and nothing would put it back: ``MissingFilePurgeTask`` deliberately
     skips a picture whose location is unreachable, and the library scan
@@ -883,7 +879,7 @@ def test_an_unreachable_picture_is_held_out_of_the_window_not_retired(tmp_path):
 def test_the_tag_finder_captures_the_reset_generation_before_its_read(
     tmp_path, monkeypatch
 ):
-    """#1361: a retag landing just after the finder's read must make the task
+    """A retag landing just after the finder's read must make the task
     older than the reset. Captured after the read, the task would count as
     newer and its output would overwrite the retag."""
     with Vault(image_root=str(tmp_path)) as vault:

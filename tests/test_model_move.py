@@ -1,11 +1,11 @@
-"""The move invariant (shelf plan B7), and what a crash in the middle of it leaves.
+"""The move invariant, and what a crash in the middle of it leaves.
 
 **copy → verify by SHA-256 → repoint the row and commit → then unlink.** Every
 other order has a window whose residue is a ``model_file`` row naming a path
 where no file is, and the shelf's whole tombstone design rests on a row that
 names a file always naming a file that exists.
 
-The two crash-window tests here are the acceptance bar (plan §6 item 3). They do
+The two crash-window tests here are the acceptance bar. They do
 not assert the happy path and then claim a guarantee: each one **interrupts** the
 mover inside a specific window and then reads the disk and the hub to see what
 survived. The interruption is raised as a ``BaseException`` subclass on purpose -
@@ -639,7 +639,7 @@ def test_space_is_checked_before_anything_is_written(
 
 
 def test_a_relpath_that_escapes_its_folder_is_refused_not_unlinked(hub, tmp_path):
-    """Containment (#776) on the delete/write path. ``model_file.relpath`` is a
+    """Containment on the delete/write path. ``model_file.relpath`` is a
     database value: a faulty scan, a restored hub or a bug can put anything in
     it, and this module is the one that unlinks what it names."""
     source_dir = tmp_path / "loras"
@@ -680,8 +680,8 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
     """The plan-time check is not enough, on either path.
 
     ``plan`` runs inside the POST and the write runs minutes later on the worker
-    thread. Before the execution-time re-check this destroyed the file that
-    arrived in between and reported ``moved``. Reproduced deterministically -
+    thread. Without the execution-time re-check this would destroy a file that
+    arrived in between and report ``moved``. Entered deterministically -
     write the destination between ``plan`` and ``execute`` - rather than by
     threading, because the window is the whole gap and needs no timing to enter.
 
@@ -719,13 +719,13 @@ def test_a_destination_taken_after_planning_is_refused_not_clobbered(
 def test_a_destination_created_at_publication_time_is_refused_not_clobbered(
     two_folders, monkeypatch, force_copy
 ):
-    """The window the execution-time check cannot close (#1012).
+    """The window the execution-time check cannot close.
 
     The check above runs *before* a copy and digest that takes minutes on a real
     checkpoint; publication happens after it. A file written into the destination
-    name inside that gap was silently replaced by ``os.replace`` (copy path) or
-    ``os.rename`` (rename path), and the move reported ``moved`` and removed the
-    source. Only the publication itself can refuse it, which is what
+    name inside that gap would be silently replaced by ``os.replace`` (copy path)
+    or ``os.rename`` (rename path). Only the publication itself can refuse it,
+    which is what
     ``publish_no_clobber`` does.
 
     Entered deterministically at the instant that matters - the destination is
@@ -775,7 +775,7 @@ def test_a_destination_created_at_publication_time_is_refused_not_clobbered(
 def test_a_publication_that_cannot_drop_its_source_leaves_the_name_free(
     two_folders, monkeypatch, force_copy
 ):
-    """The half-state the old single ``os.rename`` could not produce.
+    """The half-state a claim-then-drop publication can leave.
 
     Publication is a claim and then a drop, and on Windows the drop is what
     fails: a file another process holds open cannot be unlinked, and that is
@@ -830,7 +830,7 @@ def test_a_move_still_lands_where_hard_links_are_refused(
     """exFAT, a share, or ``fs.protected_hardlinks`` over a file of another uid.
 
     ``os.rename`` never needed a link - only write on the two directories - so
-    refusing to move at all would be this fix breaking folders that worked. The
+    refusing to move at all would break folders a rename handles fine. The
     reservation is the second attempt and is no-clobber for the same reason:
     ``O_CREAT|O_EXCL`` either creates the name or raises.
     """
@@ -866,7 +866,7 @@ def test_the_reservation_refuses_a_taken_name_too(two_folders, monkeypatch):
     """The fallback is only worth having if it is no-clobber as well.
 
     Without this, a filesystem that cannot hard-link would quietly get the
-    check-then-replace behaviour #1012 is about.
+    check-then-replace behaviour.
     """
 
     def no_hard_links(*args, **kwargs):
@@ -898,9 +898,9 @@ def test_a_destination_row_that_appears_at_commit_time_leaves_no_dangling_row(
     ``SHELF_IO_LOCK``, so a row can appear at the destination key after the
     execution-time check and before the commit. ``_repoint``'s UPDATE then
     violates ``UNIQUE(model_folder_id, relpath)``, and an ``IntegrityError`` is
-    not an ``OSError``: it used to escape the per-file handler entirely, so the
-    source was never unlinked and - on the rename path - never put back either,
-    leaving a committed row naming content it does not describe.
+    not an ``OSError``: escaping the per-file handler would leave the source
+    never unlinked and - on the rename path - never put back either, with a
+    committed row naming content it does not describe.
 
     Simulated by inserting the racing row from inside ``_repoint``, which is the
     exact instant the race has to land on.
@@ -957,13 +957,12 @@ def test_forgetting_the_source_folder_mid_move_never_unlinks_the_source(
 
     ``DELETE /model-folders/{id}`` drops the folder and every ``model_file`` row
     in it. If that lands after the copy and before ``_repoint``, the UPDATE
-    matches nothing - and SQL calls that success, so the mover used to unlink the
-    source and report ``moved`` with the destination bytes registered nowhere at
-    all (#1017). That is the dangling residue inverted: a file no row names,
-    after the only other copy was deleted.
+    matches nothing - and SQL calls that success, so a mover trusting it would
+    unlink the source and report ``moved`` with the destination bytes registered
+    nowhere at all: a file no row names, after the only other copy was deleted.
 
     Simulated by running the forget from inside ``_repoint``, which is the exact
-    instant it has to land on. The route cannot reach here any more - it takes
+    instant it has to land on. The route cannot reach here - it takes
     ``SHELF_IO_LOCK`` - so this pins the mover's own half of the guard, which is
     what has to hold for a delete, a restored hub or a bug that gets there by
     another door.
@@ -1011,7 +1010,7 @@ def test_forgetting_the_source_folder_mid_move_never_unlinks_the_source(
 def test_a_duplicate_fold_during_the_move_does_not_fail_it(
     two_folders, hub, monkeypatch, force_copy
 ):
-    """The over-blocking direction of the #1017 guard, and it is the live one.
+    """The over-blocking direction of the commit guard, and it is the live one.
 
     ``CheckpointHashTask`` folds two rows that hash the same by rewriting
     ``model_file.model_id`` to the survivor, on the task runner and deliberately
@@ -1019,11 +1018,9 @@ def test_a_duplicate_fold_during_the_move_does_not_fail_it(
     is still there and still names this file - only its model was consolidated -
     so the move must commit.
 
-    An earlier revision of the guard matched on ``model_id`` as well as the
-    source key, which turned every one of these into a failed move with a
-    finished copy thrown away. The key is ``PRIMARY KEY (model_folder_id,
-    relpath)``: it already matches at most one row, so the extra predicate could
-    only ever miss.
+    The guard matches on the source key alone, never ``model_id`` as well. The
+    key is ``PRIMARY KEY (model_folder_id, relpath)``: it already matches at
+    most one row, so an extra predicate could only ever miss.
     """
     if force_copy:
         monkeypatch.setattr(mover_module, "same_device", lambda *_: False)
@@ -1068,11 +1065,11 @@ def test_a_duplicate_fold_during_the_move_does_not_fail_it(
 def test_forgetting_the_source_folder_before_the_move_refuses_at_plan_time(
     two_folders, hub, cross_device
 ):
-    """The other ordering, and the one that was always safe.
+    """The other ordering: forget before the move.
 
     Forget first and there is no folder to plan from, so the batch is refused
-    before the first byte rather than half-executed. Pinned because the fix for
-    the interleaved ordering must not be read as the only thing standing between
+    before the first byte rather than half-executed. Pinned because the guard
+    for the interleaved ordering must not be read as the only thing standing between
     a forgotten folder and a lost file.
     """
     with hub.transaction() as conn:
@@ -1189,14 +1186,12 @@ def test_a_registered_destination_key_with_no_file_is_refused_at_plan_time(
 ):
     """A tombstone at the destination key refuses the batch before the first byte.
 
-    The `same-model` case is the one that was wrong: the check used to allow an
-    existing row whose ``model_id`` matched the file being moved, on the reading
-    that a row about the same content is harmless. ``model_file`` is keyed by
-    ``(model_folder_id, relpath)``, so it is not - ``_repoint``'s UPDATE walks
-    into ``UNIQUE`` at commit time, minutes in, instead of a clean 4xx before
-    anything is written. Widened to refuse any existing row, and pinned here in
-    both shapes because nothing else exercises this branch: deleting it left the
-    whole suite green.
+    The `same-model` case matters: an existing row whose ``model_id`` matches
+    the file being moved looks harmless, but ``model_file`` is keyed by
+    ``(model_folder_id, relpath)``, so ``_repoint``'s UPDATE would walk into
+    ``UNIQUE`` at commit time, minutes in, instead of a clean 4xx before
+    anything is written. Any existing row is refused, pinned here in both
+    shapes because nothing else exercises this branch.
     """
     model_id = two_folders["model_id"]
     with hub.transaction() as conn:
@@ -1234,10 +1229,10 @@ def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
     """A mixed selection dropped onto a folder must do the obvious thing rather
     than error on the files that are already there - **and say so**.
 
-    Dropping them from the plan silently made ``STATUS_SKIPPED`` dead code and
-    left a client unable to reconcile the items it sent against the results it
-    got: three items in, two results out, no way to tell which one went missing
-    or why. ``total`` counts them too, so ``done == total`` still means finished.
+    Dropping them from the plan silently would leave a client unable to
+    reconcile the items it sent against the results it got: three items in, two
+    results out, no way to tell which one went missing or why. ``total`` counts
+    them too, so ``done == total`` still means finished.
     """
     mover = ModelMover(two_folders["hub"])
     plan = mover.plan(
@@ -1256,9 +1251,9 @@ def test_a_file_already_in_the_destination_is_reported_skipped_not_dropped(
 
 
 def test_a_file_at_the_root_moves_into_a_subfolder_of_its_own_folder(hub, tmp_path):
-    """The case #2204 was filed for: LoRAs at the root of a StabilityMatrix
-    ``Models`` folder dropped onto ``Models/Lora``. One registered folder, so the
-    old "already there" test - folder ids alone - skipped them and nothing moved.
+    """LoRAs at the root of a StabilityMatrix ``Models`` folder dropped onto
+    ``Models/Lora``. One registered folder, so an "already there" test on
+    folder ids alone would skip them and nothing would move.
 
     A rename, because it is one filesystem, and the row keeps its model: the
     sets and people hung off that model come along by construction.

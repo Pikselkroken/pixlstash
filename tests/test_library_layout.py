@@ -1,5 +1,5 @@
 """The library layout: where a picture belongs, whether it still does, and the
-engine that acts on the answer (v1.11 Phases 4a and 4b).
+engine that acts on the answer.
 
 The first half is pure functions, so every case is a dict of names and a folder
 path. The second half puts files on a disk and a session over them - still no
@@ -1078,9 +1078,9 @@ def test_a_rename_that_cannot_name_its_own_entity_is_refused_loudly(library):
     """No id, no rename. The exclusion is by primary key or it is nothing.
 
     Without an id the only thing left to tell this entity's row from a second
-    entity of the same name is the name itself - which is the comparison that
-    renamed the wrong person's folder. A caller that cannot say which row it is
-    renaming has a bug, and it must not degrade quietly back into that.
+    entity of the same name is the name itself, which can rename the wrong
+    person's folder. A caller that cannot say which row it is renaming has a
+    bug, and it must not degrade quietly into that.
     """
     session, root = library["session"], library["root"]
     with pytest.raises(ValueError, match="entity_id"):
@@ -2626,11 +2626,10 @@ def test_the_preview_draws_the_tree_the_layout_would_make(library):
 def test_the_tree_draws_the_library_root_when_pictures_are_in_it(library):
     """Three pictures sit at the root and two of them leave it, and that is a row.
 
-    It was left out until #1161 on the grounds that the root is what every path
-    is relative to. But with the unfiled sweep off the root is exactly where the
-    pictures the layout cannot place stay, and a tree drawing every folder
-    except that one read as "nothing was left behind". It is still not
-    synthetic: it is a row only while pictures are actually in it, which is the
+    With the unfiled sweep off the root is exactly where the pictures the
+    layout cannot place stay, and a tree drawing every folder except that one
+    would read as "nothing was left behind". It is not synthetic: it is a row
+    only while pictures are actually in it, which is the
     same rule every other row is in the list under.
     """
     session, root = library["session"], library["root"]
@@ -2647,8 +2646,8 @@ def test_the_tree_draws_the_library_root_when_pictures_are_in_it(library):
 
 
 def test_the_tree_is_never_capped(library):
-    """A tree of sixty rows and "...and 299 more folders" was the version before
-    this one, and the 299 were the date folders the owner wanted to check."""
+    """The tree is not cut off at sixty rows with "...and 299 more folders":
+    the hidden rows are the date folders the owner wants to check."""
     session, root = library["session"], library["root"]
     _drawable_library(library)
     for n in range(80):
@@ -2745,8 +2744,8 @@ class _StubVault:
 
 
 def test_the_run_reports_a_cursor_and_only_says_done_at_the_end(library):
-    """The mutation this covers: hardcoding ``done`` to True moved 200 pictures
-    and told the client the library was migrated. Nothing else in the suite
+    """The mutation this covers: hardcoding ``done`` to True would move 200
+    pictures and tell the client the library was migrated. Nothing else in the suite
     calls ``run_migration_pass`` on a library with pictures in it."""
     session, root = library["session"], library["root"]
     _settled(library)
@@ -2918,13 +2917,11 @@ def test_a_file_the_owner_moved_back_is_queued_for_review_not_only_repointed(lib
     out of the folder PixlStash filed it in, and this sweep noticed before the
     scan did.
 
-    The two subsystems used to disagree about whose move it was. The scan matches
-    a journal pair in one direction only, so it would find the reversed pair
-    unclaimed, call it the owner's and queue an ``ExternalMoveReview``; this
-    sweep read the same row backwards, called it ours, and repointed
-    ``file_path`` and nothing else. Whichever ran first decided - and once the
-    row is repointed the file is where the row says it is, so the next scan sees
-    no move to follow and the reconciliation is lost for good: the Moves screen
+    The two subsystems must agree about whose move it was. The scan matches a
+    journal pair in one direction only, so it finds the reversed pair
+    unclaimed, calls it the owner's and queues an ``ExternalMoveReview``. If
+    this sweep only repointed ``file_path``, the next scan would see no move to
+    follow and the reconciliation would be lost for good: the Moves screen
     never offers it, and the picture keeps memberships whose folder has stopped
     being true.
     """

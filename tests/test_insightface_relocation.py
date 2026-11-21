@@ -1,16 +1,13 @@
 """Relocating the InsightFace packs: the setting, the move, and what refuses it.
 
-The packs were listed on the shelf as ``movable='root_only'`` - "relocates as a
-whole" - before anything could actually relocate them (#902, then #906). Two
-things had to become true for that to stop being a claim:
+The packs are listed on the shelf as ``movable='root_only'`` - "relocates as a
+whole". Two things make that true:
 
 1. **The root is a setting, and one reader serves every caller.** ``FaceAnalysis``
    loads from ``<root>/models/<pack>``, PixlStash downloads ``auraface`` into the
    same place, and the shelf declares that folder. All three go through
    ``insightface_model_utils.insightface_root()``, so a relocation cannot move
-   the shelf's row while the packs keep loading from the old directory - which is
-   exactly the failure ``builtin_model_dir()``'s docstring rules out for #905's
-   folder, where the path is still computed three times independently.
+   the shelf's row while the packs keep loading from the old directory.
 2. **A pack is a directory**, so the relocation does not go through
    ``ModelMover``: there is no per-file row to repoint and no ``sha256`` to
    verify a copy against. ``move_directory`` keeps the guarantee that matters
@@ -22,7 +19,7 @@ things had to become true for that to stop being a claim:
 The negative half is as load-bearing as the positive one. Widening the relocate
 route from "the managed store only" to "the managed store and the InsightFace
 packs" is the kind of change that quietly opens it to everything, so the folders
-that must still be refused are asserted here beside the one that must now work -
+that must be refused are asserted here beside the one that must work -
 the HuggingFace cache in particular, which is ``fixed`` because its location is
 ``HF_HOME``, read at import by a library shared with every other tool on the
 machine.
@@ -211,7 +208,7 @@ def test_a_recorded_root_survives_the_process_that_wrote_it(data_dir):
     every pack is downloaded again into the directory just emptied.
 
     A file beside the download folder's own pointer rather than a key in
-    `server-config.json`, for the reason #905 gives: this path is machine-global,
+    `server-config.json`, because this path is machine-global,
     so recording it per deployment would leave a second PixlStash on the same
     machine downloading packs to the old place.
     """
@@ -257,14 +254,10 @@ def test_one_recorded_root_moves_the_download_dir_and_the_shelf_folder_together(
 def test_nothing_but_the_record_can_name_the_models_directory(data_dir, monkeypatch):
     """No second source for this one path, environment included.
 
-    `builtin_caches` used to carry `PIXLSTASH_INSIGHTFACE_DIR`, a declaration-only
-    seam that pointed at the *models* directory - one level below the root that is
-    now recorded, so the two could disagree. Harmless while nothing could
-    relocate; a bug the moment something could, because the shelf would declare
-    the override path while downloads and `FaceAnalysis` used the root, and a
-    relocation identified by `insightface_models_dir()` would repoint the row at
-    a directory the next start-up would not declare. The download folder's
-    override is safe for the opposite reason: it redirects that folder whole.
+    An environment override pointing at the *models* directory would let the
+    shelf declare one path while downloads and `FaceAnalysis` used the recorded
+    root. The download folder's override is safe for the opposite reason: it
+    redirects that folder whole.
 
     Asserted by setting every plausible spelling and requiring the answer not to
     move: a reader that consults the environment fails this, whatever it is
@@ -400,7 +393,7 @@ def test_a_record_that_cannot_be_written_still_tells_the_hub_the_truth(
     ruling), so the hub is still told where they are - the shelf shows them
     correctly. What is lost is durability: the next start resolves the default
     root again and would download there, which is why the failure is loud and
-    names the repair. Exactly the residue #905 accepts for the download folder's
+    names the repair. The same residue is accepted for the download folder's
     own pointer; giving the two different answers would be the worse outcome.
     """
     folder_id = face_env.folder_id
@@ -513,7 +506,7 @@ def test_a_destination_already_holding_a_pack_is_refused_before_anything_moves(
 
 
 def test_a_destination_inside_a_registered_folder_is_refused(face_env, tmp_path):
-    """The overlap a hand-registered folder is refused for (#2665 item 3)."""
+    """The overlap a hand-registered folder is refused for."""
     user_dir = tmp_path / "my-loras"
     user_dir.mkdir()
     face_env.register_folder(str(user_dir), kind="user", movable="per_item")
@@ -560,8 +553,8 @@ def test_a_destination_inside_a_registered_folder_is_refused(face_env, tmp_path)
 def test_the_huggingface_cache_still_cannot_be_relocated(face_env, tmp_path):
     """``fixed`` means it cannot move at all - its location is ``HF_HOME``.
 
-    Asserted against the widened route on purpose: "only the managed store" was
-    what refused this before, and that sentence is no longer the rule.
+    Asserted against the widened route on purpose, since it accepts more than
+    the managed store.
     """
     cache_id = face_env.register_folder(
         str(tmp_path / "hf-cache"), kind="foreign", movable="fixed"

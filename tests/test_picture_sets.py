@@ -193,11 +193,11 @@ def test_update_and_delete_picture_set():
 
 
 def test_new_sets_rotate_default_icon_and_color():
-    """A set created without an appearance differs from the previous one (#457).
+    """A set created without an appearance differs from the previous one.
 
     Includes a set in a fresh project: the rotation continues from the newest
-    set library-wide, so an empty project no longer restarts at the head of the
-    palette (the bug this test pins).
+    set library-wide, so an empty project does not restart at the head of the
+    palette.
     """
     temp_dir, client, server = setup_server_with_temp_db()
     try:
@@ -524,9 +524,8 @@ def test_set_view_represents_a_stack_by_its_in_set_member():
     """A stack whose leader is OUTSIDE the set must not vanish from the set view.
 
     Legacy stacks predating the stack-atomic invariant can leave a set holding
-    a non-leader member whose cover is not in the set; the collapsed grid then
-    rendered NEITHER picture (the owner's #670/#1746 report: six members, five
-    tiles, and no stack in sight). The listing now represents such a stack by
+    a non-leader member whose cover is not in the set, which the collapsed grid
+    must still show. The listing represents such a stack by
     its lowest-positioned member INSIDE the id filter, stack fields intact so
     the tile still wears its badge.
     """
@@ -600,9 +599,7 @@ def test_members_endpoint_expands_stack_siblings():
 
     Adding pic_b (a non-leader stack member) makes the whole stack part of the
     set, so both pic_a and pic_b are real members - returned with *and* without
-    expand_stacks. (Previously only the explicitly added picture was a member and
-    siblings appeared solely via expand_stacks=true; atomic membership removes
-    that partial state.)
+    expand_stacks.
     """
     temp_dir, client, server = setup_server_with_temp_db()
     try:
@@ -662,7 +659,7 @@ def test_members_endpoint_expands_stack_siblings():
 
 
 def test_member_routes_refuse_bad_ids_and_empty_replace():
-    """Issue #1580: a non-numeric member path is a 422, not a 500, and PUT
+    """A non-numeric member path is a 422, not a 500, and PUT
     refuses to empty a set unless ``allow_empty`` is passed."""
     temp_dir, client, server = setup_server_with_temp_db()
     try:

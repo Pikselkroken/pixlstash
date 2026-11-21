@@ -303,7 +303,7 @@ def test_restore_warns_about_space_in_the_one_prompt_it_already_asks(
 def test_restore_survives_scratch_and_config_on_different_filesystems(
     temp_root, capsys, monkeypatch
 ):
-    """The reported crash: ~/Pictures and ~/.config on separate mounts.
+    """~/Pictures and ~/.config on separate mounts must not crash the restore.
 
     Staging happens beside the restored library so publishing it is a rename;
     the hub has to reach the config directory, which is routinely a different
@@ -364,7 +364,7 @@ def test_backup_announces_itself_before_the_bar(temp_root, capsys):
     ],
 )
 def test_backup_gives_the_file_the_right_ending(temp_root, given, compress, expected):
-    """An explicit filename used to keep whatever the user typed, extension or not."""
+    """An explicit filename gets the backup extension, whatever the user typed."""
     from pixlstash.services.library_backup_service import _resolve_destination
 
     class _Library:

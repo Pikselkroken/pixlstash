@@ -67,8 +67,8 @@ def test_authenticated_path_is_not_rate_limited(client):
 def test_spa_assets_are_not_counted(client):
     """A page load's many chunks neither get refused nor spend the bucket.
 
-    One boot of the app fetches more chunks than the whole limit, so a reload
-    after a library switch used to 429 its own JavaScript.
+    One boot of the app fetches more chunks than the whole limit, so counting
+    them would make a reload after a library switch 429 its own JavaScript.
     """
     # Absolute, because conftest prefixes relative paths with /api/v1.
     for i in range(20):

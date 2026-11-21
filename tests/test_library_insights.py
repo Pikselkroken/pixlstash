@@ -1,4 +1,4 @@
-"""The "About your library" findings (v1.11 Phase 6).
+"""The "About your library" findings.
 
 Read-only findings over an already-organised library. What is worth asserting
 about a screen made of prose is not the prose - it is the four things the
@@ -148,7 +148,7 @@ def _seed(srv, specs):
             """One row per name, the way ``stacks`` gives one stack per key.
 
             ``Project.name`` is unique, so two specs naming the same project
-            used to raise an IntegrityError from inside the seed helper. Set and
+            would raise an IntegrityError from inside the seed helper. Set and
             character names are not constrained, but two rows called
             ``selects`` is not what a spec saying ``in_set="selects"`` asks for
             either. The lookup hits the table rather than a local dict so a
@@ -552,10 +552,9 @@ def test_a_scanned_picture_with_no_face_in_it_is_not_an_unnamed_face(server, cli
     """The sentinel row, which is what most of a scanned library carries.
 
     `FaceExtractionTask` writes `face_index=-1, character_id=None` for every
-    picture it found no face in. Read as "an unnamed face" that made the
+    picture it found no face in. Read as "an unnamed face" that would make the
     finding fire on nearly the whole library while its button opened an empty
-    grid - and the fixture could not see it, because it only ever wrote
-    `face_index=0`.
+    grid - which a fixture writing only `face_index=0` cannot see.
     """
     _seed(
         server,
@@ -594,8 +593,8 @@ def test_a_pile_counts_the_rows_its_button_will_draw_not_the_pictures(server, cl
     """A stack is ONE row.
 
     Every grid request the app makes carries `fields=grid`, which the listing
-    route maps to `stack_leaders_only`. Counting pictures put "30 pictures" on
-    a finding whose button opened fifteen rows.
+    route maps to `stack_leaders_only`. Counting pictures would put "30
+    pictures" on a finding whose button opened fifteen rows.
     """
     _seed(
         server,
@@ -632,8 +631,8 @@ def test_a_stack_whose_leader_sits_in_another_folder_still_shows(server, client)
 
     `find_unassigned`'s leaders-only fast path keys on the GLOBAL
     `stack_position == 0`. With a folder filter that member can be outside the
-    scope, and the whole stack fell out of a grid whose own pictures were right
-    there - the same defect the project-scope branch beside it was written for.
+    scope, and the whole stack would fall out of a grid whose own pictures were
+    right there - the same case the project-scope branch beside it handles.
     """
     _seed(
         server,
@@ -659,9 +658,9 @@ def test_a_face_on_a_stack_member_still_reaches_the_grid(server, client):
     """A face facet narrows too, so it can hide the stack's global leader.
 
     The cover of a stack is usually the tidy shot and the face is on a sibling.
-    With `face_filter` outside the leader-scope set the whole stack fell out of
-    `?face=with_face`, so the finding said 1 and its screen showed nothing -
-    the same defect as the folder case, one facet over.
+    With `face_filter` outside the leader-scope set the whole stack would fall
+    out of `?face=with_face`, so the finding would say 1 and its screen show
+    nothing - the same case as the folder one, one facet over.
     """
     _seed(
         server,
@@ -693,7 +692,7 @@ def test_the_ordinary_grid_keeps_a_folder_stack_whose_cover_is_elsewhere(
     server, client
 ):
     """`?path=` rides on every grid route, including `/` - which goes through
-    `Picture.find`, not `find_unassigned`. Both take the same rule now."""
+    `Picture.find`, not `find_unassigned`. Both take the same rule."""
     _seed(
         server,
         [
@@ -722,8 +721,8 @@ def test_the_ordinary_grid_keeps_a_folder_stack_whose_cover_is_elsewhere(
 
 def test_a_prefix_sibling_folder_does_not_walk_through_the_ceiling(server):
     """The queue scopes on `LIKE '<prefix>%'` with no separator, so `/lib` also
-    catches `/lib-archive`. Measuring a separator-bounded sub-tree instead let
-    an unrelated folder's pictures into a scope the ceiling had cleared."""
+    catches `/lib-archive`. Measuring a separator-bounded sub-tree instead would
+    let an unrelated folder's pictures into a scope the ceiling had cleared."""
     _seed(
         server,
         _copies("lib/selects", "lib/final", shared=insights.OVERLAP_MIN_PICTURES)
@@ -824,11 +823,10 @@ def test_the_pile_action_opens_a_grid_holding_exactly_the_pile(server, client):
     """The end-to-end check the finding's whole value rests on.
 
     "Sort them" navigates to `/character/UNASSIGNED?path=<folder>`, which the
-    grid sends as `character_id=UNASSIGNED&file_path_prefix=<folder>`. The
-    unassigned branch used to drop `file_path_prefix` outright
-    (`Picture.find_unassigned` had no such parameter), so the button opened
-    every unassigned picture in the library under a header naming one folder -
-    green in every other test here, because they all stop at the action object.
+    grid sends as `character_id=UNASSIGNED&file_path_prefix=<folder>`. If the
+    unassigned branch dropped `file_path_prefix`, the button would open every
+    unassigned picture in the library under a header naming one folder - green
+    in every other test here, because they all stop at the action object.
     """
     _seed(
         server,
@@ -877,10 +875,8 @@ def test_insights_is_owner_only_in_both_directions(server, client):
     the owner reads it (over-blocking is its own regression) and a share token
     is refused.
 
-    On the MODULE server. An earlier version stood up a second one "because this
-    needs a login, which the module server does not have" - which the `client`
-    fixture above disproves by logging into exactly that server. A second
-    `Server` is ~1.4 s plus a full migration chain, per shard, for nothing.
+    On the MODULE server: the `client` fixture above logs into exactly that
+    server, and a second `Server` is ~1.4 s plus a full migration chain.
     """
     minted = client.post(
         f"{API}/users/me/token",

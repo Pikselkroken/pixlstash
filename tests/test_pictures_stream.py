@@ -251,12 +251,12 @@ def test_small_character_grid_reads_bypass_a_long_writer_slice():
 
 
 def test_stream_continues_when_hidden_tag_post_filter_shrinks_batches():
-    """Regression test: hidden-tag filtering is applied in SQL so the stream
+    """Hidden-tag filtering is applied in SQL so the stream
     returns exactly the visible pictures in the correct number of batches.
 
-    Hidden-tag filtering moved from a Python post-filter into the SQL WHERE
-    clause, so ``sql_count`` (the over-fetch probe result) now reflects only
-    visible rows.  40 visible pictures / batch_limit 10 = 4 batches.
+    Hidden-tag filtering is in the SQL WHERE clause, so ``sql_count`` (the
+    over-fetch probe result) reflects only visible rows.  40 visible pictures /
+    batch_limit 10 = 4 batches.
     """
     tmp, client, server = _setup_server()
     try:

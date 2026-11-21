@@ -1,8 +1,8 @@
 """The library's own picture root is scanned like a reference folder.
 
-Since v1.11 a layout turns the root into a folder tree the owner reorganises
-by hand. A rename nobody follows was a row the purge sweep deleted an hour
-later, tags and all. ``ReferenceFolderScanTask`` with ``folder_id=None`` walks
+A layout turns the root into a folder tree the owner reorganises by hand, and
+a rename nobody follows is a row the purge sweep deletes, tags and all.
+``ReferenceFolderScanTask`` with ``folder_id=None`` walks
 the root, follows moves by pixel hash, indexes what the owner dropped in and
 drops what they deleted - the same code path a reference folder gets, with
 ``Picture.file_path`` kept relative to the root.
@@ -387,8 +387,8 @@ def test_rows_under_a_folder_the_scan_never_entered_are_kept(server):
 
 
 def test_a_gif_in_the_root_is_indexed_and_kept(server):
-    """Import accepts GIF and TIFF; a scan that did not list them hard-deleted
-    every such row on boot (#1349)."""
+    """Import accepts GIF and TIFF; a scan that did not list them would
+    hard-delete every such row on boot."""
     root = server.vault.image_root
     for name, fmt in (("a.gif", "GIF"), ("b.tiff", "TIFF")):
         path = os.path.join(root, "anim", name)

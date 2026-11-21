@@ -4,10 +4,10 @@ into watchdog.
 watchdog dispatches filesystem events to handlers while holding the observer's
 lock, and the handler (`_schedule_rescan`) takes the watcher's lock from inside
 that dispatch. If `watch_folder` scheduled a watch under the watcher's lock, a
-file event landing at that moment deadlocked both threads - which is exactly
-what a library switch did when a watched folder changed during `Vault.start`.
+file event landing at that moment would deadlock both threads - for example
+during a library switch, when a watched folder changes during `Vault.start`.
 The observer here is a fake with watchdog's lock discipline; the test hangs
-with the old code and finishes with the new.
+if the lock is held across the call.
 """
 
 from __future__ import annotations

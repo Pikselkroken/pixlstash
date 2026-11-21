@@ -187,8 +187,8 @@ class TestLegacySnapshotIdentity:
     excludes only the root-level vault, so an archive that still holds the old
     ``user`` / ``usertoken`` rows would travel inside the tarball. The
     restore-path scrub cannot help: nothing materializes these archives here,
-    they are copied as bytes. Now that the scrub runs in the background rather
-    than before the listening socket, a backup can genuinely race it.
+    they are copied as bytes. The scrub runs in the background rather than
+    before the listening socket, so a backup can genuinely race it.
     """
 
     @staticmethod

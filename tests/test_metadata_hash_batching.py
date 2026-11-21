@@ -1,10 +1,8 @@
 """The batched metadata-hash path must be byte-compatible and O(1) per flush.
 
 ``_after_flush_hash_updater`` runs on the single writer thread, inside the open
-write transaction, and used to issue five SELECTs plus one UPDATE **per dirty
-picture**. A 64-picture tag batch therefore added ~384 statements while holding
-the SQLite write lock (issue #651). It now issues a constant number of
-statements per flush.
+write transaction, while holding the SQLite write lock, so it issues a constant
+number of statements per flush rather than several **per dirty picture**.
 
 Two things have to hold, and this file asserts both:
 
@@ -473,8 +471,8 @@ def _tag_pictures_in_one_flush(server, counter, picture_ids: list[int]) -> None:
 def test_flush_hash_update_is_constant_queries(server):
     """The hook costs the same number of statements for 2 pictures as for 20.
 
-    The old shape was five SELECTs plus one UPDATE per dirty picture, so this
-    count was exactly ``6 * N`` - 12 here versus 120 - all of it inside the open
+    A per-picture shape (five SELECTs plus one UPDATE per dirty picture) would
+    make this count ``6 * N`` - 12 here versus 120 - all of it inside the open
     write transaction on the single writer thread.
     """
     small_ids = _create_pictures(server, 2)

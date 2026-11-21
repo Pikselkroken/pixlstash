@@ -1,29 +1,26 @@
-"""One blocklist, three routes that put files somewhere: #1206 item 1.
+"""One blocklist, three routes that put files somewhere.
 
-``POST /pictures/export/folder`` grew the complete list of directories this
-installation reads or writes - ``image_root``, the reference folders, the watch
-folders, every registered library - while its two siblings kept partial copies
-of it:
+``POST /pictures/export/folder``, ``POST /import-folders`` and the
+reference-folder create/update/relocate routes all refuse the complete list of
+directories this installation reads or writes - ``image_root``, the reference
+folders, the watch folders, every registered library:
 
-* ``POST /import-folders`` knew only the active vault's ``image_root``, so a
-  watch folder could be pointed at a reference folder or at another registered
-  library. It then imports that folder's contents into the active library, and
-  one carrying ``delete_after_import`` unlinks each source file afterwards
+* A watch folder pointed at a reference folder or at another registered
+  library imports that folder's contents into the active library, and one
+  carrying ``delete_after_import`` unlinks each source file afterwards
   (``pixlstash/tasks/watch_folder_import_task.py``), leaving the library that
   owns those pictures with rows pointing at files that are gone.
-* The reference-folder create/update/relocate routes knew ``image_root`` and
-  the other reference-folder rows. ``POST /reference-folders/{id}/relocate``
-  physically ``shutil.move``s every file below the old root, so its destination
-  is the one that can move pictures into another library or into a folder a
-  watcher then eats.
+* ``POST /reference-folders/{id}/relocate`` physically ``shutil.move``s every
+  file below the old root, so its destination is the one that can move pictures
+  into another library or into a folder a watcher then eats.
 
-Both siblings sit on a *wider* authorization tier than the export
+Both of those sit on a *wider* authorization tier than the export
 (``LOCAL_OWNER_ONLY`` vs ``LOOPBACK_OWNER_ONLY``) and they *move* files where
-the export only copies, so the partial copies were the more dangerous two.
+the export only copies.
 
 Every negative here has its positive control beside it in the same environment:
 over-blocking would break import folders and reference folders outright and
-would look exactly like the fix working.
+would look exactly like the blocklist working.
 """
 
 import gc
@@ -117,7 +114,7 @@ def test_watch_and_reference_folders_refuse_overlapping_another_library(
     The watcher copies every file it finds into the *active* library and, with
     ``delete_after_import``, unlinks the original - so the other library's
     ``Picture`` rows end up pointing at files that no longer exist. A watch
-    folder *containing* that library reaches the same files (#1223).
+    folder *containing* that library reaches the same files.
     """
     parent = _mkdir(workspace, "parent-of-watched-second-library")
     other = server.library_registry.create(
@@ -165,9 +162,9 @@ def test_watch_and_reference_folders_refuse_overlapping_another_library(
 def test_watch_and_reference_folders_refuse_overlapping_each_other(
     client, server, workspace
 ):
-    """Two roots over one file is duplicate, destroy or no-op (#1223).
+    """Two roots over one file is duplicate, destroy or no-op.
 
-    The allowance shipped for one release and bought nothing. Whichever worker
+    Whichever worker
     reaches a shared file first decides: ``WatchFolderImportTask`` copies it
     into ``image_root`` while ``ReferenceFolderScanTask`` indexes the original
     in place under its own row (its ``existing_by_path`` is keyed on that
@@ -176,8 +173,8 @@ def test_watch_and_reference_folders_refuse_overlapping_each_other(
     have indexed where it lies. The third outcome is the scan winning and the
     import skipping on hash, i.e. nothing.
 
-    Every direction, because a rule enforced one way round is the containment
-    bug #1223 item 1 was written about.
+    Every direction, because a rule enforced one way round is a containment
+    hole.
     """
     detail = "watch folders or reference folders"
 
@@ -292,7 +289,7 @@ def test_relocating_a_reference_folder_into_the_data_folder_names_it(
     client, server, workspace
 ):
     """Relocation checks ``image_root`` before the library-overlap rule, so its
-    refusal is the one the owner reads - and it must say which folder (#1986)."""
+    refusal is the one the owner reads - and it must say which folder."""
     source = _mkdir(workspace, "relocatable-toward-the-data-folder")
     added = _add_reference_folder(client, source, "toward-data-folder")
     assert added.status_code == 200, added.text
@@ -319,7 +316,7 @@ def test_repointing_a_reference_folder_into_its_own_subfolder_still_works(
     and repointing it *into its own subtree* is legitimate - the row is its own
     root, not a conflict with itself. A blocklist that forgot to exclude the
     row being edited would refuse it, and the refusal would look identical to
-    the fix working.
+    the check working.
     """
     root = _mkdir(workspace, "repointable-folder")
     deeper = _mkdir(root, "2026")
@@ -335,13 +332,11 @@ def test_repointing_a_reference_folder_into_its_own_subfolder_still_works(
 def test_import_folder_refuses_when_the_library_list_cannot_be_read(
     client, server, workspace
 ):
-    """A blocklist that cannot be read must refuse, not permit (#1177 item 59).
+    """A blocklist that cannot be read must refuse, not permit.
 
     ``[]`` and "we do not know" are the same value with opposite safety here,
     so the shared helper raises and every caller answers 503. This is the
-    registry half of that rule, which had no test on either route: the folder
-    export's two 503 branches covered the reference-folder and watch-folder
-    reads only.
+    registry half of that rule.
     """
     destination = _mkdir(workspace, "unreadable-registry-watch-folder")
 
@@ -362,9 +357,7 @@ def test_library_content_roots_wraps_every_read_failure(server):
     """The helper's single failure shape, asserted directly.
 
     ``LibraryRootsUnavailable`` from the folder reads and a plain exception from
-    the registry both have to reach the caller as the one type it maps to 503;
-    the export route used to carry two separate ``except`` branches for that and
-    only one of them was tested.
+    the registry both have to reach the caller as the one type it maps to 503.
     """
     from pixlstash.utils import library_roots
 
@@ -410,9 +403,9 @@ def test_detached_libraries_are_still_in_the_blocklist(server, workspace):
 def test_a_reference_commit_refuses_a_folder_overlapping_a_library(
     client, server, workspace
 ):
-    """#1223 item 2: the folder-structure commit registers reference folders
-    through ``register_reference_folder``, not the route, and so skipped the
-    route's refusal of a folder overlapping another registered library.
+    """The folder-structure commit registers reference folders through
+    ``register_reference_folder``, not the route, and must still refuse a
+    folder overlapping another registered library.
     """
     parent = _mkdir(workspace, "parent-of-commit-target-library")
     other = server.library_registry.create(
@@ -429,7 +422,7 @@ def test_a_reference_commit_refuses_a_folder_overlapping_a_library(
 
 
 def test_a_library_may_not_overlap_a_watch_or_reference_folder(client, workspace):
-    """The reverse rule (#1223): ``POST /libraries`` refuses a library inside,
+    """The reverse rule: ``POST /libraries`` refuses a library inside,
     or around, one of this library's watch or reference folders, and the
     picker's inspection says so before the Add button is offered."""
     watched = _mkdir(workspace, "watch-holding-a-library")
@@ -464,7 +457,7 @@ def test_a_library_may_not_overlap_a_watch_or_reference_folder(client, workspace
 
 def test_the_cli_library_verbs_apply_the_same_rule(client, server, workspace):
     """``libraries create`` and ``libraries attach`` call the registry directly,
-    so the rule lives there rather than in ``POST /libraries`` (#1223)."""
+    so the rule lives there rather than in ``POST /libraries``."""
     hub = server.hub.path
     unregistered_vault = _mkdir(workspace, "watched-parent-of-a-vault", "vault")
     made = server.library_registry.create(unregistered_vault)
@@ -515,7 +508,7 @@ def test_a_watch_folder_of_another_library_blocks_a_library_too(
 def test_a_library_and_a_watch_folder_added_at_once_cannot_both_land(
     client, server, workspace, monkeypatch
 ):
-    """The check and the write are one step (#1223). A library add paused just
+    """The check and the write are one step. A library add paused just
     after its check, inside ``create``, must keep a watch folder around it
     waiting, and that watch folder must then be refused rather than accepted
     against the snapshot it read before the library existed."""

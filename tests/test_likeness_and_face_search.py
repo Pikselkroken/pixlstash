@@ -528,7 +528,7 @@ def _face_search(client, **params):
 def test_face_search_by_character_ranks_and_excludes_assigned():
     """source_character_id searches with a character's reference faces, and
     exclude_character_id drops the pictures already assigned to them, which is
-    what makes the result set the un-assigned candidates only (#636).
+    what makes the result set the un-assigned candidates only.
 
     Asserts both directions: the strong match is found and ranked above the
     non-match (no over-blocking), and the already-assigned references are gone.

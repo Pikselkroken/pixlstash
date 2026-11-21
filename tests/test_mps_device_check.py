@@ -2,18 +2,14 @@
 
 The companion file ``test_mps_memory_and_providers.py`` covers surviving the GPU
 once we are on it - memory budgets, OOM classification, ONNX providers. This one
-covers *reaching* it, which is the half that was silently broken.
+covers *reaching* it.
 
 ``InferenceEngine.create`` never reads the config: it auto-detects, and
 ``default_device`` only ever sets ``force_cpu``. So the real gate is
-``StartupChecks._check_device_and_vram`` - it saw ``torch.cuda.is_available() ==
-False`` on a Mac, called ``_force_cpu_with_warning``, and ``Server.build_vault``
-turned that into ``force_cpu=True``, pinning the CPU **before any engine-side
-probe ran**. Every other accelerator change in the codebase was therefore dead
-code on Apple Silicon, and a benchmark that constructed a tagger service
-directly could not see it: the service was handed ``"mps"`` by hand while the
-real application was still being handed the CPU. These tests assert the chain,
-not the component.
+``StartupChecks._check_device_and_vram``: a ``_force_cpu_with_warning`` there
+becomes ``force_cpu=True`` in ``Server.build_vault``, pinning the CPU **before
+any engine-side probe runs**. A test that constructs a service directly cannot
+see that, so these tests assert the chain, not the component.
 
 The host is simulated throughout, through the same injection seam
 ``test_rocm_device_check.py`` uses. That is load-bearing rather than tidy: CI's
@@ -146,7 +142,7 @@ def test_an_explicitly_named_device_is_not_silently_downgraded():
     """Asking for CUDA on a Mac returns CUDA, so the caller gets its own error.
 
     A silent downgrade to the CPU is how a misconfigured host looks perfectly
-    healthy while running twenty times slow - which is the bug, not the fix.
+    healthy while running twenty times slow.
     """
     assert resolve_device(CUDA, torch_module=_torch(**MPS_HOST)) == CUDA
 
@@ -183,11 +179,10 @@ def _run_device_check(device):
 
 
 def test_an_apple_silicon_host_is_not_quietly_pinned_to_the_cpu(patch_runtime):
-    """**The regression this whole change exists to prevent.**
+    """**The assertion everything else is downstream of.**
 
-    Everything else is downstream of this one assertion: while the start-up
-    check forced the CPU, no amount of accelerator support anywhere else in the
-    codebase could be reached.
+    If the start-up check forces the CPU, no amount of accelerator support
+    anywhere else in the codebase can be reached.
     """
     patch_runtime(_torch(**MPS_HOST), fake_ort(["CoreMLExecutionProvider"]))
     cfg, outcome = _run_device_check("auto")
@@ -207,7 +202,7 @@ def test_a_host_with_no_accelerator_still_lands_on_the_cpu(patch_runtime):
 
 
 def test_a_cuda_host_is_unaffected_by_the_apple_silicon_work(patch_runtime):
-    """NVIDIA is the primary platform. Speeding up Macs at its expense - or by
+    """NVIDIA is the primary platform. Supporting Macs at its expense - or by
     blinding CI to its regressions - is not a trade worth making."""
     patch_runtime(_torch(**CUDA_HOST), fake_ort(["CUDAExecutionProvider"]))
     _, outcome = _run_device_check("auto")

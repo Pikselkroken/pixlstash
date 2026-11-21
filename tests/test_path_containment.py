@@ -1,7 +1,7 @@
-"""Containment of stored paths before they reach a destructive operation (#776).
+"""Containment of stored paths before they reach a destructive operation.
 
 A snapshot's ``relative_path`` and a ``Picture.file_path`` are database values.
-A wrong one, written by a faulty import or a bug, previously reached an
+A wrong one, written by a faulty import or a bug, must not reach an
 unattended ``os.remove``. These tests assert BOTH directions at every sink that
 deletes or overwrites:
 
@@ -118,10 +118,9 @@ def test_path_is_within_follows_a_symlinked_root(tmp_path):
 def test_blocklist_refuses_a_symlink_pointing_into_a_restricted_directory(tmp_path):
     """A link the caller owns must not launder a blocked target past the check.
 
-    The blocklist compares literal strings, so before this was resolved the
-    link's own path matched no entry and the route behind the check went on to
-    operate on the target. Every caller that passed the string it was given -
-    most of them - inherited that.
+    The blocklist compares literal strings, so an unresolved link's own path
+    would match no entry and the route behind the check would go on to operate
+    on the target.
     """
     link = tmp_path / "innocent-looking"
     try:
@@ -142,11 +141,10 @@ def test_blocklist_allows_a_resolved_alias_that_is_not_a_system_directory():
     macOS resolves `/tmp` to `/private/tmp` and `$TMPDIR` under
     `/private/var/folders`, which the `/private` entry would then swallow;
     FreeBSD and TrueNAS ship `/home` as a symlink to `/usr/home`, which `/usr`
-    would swallow and strand the whole library. `/tmp` and `/home/me` were
-    accepted before paths were resolved and must stay accepted; their resolved
-    spellings were refused when typed literally and now pass, which is the
-    widening this buys - one directory answering the same way under both of its
-    names. Asserted on Linux, where `/usr` is blocked, so the exception is
+    would swallow and strand the whole library. `/tmp` and `/home/me` must
+    stay accepted, and so must their resolved spellings - one directory
+    answering the same way under both of its names. Asserted on Linux, where
+    `/usr` is blocked, so the exception is
     exercised on the CI platform rather than only on the one with no runner.
     """
     assert validate_reference_folder_path("/usr/home/me/Pictures") is None
@@ -231,12 +229,12 @@ class _CaseFoldingOs:
 
 
 def test_has_hidden_component_answers_for_the_root_and_for_outside_it():
-    """#1194 review. The helper decides which picture rows a reference-folder
+    """The helper decides which picture rows a reference-folder
     scan *keeps* instead of hard-deleting, so both of `relpath`'s non-name
     answers have to be deliberate rather than fall through `is_hidden_entry`.
 
-    `path == root` gives `"."`, which is dot-prefixed: the helper called its own
-    root hidden, contradicting the one thing its docstring promises. A path
+    `path == root` gives `"."`, which is dot-prefixed, yet the root itself is
+    not hidden. A path
     outside root gives `".."`, also dot-prefixed, and that one stays `True` on
     purpose - the caller subtracts this set from the rows it is about to
     delete, so it is the answer that keeps a row the walk never covered.
@@ -260,14 +258,14 @@ def test_has_hidden_component_answers_for_the_root_and_for_outside_it():
 
 
 def test_canonical_path_folds_case_where_the_filesystem_does(tmp_path, monkeypatch):
-    """#1194 review. `canonical_path` is how two reference folder roots are
+    """`canonical_path` is how two reference folder roots are
     compared, and Windows and macOS spell one directory in several cases. Left
     case-sensitive, a registered root matches nothing under another spelling:
     the path is accepted as free and two scans then index the same files.
 
     `normcase` is identity on this POSIX gate - `CaseRoot` and `CASEROOT` really
     are two directories here - so the folding platform is simulated. Without
-    that the assertion passes with or without the fix and pins nothing.
+    that the assertion passes with or without the folding and pins nothing.
     """
     from pixlstash.utils import reference_folder_validator
 
@@ -447,7 +445,7 @@ def test_vault_supplies_the_reference_roots_the_purge_needs(server, tmp_path):
 def test_an_unreadable_reference_folder_table_raises_rather_than_reporting_none(
     server, monkeypatch
 ):
-    """#1177 item 59. ``()`` means "none are configured" and nothing else.
+    """``()`` means "none are configured" and nothing else.
 
     The same list is an allowlist for the purge (empty is safe) and a blocklist
     for the export destination and views roots (empty permits). One value

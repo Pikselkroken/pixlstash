@@ -314,17 +314,14 @@ def _stop_planner_and_settle(server, timeout_s: float = 120.0) -> None:
 
     ``WorkPlanner.stop()`` stops the loop that FINDS work. It does not touch
     the ``TaskRunner``, which owns its own queues and worker threads, so a task
-    the planner submitted seconds earlier is still queued or already executing
-    when ``stop()`` returns - measured on this very fixture: one task on the
-    GPU queue and a ``FaceExtractionTask`` running.
+    the planner submitted seconds earlier can still be queued or already
+    executing when ``stop()`` returns.
 
     That is what a shared module environment cannot survive. ``TagTask``
     deletes a picture's tags before writing its own, so a tagger still in
     flight lands inside a test body, wipes the ``tag-a-only`` row the test just
-    posted, and leaves the tagger's own vocabulary in its place - which is
-    exactly how ``test_list_all_tags_cannot_leak_out_of_scope_vocab`` failed on
-    a CI runner slow enough to keep the pipeline alive that long, while passing
-    on every machine fast enough to finish it during setup.
+    posted, and leaves the tagger's own vocabulary in its place - only on a
+    runner slow enough to keep the pipeline alive that long.
 
     Same shape as ``tests/test_picture_mutation_scope.py``'s pipeline settle:
     drain what is queued, then wait for what is running. Looped, because a
@@ -334,9 +331,8 @@ def _stop_planner_and_settle(server, timeout_s: float = 120.0) -> None:
     ``stop()`` joins it for ``STOP_JOIN_TIMEOUT_S`` and then returns whether or
     not it exited; a pass slow enough on a loaded runner outlives that, and the
     loop then submits the ``TagTask`` its pass had found *after* this helper
-    saw empty queues and returned. Exactly the failure described above, seen
-    again with a pass that took eleven seconds. So the queues are only read
-    once ``is_running()`` is false.
+    saw empty queues and returned. So the queues are only read once
+    ``is_running()`` is false.
     """
     planner = server.vault._work_planner
     planner.stop()
@@ -504,8 +500,8 @@ def _two_set_env():
 
     The planner is stopped once the two imports are done, and the work it has
     ALREADY handed to the runner is waited out - see
-    {@link _stop_planner_and_settle}, which is the half this fixture used to
-    skip. Nothing after setup imports a picture, so there is no legitimate work
+    {@link _stop_planner_and_settle}. Nothing after setup imports a picture, so
+    there is no legitimate work
     left here - but several of these tests hand-write ``Tag``, ``Character``
     and ``PictureStack`` rows, and a ``TagTask`` still in flight (it deletes a
     picture's tags before rewriting them) or a stack-cohesion sweep would
@@ -561,8 +557,8 @@ def _reset_two_set_library(env) -> None:
     makes deferral unnecessary. That is deliberate: with pysqlite a
     ``PRAGMA defer_foreign_keys = ON`` issued before any DML runs in its own
     autocommit transaction and is gone again by the time the DELETEs open
-    theirs, so it can look like protection while providing none (measured in
-    #821). An ordering that never needs the pragma cannot silently lose it.
+    theirs, so it can look like protection while providing none. An ordering
+    that never needs the pragma cannot silently lose it.
     """
 
     def _wipe(session: Session):
@@ -725,8 +721,7 @@ class TestAllScopeResourceTokenRejected(_SharedPictureLibrary):
     scopes, so such a token would bypass every object-scope guard
     (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` read
     ``token_scope``) *and* pass the owner-only token-creation check - it is a
-    full owner token wearing a "restricted" label. See the F3 finding in
-    docs/reviews/feature-slick-grid-updates.md.
+    full owner token wearing a "restricted" label.
     """
 
     def test_all_scope_with_resource_type_is_rejected(self, library_env):
@@ -816,11 +811,10 @@ def _rescope(server, token: str, scope: str) -> str:
 class TestUnknownScopeFailsClosed(_SharedPictureLibrary):
     """A scope the product does not recognise must be treated as read-only.
 
-    The middleware used to refuse a write only for ``scope == "READ"``, so any
-    other string - a misconfigured row, a forged one, a scope added in a later
-    commit - skipped the refusal and reached every ``*_SCOPED`` mutation route,
-    each of which is write-unreachable *solely* because of that comparison. It
-    now keys on an explicit set of write-enabled scopes instead (issue #962).
+    The middleware keys on an explicit set of write-enabled scopes rather than
+    refusing only ``scope == "READ"``, so any other string - a misconfigured
+    row, a forged one, a scope added in a later commit - is refused rather than
+    reaching every ``*_SCOPED`` mutation route.
     """
 
     def test_an_unknown_scope_cannot_write(self, library_env):
@@ -1218,7 +1212,7 @@ class TestResourceScopedReadTokenIsolation:
 
     def test_a_manual_workflow_lora_filter_stays_inside_the_set(self, env):
         """``?workflow=<manual id>&workflow_lora=<asset>`` is narrowed by the
-        set scope like any other filter (#1696): both pictures are runs of the
+        set scope like any other filter: both pictures are runs of the
         workflow loading the LoRA, and the set-A token still sees only pic_a."""
         hub = env.server.hub
         graph = _workflow_graph(loras=("test-share-lora.safetensors",))
@@ -1298,8 +1292,7 @@ class TestResourceScopedReadTokenIsolation:
     def test_picture_scoped_token_cannot_list_whole_library(self, env):
         """A single-picture share token must only ever resolve its own picture.
 
-        Regression for the BOLA hole where /pictures, /pictures/stream and
-        /pictures/count handled picture_set/project/character scopes but let a
+        /pictures, /pictures/stream and /pictures/count must not let a
         ``resource_type='picture'`` token fall through to an unrestricted query,
         leaking the entire library's grid metadata.
         """
@@ -1331,15 +1324,15 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_picture_scoped_token_cannot_widen_via_character_likeness_sort(self, env):
-        """CVE-class regression: sort=CHARACTER_LIKENESS resolves candidates
+        """CVE-class guard: sort=CHARACTER_LIKENESS resolves candidates
         without ever consulting query_params["id"] (see the "CHARACTER_LIKENESS
         sort branch is a known pre-existing exception" comment in
         select_pictures_for_listing, pixlstash/routes/pictures/_listing.py). A
         single-picture share token narrows scope only by mutating
-        query_params["id"] (scope_picture_id), so this sort mode is a total
-        bypass of that scope -- the same BOLA class as
+        query_params["id"] (scope_picture_id), so this sort mode could be a
+        total bypass of that scope -- the same BOLA class as
         test_picture_scoped_token_cannot_list_whole_library above, on a sort
-        mode that test didn't cover.
+        mode that test doesn't cover.
 
         find_pictures_by_character_likeness_sql is stubbed (no GPU/face
         pipeline needed, same technique as
@@ -1471,11 +1464,10 @@ class TestResourceScopedReadTokenIsolation:
     def test_project_attachments_honour_the_grant_for_any_scope(self, env):
         """The attachment opt-in is a property of the grant, not of ``READ``.
 
-        Both directions, and both scopes. ``list_attachments`` used to skip its
-        refusal unless the scope was literally ``READ``, so a scope that was not
-        READ read the attachments regardless of its own ``include_attachments``
-        flag - item 3 of issue #962's blocking preconditions. The 200 leg is what
-        stops the fix from being over-blocking: a grant that *does* carry the
+        Both directions, and both scopes: ``list_attachments`` refuses for any
+        scope whose grant lacks ``include_attachments``, not only a literal
+        ``READ``. The 200 leg is what stops the refusal from being
+        over-blocking: a grant that *does* carry the
         flag must still open.
         """
         client = TestClient(env.server.api)
@@ -1632,9 +1624,9 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_unassigned_listing_cannot_leak_out_of_scope_pictures(self, env):
-        """character_id=UNASSIGNED must honour token scope. Regression for the
-        bypass where an empty intersected id list fell through to no filter and
-        the set/character scope was never applied to the UNASSIGNED branch."""
+        """character_id=UNASSIGNED must honour token scope: an empty intersected id
+        list must not fall through to no filter, and the set/character scope
+        applies to the UNASSIGNED branch too."""
         client = TestClient(env.server.api)
         hdr = {"Authorization": f"Bearer {env.token_a}"}
         listed = None
@@ -1665,8 +1657,8 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_scoped_token_cannot_read_other_picture_fields(self, env):
-        """GET /pictures/{id}/{field} must enforce scope. Regression: it sat
-        unguarded between get_picture and get_picture_metadata."""
+        """GET /pictures/{id}/{field} must enforce scope, like its neighbours
+        get_picture and get_picture_metadata."""
         client = TestClient(env.server.api)
         hdr = {"Authorization": f"Bearer {env.token_a}"}
         for field in ("file_path", "width", "thumbnail"):
@@ -1681,10 +1673,9 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_scoped_token_cannot_read_other_picture_character_likeness(self, env):
-        """GET /pictures/{id}/character_likeness must enforce scope. Regression
-        (R2): it sat unguarded alongside get_picture / get_picture_metadata /
-        get_picture_field and leaked picture existence, likeness scores, and the
-        face-extraction ``ready`` flag to any scoped token.
+        """GET /pictures/{id}/character_likeness must enforce scope, or it would
+        leak picture existence, likeness scores, and the face-extraction
+        ``ready`` flag to any scoped token.
 
         ML helpers are stubbed so the in-scope (positive) path is deterministic
         and GPU-free; the out-of-scope (negative) path is rejected by
@@ -1746,8 +1737,8 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_scoped_token_cannot_read_stack_outside_scope(self, env):
-        """Stack read endpoints must not leak out-of-scope pictures. Regression
-        for unscoped /stacks/{id}/pictures and /pictures/{id}/stack.
+        """Stack read endpoints must not leak out-of-scope pictures:
+        /stacks/{id}/pictures and /pictures/{id}/stack are scoped.
 
         Uses a single-picture token (allow-set is exactly {pic_a}) so that
         stacking pic_a with pic_b cannot widen scope via set-membership
@@ -1957,7 +1948,7 @@ class TestResourceScopedReadTokenIsolation:
         )
 
     def test_scoped_token_cannot_read_other_picture_comfyui_workflow(self, env):
-        """GET /comfyui/pictures/{id}/workflow must enforce scope (R1).
+        """GET /comfyui/pictures/{id}/workflow must enforce scope.
 
         Negative: a Set-A token is rejected on a Set-B picture by
         enforce_picture_scope before any DB read or metadata extraction.
@@ -1999,7 +1990,7 @@ class TestResourceScopedReadTokenIsolation:
 
 
 class TestComfyuiFilterCannotEscapeTokenScope:
-    """Token-level regression for the ComfyUI stack-member scope escape.
+    """Token-level guard against the ComfyUI stack-member scope escape.
 
     ``Picture.find`` expands a stack-collapsed grid so a stack leader shows when
     *any* member of its stack was made with the filtered model or LoRA.  That
@@ -2099,9 +2090,9 @@ class TestComfyuiFilterCannotEscapeTokenScope:
 
         ``fields=grid`` implies ``stack_leaders_only``, so this is the default
         share-gallery view: the exact request a share-link visitor's browser
-        makes when they touch the ComfyUI filter chips.  Under the bug the
-        response carried grid rows -- ``file_path`` included -- for every member
-        of every stack that contained a match, library-wide.
+        makes when they touch the ComfyUI filter chips.  An escape would carry
+        grid rows -- ``file_path`` included -- for every member of every stack
+        that contained a match, library-wide.
         """
         for filter_param in self.FILTER_PARAMS:
             r = self._scoped_get(
@@ -2659,14 +2650,10 @@ class TestRateLimiter:
         """After the window expires the counter resets and requests go through again.
 
         The window has to outlast the three logins below, because the limiter
-        slides: with a 1s window the first hit was already evicted by the time
-        the third arrived whenever the two bcrypt password verifications took
-        more than a second between them, and the assertion below saw 200
-        instead of 429. That is a wall-clock budget, not a limiter bug, and it
-        went from rare to reproducible once CI started running test files
-        concurrently. ``_WINDOW`` is therefore sized with enough headroom to
-        survive a contended runner; the reset itself is still proven by
-        sleeping past it.
+        slides: with a short window the first hit can be evicted by the time
+        the third arrives, since each bcrypt password verification is slow.
+        ``_WINDOW`` is therefore sized with enough headroom to survive a
+        contended runner; the reset itself is still proven by sleeping past it.
         """
         window_seconds = 5
         with (

@@ -300,12 +300,12 @@ class _RecordingDB(_FakeDB):
 
 
 def test_regeneration_announces_the_pictures_it_repaired(tmp_path):
-    """Silence here is why a rotate's undo needed a full page reload.
+    """Regeneration announces what it repaired, so a rotate's undo repaints.
 
     While a picture sits at ``thumbnail_width IS NULL`` it has no stored aspect
     ratio, so its card lays out with the wrong shape, and its cache token is
-    ``"0"``. This task fixes both - and used to tell nobody, so an open grid kept
-    painting the pre-rotate tile until the whole view was reloaded by hand.
+    ``"0"``. This task fixes both, and must say so, or an open grid keeps
+    painting the pre-rotate tile until the whole view is reloaded by hand.
     """
     _write_source(tmp_path, "announced.png", 800, 400)
     pic = SimpleNamespace(

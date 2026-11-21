@@ -83,10 +83,10 @@ def _memberships(session, pic_id):
 def _make_anchor(session, kind, project_id, pic_id, name, face_index=0):
     """Create an entity of *kind* assigned to *project_id* anchoring *pic_id*.
 
-    Since issue #125 the assignment is written in both representations - the
+    The assignment is written in both representations - the
     scalar primary-project FK *and* the membership join row - via
     ``set_character_projects`` / ``set_picture_set_projects``, because
-    ``picture_referenced_by_project`` now reads the join. A fixture that only set
+    ``picture_referenced_by_project`` reads the join. A fixture that only set
     the FK would leave the anchor invisible and silently weaken every
     reference-aware retention assertion below.
 
@@ -464,7 +464,7 @@ def test_entity_leaving_all_projects_unassigns_it(server, kind):
 def test_secondary_membership_anchors_a_picture(server, kind):
     """Reference-aware retention must see an anchor's *secondary* project.
 
-    The regression this pins: reading the primary-project FK instead of the join
+    Reading the primary-project FK instead of the join
     would miss an entity whose membership in the departed project is not its
     lowest one, and would evict the picture from a project it still belongs to.
     """

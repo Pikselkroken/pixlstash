@@ -1,6 +1,6 @@
 """Independent verification of the row-granular pipeline on a real ``Server``.
 
-One module-scoped server with the four GPU stages the throughput plan touched
+One module-scoped server with the four GPU stages of the pipeline
 left in the planner - faces, tags, CLIP, text embeddings - and every other
 finder detached (CLAUDE.md, *Tests: reuse the environment*). Descriptions are
 switched off in the tagger settings, so the text stage has to run on tags
@@ -441,7 +441,7 @@ def _pending_work(vault) -> dict:
 
 
 def test_the_idle_sweep_releases_the_models_only_when_progress_is_polled(env):
-    """With ``keep_models_in_memory=False`` the tag finder no longer tears the
+    """With ``keep_models_in_memory=False`` the tag finder does not tear the
     tagger down on drain; the ONLY release path is ``Vault.get_worker_progress``
     (the ``/workers/progress`` poll). After a pass the tagger is still resident
     until something polls, and one poll past ``AGGRESSIVE_UNLOAD_INTERVAL``
