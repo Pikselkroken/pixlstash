@@ -790,6 +790,56 @@ def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, capti
     assert paths == {"image": image, "caption": caption}
 
 
+# MiniMax H3 Image's text encoder, as ComfyUI's template ships it and as the
+# smaller NVFP4 quantization each built-in's "-nvfp4-TE" twin loads instead.
+H3_TE_INT8 = "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+H3_TE_NVFP4 = "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+NVFP4_TE = "-nvfp4-TE"
+
+
+def _h3_te_pairs() -> list[tuple[str, str]]:
+    """Every built-in loading the int8 encoder, with its nvfp4 twin's name."""
+    return [
+        (path.name, f"{path.stem}{NVFP4_TE}.json")
+        for path in sorted(BUILT_IN.glob("*.json"))
+        if f'"clip_sha256": "{H3_TE_INT8}"' in path.read_text(encoding="utf-8")
+    ]
+
+
+def test_every_int8_text_encoder_built_in_has_its_nvfp4_twin():
+    """Wrong if a MiniMax H3 Image built-in ships without its nvfp4 TE twin,
+    or a twin is left behind by a regular file that was renamed."""
+    pairs = _h3_te_pairs()
+    assert len(pairs) == 5, pairs
+    twins = sorted(path.name for path in BUILT_IN.glob(f"*{NVFP4_TE}.json"))
+    assert twins == sorted(twin for _, twin in pairs)
+
+
+@pytest.mark.parametrize("regular, twin", _h3_te_pairs())
+def test_an_nvfp4_te_twin_is_its_regular_built_in_but_for_the_encoder(regular, twin):
+    """The twin may differ from its regular file in the main text encoder's
+    digest and its saved pictures' name, nothing else: the prompt enhancer's
+    own encoder, the sampler and every size stay the regular file's. So
+    PixlStash reads it the same way, prompt targets and all."""
+    graph, other = _load(BUILT_IN / regular), _load(BUILT_IN / twin)
+    (encoder,) = [
+        key
+        for key, node in other.items()
+        if node["inputs"].get("clip_sha256") == H3_TE_NVFP4
+    ]
+    other[encoder]["inputs"]["clip_sha256"] = H3_TE_INT8
+    (save,) = [key for key, node in other.items() if node["class_type"] == "SaveImage"]
+    prefix = graph[save]["inputs"]["filename_prefix"]
+    assert other[save]["inputs"]["filename_prefix"] == prefix + NVFP4_TE
+    other[save]["inputs"]["filename_prefix"] = prefix
+    assert other == graph
+    assert detect_workflow_io(_load(BUILT_IN / twin)) == detect_workflow_io(graph)
+    assert run_targets(_load(BUILT_IN / twin)) == run_targets(graph)
+    # The Workflows page shows the twin with its regular file's thumbnail.
+    thumbnails = [(BUILT_IN / name).with_suffix(".webp") for name in (regular, twin)]
+    assert [p.is_file() for p in thumbnails] == [thumbnails[0].is_file()] * 2
+
+
 def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     """Wrong if the run cuts the enhancer out (the encoder's wire replaced by the
     words) or the recipe reads its 38 KB instructions as the prompt."""

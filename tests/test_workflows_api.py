@@ -6175,6 +6175,55 @@ def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
     assert sizes == {("width", 2560), ("height", 1536)}
 
 
+def test_an_nvfp4_te_twin_reads_as_its_regular_built_in(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Each MiniMax H3 Image built-in ships a twin loading the NVFP4 text
+    encoder. Wrong if the twin's card differs in anything but its name (type,
+    reference inputs, models, size defaults: what the sheet step picks by),
+    or if it names the int8 encoder, which a machine without it is offered."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = comfyui_module.WORKFLOW_BUILTIN_DIR
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
+    )
+    owner = workflow_env.owner
+    int8 = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+    nvfp4 = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    twins = sorted(
+        name for name in os.listdir(builtin) if name.endswith("-nvfp4-TE.json")
+    )
+    assert len(twins) == 5, twins
+    for twin in twins:
+        regular = twin.replace("-nvfp4-TE", "")
+        ids = []
+        for name in (regular, twin):
+            r = owner.post(f"{API}/comfyui/workflows/{name}/card")
+            assert r.status_code == 200, r.text
+            ids.append(r.json()["workflow_id"])
+        cards = _by_key(_cards(owner))
+        own = {"id", "name", "version_at", "created_at", "changed_at"}
+        a, b = ({k: v for k, v in cards[i].items() if k not in own} for i in ids)
+        assert a == b, twin
+        assert cards[ids[1]]["name"] == twin.removesuffix(".json")
+        details = [_detail(owner, i)["card"] for i in ids]
+        files = [
+            [(m["kind"], m["filename"]) for m in card["default_recipe"]["models"]]
+            for card in details
+        ]
+        assert ("text_encoder", int8) in files[0], twin
+        assert ("text_encoder", nvfp4) in files[1], twin
+        swapped = sorted((kind, int8 if f == nvfp4 else f) for kind, f in files[1])
+        assert swapped == sorted(files[0]), twin
+        defaults = [
+            sorted((r["input_name"], json.dumps(r["value"])) for r in card["defaults"])
+            for card in details
+        ]
+        assert defaults[0] == defaults[1], twin
+
+
 def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     workflow_env, tmp_path, monkeypatch
 ):
