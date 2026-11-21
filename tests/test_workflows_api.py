@@ -142,6 +142,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
+from pixlstash.utils.comfyui_utilities import extract_generation_info
 from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
@@ -13808,6 +13809,7 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "positive_settable": True,
         "negative_settable": False,
         "positive_text": "the saved prompt",
+        "enhancer": False,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -13819,6 +13821,77 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     assert {"code": "prompt_not_applied", "side": "negative"} in (
         r.json()["groups"][0]["flags"]
     )
+
+
+def test_a_run_can_go_without_the_prompt_enhancer(runnable):
+    """`enhance_prompt: false` hands the prompt to the encoder as written and
+    takes the enhancer out, so its model is never loaded; left out, the
+    enhancer rewrites it as before. Wrong if either run sends the other's graph."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document.update(
+        {
+            "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ["23", 0]}},
+            "20": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen.st"}},
+            "21": {
+                "class_type": "StringReplace",
+                "inputs": {
+                    "string": "Expand this: {input text}",
+                    "find": "{input text}",
+                    "replace": "the saved prompt",
+                },
+            },
+            "22": {
+                "class_type": "TextGenerateV2",
+                "inputs": {"clip": ["20", 0], "prompt": ["21", 0]},
+            },
+            "23": {
+                "class_type": "JsonExtractString",
+                "inputs": {"json_string": ["22", 0], "key": "expanded_caption"},
+            },
+        }
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    for class_type in ("CLIPTextEncode", "StringReplace", "JsonExtractString"):
+        info[class_type] = {"input": {"required": {}}}
+    info["TextGenerateV2"] = {"input": {"required": {"clip": ["CLIP", {}]}}}
+    info["CLIPLoader"] = {"input": {"required": {"clip_name": [["qwen.st"], {}]}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    for enhance in (None, True):
+        body = asked if enhance is None else {**asked, "enhance_prompt": enhance}
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+        sent = runnable.submitted.pop()["graph"]
+        assert sent["5"]["inputs"]["text"] == ["23", 0]
+        assert sent["21"]["inputs"]["replace"] == "a lighthouse at dusk"
+        assert {"20", "21", "22", "23"} <= set(sent)
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    # Still said, so the Run popup keeps the switch it was turned off with.
+    assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    assert not {"20", "21", "22", "23"} & set(sent)
+    assert extract_generation_info(sent)["positive_prompt"] == ("a lighthouse at dusk")
+    # The pre-flight judges the graph that would run: no enhancer model.
+    del info["CLIPLoader"]
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
 
 
 def test_more_runs_than_one_request_starts_are_refused(runnable):
@@ -14677,6 +14750,7 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "negative_settable": False,
         "positive_text": "the saved prompt",
         "unplaced": [],
+        "enhancer": False,
     }
 
 
@@ -14707,6 +14781,7 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "negative_settable": False,
         "positive_text": None,
         "unplaced": ["positive"],
+        "enhancer": False,
     }
     assert "positive prompt was not applied" in caplog.text
     # Nothing was sent, so nothing is unplaced: only the popup needs telling.
