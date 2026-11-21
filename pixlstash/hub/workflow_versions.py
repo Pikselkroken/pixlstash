@@ -54,6 +54,10 @@ MAX_COMFYUI_VERSIONS = MAX_VERSIONS - 1
 # when the owner first saved over it.
 FROM_PICTURES = "pictures"
 
+# ``source`` of a built-in's version that a newer release shipped, stored over
+# a copy the owner never edited (``routes.comfyui.list_builtin_workflows``).
+FROM_RELEASE = "release"
+
 
 def _hash_of(workflow_id: str, document: str) -> Optional[str]:
     """``workflow_inbox.content_hash`` of a stored document, or ``None`` (logged)."""
@@ -165,8 +169,8 @@ def append_version(
     made from (:func:`reason`): what a Save changed (``models``, ``loras``,
     joined with a comma), ``run`` for a save of what a run changed,
     ``comfyui`` and ``mcp`` for a whole graph saved over the workflow,
-    ``revert:<n>`` for going back to version *n*, and ``chain`` for a LoRA
-    chain edit. (``pull`` on a stored row is a ComfyUI file the removed pull
+    ``revert:<n>`` for going back to version *n*, ``chain`` for a LoRA
+    chain edit, and :data:`FROM_RELEASE` for a built-in a release changed. (``pull`` on a stored row is a ComfyUI file the removed pull
     read.)
 
     *api_document* is the stored conversion of *document*, kept when an
@@ -247,6 +251,7 @@ _REASONS = {
     "run": "saved from a run",
     "comfyui": "from ComfyUI",
     "mcp": "from an assistant",
+    FROM_RELEASE: "updated with PixlStash",
     "pull": "from ComfyUI",
 }
 REVERT_PREFIX = "revert:"
