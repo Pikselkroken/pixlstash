@@ -138,6 +138,16 @@
           placeholder="white sneakers"
           :options="offered.shoes"
         />
+        <!-- Photo look, wherever the server offers it for sheets: it replaces
+             the Natural/Off switch below. On, the run adds its lines and the
+             sheet prompt none of its own; off, neither adds a look. -->
+        <PromptAssistGroup
+          v-if="layout === 'prose' && sheetAssist"
+          :assist="sheetAssist"
+          :model="sheetLook"
+          :words="form.description"
+          @change="askSheetAssist"
+        />
         <!-- The choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
              them. -->
@@ -190,7 +200,7 @@
                 @pick="proportionsTouched = true"
               />
             </div>
-            <div v-if="layout === 'prose'" class="cs-opt">
+            <div v-if="layout === 'prose' && !sheetAssist" class="cs-opt">
               <FieldLabel>Photo look</FieldLabel>
               <Segmented
                 v-model="form.photo_look"
@@ -206,7 +216,7 @@
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
           >
-          <span v-if="layout === 'prose'" class="cs-hint"
+          <span v-if="layout === 'prose' && !sheetAssist" class="cs-hint"
             >Photo look asks for plain, unretouched photos rather than a
             polished render.</span
           >
@@ -704,6 +714,9 @@ import RecentInput from "../widgets/RecentInput.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
+import { usePromptAssist } from "../../composables/usePromptAssist";
+import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
+import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
   /** { id, name } of the character. */
@@ -833,12 +846,11 @@ const FACE_WAIT_MS = 90_000;
 // can be chosen unscored, and the polling stops.
 const SHEET_FACE_WAIT_MS = 120_000;
 const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
-// The last choices made on this machine, which a fresh step starts from: the
-// mode, each mode's workflow, the size, the count, and each person's LoRA.
-const CHOICES_KEY = "pixlstash:characterSheetChoices";
-// The fields whose last values a fresh step starts from and offers as typed.
+// The last choices made on this machine (`readChoices`), which a fresh step
+// starts from: the mode, each mode's workflow, the size, the count, and each
+// person's LoRA. The fields whose last values a fresh step starts from and
+// offers as typed:
 const RECENT_FIELDS = ["top", "trousers", "shoes", "background"];
-const RECENT_KEPT = 20;
 
 const tasks = useTasksStore();
 const name = computed(() => props.character?.name || "");
@@ -997,6 +1009,42 @@ const layout = computed(() => {
   return engine.value === ENGINES.moss ? "" : "prose";
 });
 /** The rail is the reference's: its control before drawing, the picture after. */
+/** The pre-flight's Photo look for sheets on the chosen workflow, or null. */
+const sheetAssist = ref(null);
+const sheetLook = usePromptAssist(sheetAssist, "sheet");
+let sheetAssistAsk = 0;
+/**
+ * Ask the chosen workflow for its sheet presets, and for the lines the
+ * current choices add. Asked with them even while off: the catalogue is the
+ * sheet context's only when the request names it.
+ */
+async function askSheetAssist() {
+  const ask = ++sheetAssistAsk;
+  const id = workflowId.value;
+  if (!id || layout.value !== "prose") {
+    sheetAssist.value = null;
+    return;
+  }
+  try {
+    const answer = await preflightWorkflowRun({
+      workflow_id: id,
+      count: 1,
+      prompt_assist: sheetLook.request() || { context: "sheet", choices: {} },
+    });
+    if (alive && ask === sheetAssistAsk) {
+      sheetAssist.value = answer?.groups?.[0]?.prompt?.assist || null;
+    }
+  } catch (e) {
+    console.warn("Couldn't ask for the photo look of sheet workflow", id, e);
+    if (ask === sheetAssistAsk) sheetAssist.value = null;
+  }
+}
+watch([workflowId, layout], askSheetAssist);
+// #2776's remembered Off seeds the group's Off, once.
+watch(sheetAssist, (assist) => {
+  if (assist && !form.photo_look && !sheetLook.hasStoredOn()) sheetLook.setOn(false);
+});
+
 const railIsReference = computed(() =>
   phase.value === "describe" ? fromReference.value : !!drawnFrom.value,
 );
@@ -1778,6 +1826,10 @@ async function draw() {
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
   const sheetLayout = layout.value;
+  // Where the group shows it is the photo look's On/Off: off adds no look.
+  const grouped = Boolean(sheetAssist.value) && sheetLayout === "prose";
+  const assist = grouped ? sheetLook.request() : null;
+  const photoLook = grouped ? false : form.photo_look;
   rememberRecent();
   try {
     const description = form.description.trim();
@@ -1796,7 +1848,9 @@ async function draw() {
       subject: form.subject,
       proportions: form.proportions,
       // The route ignores it for any layout but prose.
-      photo_look: form.photo_look,
+      photo_look: photoLook,
+      // The run adds Photo look's lines, so the sheet prompt adds none.
+      ...(assist ? { look_added_by_run: true } : {}),
       trigger: trigger.value,
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
@@ -1808,6 +1862,7 @@ async function draw() {
       lora?.sha256 || "",
       weight,
       reference,
+      assist,
     ]);
     const answer = await runWorkflowCard({
       workflow_id: workflow,
@@ -1843,6 +1898,7 @@ async function draw() {
       // Not the library's until kept: imported straight to the Scrapheap.
       hold: true,
       label: `Character sheet · ${name.value}`,
+      ...(assist ? { prompt_assist: assist } : {}),
     });
     const started = (answer?.prompts || []).filter((p) => runKey(p));
     if (!started.length) {
@@ -1865,6 +1921,7 @@ async function draw() {
       })),
     );
     runHistory.value.push(...started.map((p) => runKey(p)));
+    sheetLook.recordRun();
     phase.value = "drawing";
     gaveUpOnFaces.value = false;
     schedule();
@@ -2268,15 +2325,6 @@ async function restore(saved) {
   restored.value = true;
 }
 
-function readChoices() {
-  try {
-    return JSON.parse(localStorage.getItem(CHOICES_KEY) || "{}") || {};
-  } catch (e) {
-    console.warn("Couldn't read the remembered sheet choices", e);
-    return {};
-  }
-}
-
 /** The remembered choices as `restore` reads them, or null: a mode only where
  * it can draw (from a reference only for a person with a face, as `load`
  * decides), and this person's own LoRA. */
@@ -2321,15 +2369,10 @@ function rememberRecent() {
   remember((all) => {
     const lists = readRecent(all);
     for (const field of fields) {
-      const value = String(form[field] || "").trim();
-      // Case folded, as the menu matches: "A red coat" replaces "a red coat".
-      const same = (v) => v.toLowerCase() === value.toLowerCase();
-      lists[field] = [value, ...lists[field].filter((v) => !same(v))].slice(
-        0,
-        RECENT_KEPT,
-      );
+      lists[field] = withRecent(lists[field], String(form[field] || "").trim());
     }
-    all.recent = lists;
+    // Photo look's typed entries share the document: keep them.
+    all.recent = { ...all.recent, ...lists };
     recent.value = lists;
   });
 }
@@ -2338,13 +2381,7 @@ function rememberRecent() {
  * step is restored, so a default is never remembered as a choice. */
 function remember(update) {
   if (!restored.value || restoring) return;
-  try {
-    const all = readChoices();
-    update(all);
-    localStorage.setItem(CHOICES_KEY, JSON.stringify(all));
-  } catch (e) {
-    console.warn("Couldn't remember the sheet choices", e);
-  }
+  writeChoices(update);
 }
 
 watch(mode, (now) =>

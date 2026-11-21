@@ -6263,6 +6263,274 @@ describe("the prompt enhancer", () => {
   });
 });
 
+// Photo look: the server's presets for a model family, under the prompt. What
+// can silently go wrong: it shows for a family without presets, it costs a
+// click before Run, its lines land in the owner's prompt box, or a typed look
+// is lost instead of remembered.
+describe("Photo look", () => {
+  const ASSIST = {
+    family: "minimax_h3_image",
+    context: "photo",
+    preset_version: 1,
+    default_on: true,
+    applied: true,
+    categories: [
+      {
+        id: "camera",
+        label: "Camera",
+        default: "phone",
+        options: [{ id: "phone", label: "Phone snapshot", text: "Taken on a phone." }],
+      },
+      {
+        id: "light",
+        label: "Light",
+        default: "window",
+        options: [{ id: "window", label: "Window daylight", text: "Window daylight." }],
+      },
+      {
+        id: "skin",
+        label: "Skin and makeup",
+        default: "none",
+        options: [{ id: "mature", label: "Mature (older subjects)", text: "Mature skin." }],
+      },
+    ],
+    parts: [
+      { category: "camera", id: "phone", text: "Taken on a phone." },
+      { category: "light", id: "window", text: "Window daylight." },
+      { category: "camera", id: "phone", kind: "finish", text: "An unedited phone photo." },
+    ],
+    recorded: null,
+  };
+  const answer = (assist = ASSIST, extra = {}) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, assist, ...extra } }],
+  });
+  const group = (wrapper) => wrapper.find('[data-testid="pa"]');
+  const LABELS = { camera: "Camera", light: "Light", skin: "Skin and makeup" };
+  const field = (wrapper, id) =>
+    wrapper
+      .findAllComponents({ name: "BaseModelInput" })
+      .find((c) => c.props("listLabel") === LABELS[id]);
+  const promptBox = (wrapper) =>
+    wrapper
+      .findAllComponents({ name: "AppTextarea" })
+      .find((c) => c.props("label") === "Prompt");
+  const sent = async (wrapper) => {
+    await wrapper.vm.submit();
+    await flushPromises();
+    return runWorkflowCard.mock.lastCall[0];
+  };
+  const typeIn = async (wrapper, id, text) => {
+    field(wrapper, id).vm.$emit("update:modelValue", text);
+    field(wrapper, id).vm.$emit("blur");
+    await flushPromises();
+  };
+
+  beforeEach(() => localStorage.clear());
+
+  it("is not drawn, and sends nothing, without presets for the family", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(null));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(group(wrapper).exists()).toBe(false);
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+  });
+
+  it("is on by default: typing a prompt and Run sends it, with no other click", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(group(wrapper).exists()).toBe(true);
+    expect(group(wrapper).find('[data-testid="pa-summary"]').text()).toBe(
+      "Phone snapshot · Window daylight",
+    );
+    // One field per category the server sends, in its order.
+    expect(
+      wrapper
+        .findAllComponents({ name: "BaseModelInput" })
+        .map((c) => c.props("listLabel")),
+    ).toEqual(["Camera", "Light", "Skin and makeup"]);
+    // Asked again with it, so the lines and the enhancer default are the run's.
+    expect(preflightWorkflowRun.mock.lastCall[0].prompt_assist).toEqual({
+      context: "photo",
+      choices: { camera: { id: "phone" }, light: { id: "window" }, skin: "none" },
+    });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a woman in a green coat");
+    await flushPromises();
+    const body = await sent(wrapper);
+    expect(body.prompt).toBe("a woman in a green coat");
+    expect(body.prompt_assist).toEqual({
+      context: "photo",
+      choices: { camera: { id: "phone" }, light: { id: "window" }, skin: "none" },
+    });
+  });
+
+  it("never writes into the prompt box, whatever is switched or typed", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a mug on a desk");
+    await flushPromises();
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await group(wrapper).find('[data-testid="pa-reset"]').trigger("click");
+    await flushPromises();
+    expect(promptBox(wrapper).props("modelValue")).toBe("a mug on a desk");
+    expect((await sent(wrapper)).prompt).toBe("a mug on a desk");
+  });
+
+  it("is drawn off for a family the server does not turn on, and On is remembered", async () => {
+    const qwen = { ...ASSIST, family: "qwen_image", default_on: false };
+    preflightWorkflowRun.mockResolvedValue(answer(qwen));
+    let wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const toggle = () => group(wrapper).find('[data-testid="pa-on"]');
+    expect(toggle().attributes("aria-checked")).toBe("false");
+    expect(group(wrapper).find('[data-testid="pa-summary"]').text()).toBe(
+      "Off. Turn on to add camera, light and skin lines.",
+    );
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+    await toggle().trigger("click");
+    wrapper.unmount();
+    wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(toggle().attributes("aria-checked")).toBe("true");
+    expect((await sent(wrapper)).prompt_assist.context).toBe("photo");
+    // Per family: MiniMax H3 Image keeps its own default.
+    expect(JSON.parse(localStorage.getItem("pixlstash:promptAssist"))).toEqual({
+      qwen_image: { photo: { on: true } },
+    });
+  });
+
+  it("off sends no prompt_assist", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    expect(group(wrapper).find('[data-testid="pa-on"]').attributes("aria-checked")).toBe(
+      "false",
+    );
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+  });
+
+  it("a typed look is sent as typed and joins Your entries once the run is sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    const offered = () => field(wrapper, "camera").props("options").map((o) => o.value);
+    expect(offered()).toEqual(["Phone snapshot"]);
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toEqual({
+      text: "Old Pentax K1000",
+    });
+    expect(offered()).toEqual(["Phone snapshot", "Old Pentax K1000"]);
+  });
+
+  it("Enter on typed text keeps it as typed, and the run adds it to Your entries", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const input = field(wrapper, "camera").find("input");
+    await input.trigger("focus");
+    await input.setValue("Old Pentax K1000");
+    await flushPromises();
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Old Pentax K1000");
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toEqual({
+      text: "Old Pentax K1000",
+    });
+    expect(
+      field(wrapper, "camera")
+        .props("options")
+        .filter((o) => o.removable)
+        .map((o) => o.value),
+    ).toEqual(["Old Pentax K1000"]);
+  });
+
+  it("marks a kept text of your own, and never a preset, even typed by name", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const marker = () => wrapper.find('[data-testid="pa-own-camera"]');
+    expect(marker().exists()).toBe(false);
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    expect(marker().text()).toBe("Your own");
+    await typeIn(wrapper, "camera", "phone snapshot");
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Phone snapshot");
+    expect(marker().exists()).toBe(false);
+  });
+
+  it("an entry's (x) removes it and Clear all removes them all", async () => {
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({
+        recent: {
+          "photoLook:minimax_h3_image:photo:camera": ["Old Pentax", "Webcam", "Polaroid"],
+        },
+      }),
+    );
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const entries = () =>
+      field(wrapper, "camera")
+        .props("options")
+        .filter((o) => o.removable)
+        .map((o) => o.value);
+    expect(entries()).toEqual(["Old Pentax", "Webcam", "Polaroid"]);
+    field(wrapper, "camera").vm.$emit("remove", "Webcam");
+    await flushPromises();
+    expect(entries()).toEqual(["Old Pentax", "Polaroid"]);
+    field(wrapper, "camera").vm.$emit("foot-action");
+    await flushPromises();
+    expect(entries()).toEqual([]);
+  });
+
+  it("an emptied field adds nothing for that category, and stays empty", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    let wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await typeIn(wrapper, "camera", "");
+    expect(field(wrapper, "camera").props("modelValue")).toBe("");
+    expect(field(wrapper, "camera").find("input").attributes("placeholder")).toBe(
+      "Nothing added",
+    );
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toBe("none");
+    wrapper.unmount();
+    wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(field(wrapper, "camera").props("modelValue")).toBe("");
+  });
+
+  it("Show full prompt reads your words, then each added line marked + and named", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a mug on a desk");
+    await group(wrapper).find('[data-testid="pa-show-full"]').trigger("click");
+    const lines = group(wrapper)
+      .findAll('[data-testid="pa-full"] .pa-line')
+      .map((line) =>
+        line
+          .findAll(":scope > span")
+          .map((span) => span.text())
+          .join(" ")
+          .trim(),
+      );
+    expect(lines).toEqual([
+      "Your prompt a mug on a desk",
+      "+ Camera, line added by Photo look Taken on a phone.",
+      "+ Light, line added by Photo look Window daylight.",
+      // The camera's built-in finish, last, on a line of its own.
+      "+ Look, line added by Photo look An unedited phone photo.",
+    ]);
+  });
+
+  it("the Enhance box starts from the server's enhancer_on, and a tick is sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer(ASSIST, { enhancer: true, enhancer_on: false }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const box = wrapper.find('[data-testid="rund-enhance"]');
+    expect(box.element.checked).toBe(false);
+    expect(wrapper.text()).toContain("Off because Photo look is on");
+    expect(await sent(wrapper)).not.toHaveProperty("enhance_prompt");
+    await box.setValue(true);
+    await flushPromises();
+    expect((await sent(wrapper)).enhance_prompt).toBe(true);
+  });
+});
+
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
 // makes a NEW workflow. What can silently go wrong: the workflow opens without
 // the form's changes (the body is not the run's), or the tab is opened after

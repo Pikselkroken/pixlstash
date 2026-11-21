@@ -944,6 +944,108 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect((await sent(wrapper)).photo_look).toBe(false);
   });
 
+  it("Photo look replaces the Natural/Off switch where the engine has sheet presets", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      preset_version: 1,
+      default_on: true,
+      applied: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+      recorded: null,
+    };
+    // A look typed in an earlier sheet, kept with the sheet step's recents.
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({ recent: { "photoLook:krea2:sheet:look": ["Polaroid"] } }),
+    );
+    const plain = { ok: true, groups: [{ reasons: [] }] };
+    // The sheet presets come back only to a request that names the context.
+    gen.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.prompt_assist?.context === "sheet" && body.workflow_id === KREA_CARD.id
+        ? { ok: true, groups: [{ reasons: [], prompt: { assist } }] }
+        : plain,
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    const pick = async (id) => {
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .vm.$emit("update:modelValue", id);
+      await flushPromises();
+    };
+    const group = () => wrapper.find('[data-testid="pa"]');
+    const segmented = () => wrapper.find('[data-testid="cs-photo-look"]');
+    await pick("manual:moss");
+    expect([group().exists(), segmented().exists()]).toEqual([false, false]);
+    await pick("manual:krea");
+    // One or the other, never both.
+    expect([group().exists(), segmented().exists()]).toEqual([true, false]);
+    expect(group().find('[data-testid="pa-summary"]').text()).toBe("Agency digitals");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).toEqual(
+      expect.objectContaining({ layout: "prose", look_added_by_run: true }),
+    );
+    expect(gen.runWorkflowCard.mock.lastCall[0].prompt_assist).toEqual({
+      context: "sheet",
+      choices: { look: { id: "agency" } },
+    });
+    // The Run dialog's photo context is untouched by the sheet's.
+    expect(
+      JSON.parse(localStorage.getItem("pixlstash:promptAssist") || "{}").krea2?.photo,
+    ).toBeUndefined();
+    // The draw recorded its clothes beside the typed look, and kept the look.
+    const recent = JSON.parse(localStorage.getItem("pixlstash:characterSheetChoices")).recent;
+    expect(recent["photoLook:krea2:sheet:look"]).toEqual(["Polaroid"]);
+    expect(recent).toHaveProperty("top");
+    wrapper.unmount();
+  });
+
+  it("Photo look off: no look at all, from the run or the sheet prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [{ id: "look", label: "Closing look", default: "none", options: [] }],
+      parts: [],
+    };
+    gen.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.prompt_assist
+        ? { ok: true, groups: [{ reasons: [], prompt: { assist } }] }
+        : { ok: true, groups: [{ reasons: [] }] },
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("look_added_by_run");
+    // The group is #2776's switch here: off is `photo_look: false`.
+    expect(gen.buildSheetPrompt.mock.lastCall[0].photo_look).toBe(false);
+    expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("prompt_assist");
+    wrapper.unmount();
+  });
+
   it("draws text sheets with a MiniMax H3 text-to-image workflow, in prose", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

@@ -1585,7 +1585,8 @@ Load-bearing behaviours:
 - **Save as recipe lists one row per LoRA**, each removable with Restore, and a LoRA the shelf cannot identify is flagged with what a run will do with it. Taking a flagged one off asks **"Take X out of what?"** every time: this recipe (the row goes) or the workflow, which opens `/workflows?workflow=<id>&edit=loras&drop_lora=<filename>` (`loraChain.editLorasRoute(id)`) with that loader already deleted. The saved body holds exactly the rows shown.
 - **A missing model blocks the WHOLE batch**, mirroring `workflow_run_service.blocks_batch`: installing a file is a trip away from the keyboard, so queueing the rest would leave the owner repeating the gesture to catch what was skipped. A group that cannot run stays on screen, faded, with its reason and its count — filtering it out would make the total add up and say nothing about why. `MakeMoreDialog.test.js` pins that.
 - **An empty prompt box is `null`, not `""`.** `apply_prompts` leaves the graph alone on `None` and writes on `""`, so the two are opposite instructions: "leave the graph's own text alone" and "blank every positive-prompt node". Only a box that *had* text in it and was cleared sends `""`. A card and a multi-picture selection read no recipe, so their box is empty because nothing filled it, and sending that would generate from no prompt at all. Such a box is then filled with the workflow's own prompt once the pre-flight has read it (`RunGroup.prompt.positive_text`), and where `positive_settable` is false there is no box at all, only a line saying so, and `prompt` goes as `null`.
-- **Enhance prompt** (`data-testid="rund-enhance"`), a checkbox under the Prompt box with a one-line hint, drawn only where the pre-flight's first group reports `prompt.enhancer` (a `TextGenerate` language model rewrites the prompt before its encoder; the popup runs one workflow, so the first group is the card's). On by default, per run and never remembered, like the stack and the stages. Off is `enhance_prompt: false` in `runBody`, so the pre-flight, the run and Open in ComfyUI all carry it, and the box re-asks the pre-flight, whose answer is about the graph without the enhancer (its model no longer counts as missing). On sends nothing. The server keeps reporting `enhancer: true` with the enhancer cut, so the box does not vanish when turned off, and `false` on a graph with no enhancer is a no-op, so the field is not gated on the box being drawn.
+- **Photo look** (`PromptAssistGroup.vue`, `io/`), between the Prompt box and Enhance prompt, wherever the pre-flight's first group carries `prompt.assist` (a prose prompt the run can set; `null` draws nothing). The server's catalogue drives it: one typeable field per `categories` entry (Camera, Light, Skin and makeup today), on where `assist.default_on` says (MiniMax H3 Image), off elsewhere until turned on. Collapsed it is one row: a disclosure button over *Photo look* and a summary of what is added, a *Show full prompt* eye, and an On/Off `role="switch"` with the word beside it. **The prompt box is never written to.** The request carries `prompt_assist: { context: "photo", choices }` beside `prompt` (absent is off), and the full-prompt view is the owner's words, then the pre-flight's `assist.parts`, each line marked `+` and named (a `kind: "finish"` part is *Look*), never by colour alone. The first answer on a family with presets was asked without them, so `runPreflight` asks once more with them; every change in the group re-asks, which refreshes the parts and `enhancer_on`. A run sent records the typed texts as entries. State is `usePromptAssist` (below).
+- **Enhance prompt** (`data-testid="rund-enhance"`), a checkbox under the Prompt box with a one-line hint, drawn only where the pre-flight's first group reports `prompt.enhancer` (a `TextGenerate` language model rewrites the prompt before its encoder; the popup runs one workflow, so the first group is the card's). Per run and never remembered, like the stack and the stages. Untouched it shows the server's `prompt.enhancer_on` (off while Photo look adds lines, which the hint then says) and sends nothing; touched, `enhance_prompt` is sent either way in `runBody`, so the pre-flight, the run and Open in ComfyUI all carry it, and the box re-asks the pre-flight, whose answer is about the graph without the enhancer (its model no longer counts as missing). The server keeps reporting `enhancer: true` with the enhancer cut, so the box does not vanish when turned off, and `false` on a graph with no enhancer is a no-op, so the field is not gated on the box being drawn.
 - **`count` is per RECIPE, unless the recipe takes its pictures.** `_submit_every` runs each card `count` times; the pictures only choose which cards run — except where a card's picture input is fed from them (`fill: "selection"`, #1457), when the run repeats once per picture. `MakeMoreDialog` therefore counts each runnable group once, or once per picture where it feeds them, times `count`, reads that from the pre-flight rather than deciding it, and labels the field plain **"Count"** since it is per recipe for one card and per picture for another. A card it cannot run because it needs a picture chosen is named with `picture_input_unfilled`'s sentence; that dialog has no picture UI of its own.
 - **The ceiling is on the TOTAL, and it is 200.** `MAX_RUNS_PER_REQUEST` (`routes/comfyui.py`) is checked by `_plan` against the sum over every group, so two recipes at 150 each is a 400 although each count is legal. Both popups guard the product and name the number rather than letting the owner find it by pressing Run.
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
@@ -1751,7 +1752,14 @@ Escape and Enter do nothing here: cancelling deletes a set.
   `Segmented`, on by default) is sent as `photo_look` and shows, with its
   hint, only while the step's `layout` computed is `"prose"` (every engine but
   MOSS-Image, and every draw from a reference); the route ignores it for
-  MOSS-Image's layout and a sheet copy's regions. The step reads the
+  MOSS-Image's layout and a sheet copy's regions. Where the chosen workflow's
+  pre-flight, asked with `prompt_assist: { context: "sheet" }`, answers an
+  `assist`, the shared Photo look group (see the Run popup) **replaces** that
+  `Segmented`, under Shoes; no engine shows both. Its On is then the photo
+  look: on, the draw sends `look_added_by_run: true` to
+  `POST /character-sheets/prompt` (the sheet prompt adds no look of its own)
+  and `prompt_assist` on the run; off, `photo_look: false` and neither.
+  A remembered #2776 Off seeds the group's Off once. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
@@ -1962,7 +1970,31 @@ Bottoms, Shoes and Background was drawn with, newest first, recorded at draw
 each field with the newest, `""` included, so a field left empty stays empty.
 The fields are `RecentInput` (`widgets/`): AppInput's look over a
 `BaseModelInput` given the list as `options`, its value selected on entering
-it so the first key typed replaces it.
+it so the first key typed replaces it. The reading, writing and list rule
+(`withRecent`: newest first, a case-folded repeat moved to the front, twenty
+kept) live in `utils/recentValues.js`, because Photo look's typed entries are
+kept by the same rule in the same document, under
+`recent["photoLook:<family>:<context>:<category>"]`; a draw's write keeps them.
+
+**Photo look's choices** (`composables/usePromptAssist.js`, both surfaces)
+live in `localStorage` `pixlstash:promptAssist` until the hub holds them:
+`{ <family>: { <context>: { on?, choices? } } }`, `context` being `photo` (Run
+popup) or `sheet`. **Sparse: an absent key is "never chosen"** and follows the
+server's shipped default, so a release that moves a default reaches it; a
+choice is `{ id }` (a preset), `{ text }` (typed) or `"none"` (an emptied
+field), and `"none"` is kept. `on` is stored only when it differs from
+`default_on`. A field's text equal to a preset's name or sentence is that
+preset; an unchanged field writes nothing. Removing the entry a field shows
+empties the field; *Reset to defaults* drops `on` and `choices` and keeps the
+entries. `encodeChoice` is the one place the wire encoding of a choice lives.
+The rows are `BaseModelInput` with its opt-ins: `openOnFocus` (the full list
+on focus, filtering once typed; Tab leaves rather than fills), sectioned
+two-line options (*Presets*, then *Your entries*), `removable` entries with an
+(x) that is `aria-hidden` and Delete on an arrow-highlighted entry,
+`footAction` (*Clear all your entries*, in the arrow order), `ownText` (typed
+text no option equals is offered first as *Use "..."*, highlighted, its name
+"Use your own: ..."; typed text equal to an option highlights that option)
+and `hint`. A kept typed value wears a pencil marked *Your own*.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.
