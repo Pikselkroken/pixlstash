@@ -268,7 +268,7 @@ def _time_balanced_shard_assignment(
     * **Total.** Every position starts on its round-robin shard and is only ever
       *moved*, so a test that is new, renamed, or simply absent from the
       durations map still lands in exactly one shard. With an empty map the
-      result is byte-for-byte the old round-robin deal.
+      result is byte-for-byte the plain round-robin deal.
     * **Deterministic.** The eight shards compute this independently, in
       separate processes on separate runners, and must agree. Nothing here reads
       the clock, an RNG, or an unordered container: ties in duration break on
@@ -331,9 +331,8 @@ def pytest_collection_modifyitems(config, items):
     Sharding is applied to whatever pytest *collected*, so the CI matrix never
     names test files: adding ``tests/test_new_thing.py`` puts it in a shard
     automatically. That makes "every test is gated" a property of collection
-    rather than of a hand-maintained allowlist, which is the failure mode that
-    previously left most of ``tests/`` running only in the non-blocking
-    release-prep sweep.
+    rather than of a hand-maintained allowlist, which can silently leave tests
+    running only in the non-blocking release-prep sweep.
 
     Two modes, deliberately distinct, because they serve opposite goals:
 
@@ -343,9 +342,7 @@ def pytest_collection_modifyitems(config, items):
     not know and for the whole deal if the map is missing or unusable. That is
     the right choice for the blocking gate, whose finish time is its slowest
     shard: dealing round-robin equalises test *count* perfectly and test *time*
-    not at all, and the measured cost of that was a 1.62x spread across eight
-    shards (744 s to 1205 s) with roughly 460 s of runner sitting idle every
-    run. This mode does not preserve canonical execution order, in either
+    not at all. This mode does not preserve canonical execution order, in either
     variant.
 
     ``--ci-block-shard`` (contiguous) gives shard ``k`` the ``k``-th contiguous
@@ -763,15 +760,13 @@ def _enforce_test_time_budget(session) -> None:
     Only active under ``--ci-shard``, so a local partial run cannot trip it.
     A signal rather than a correctness gate: every test can pass and the shard
     is still over budget, which is why the banner says exactly that. The drift
-    it watches for (the gate creeping from 15 to 47 minutes per shard) has no
-    other alarm.
+    it watches for has no other alarm.
 
-    **It does not touch the exit status.** It used to, and that closed the loop
-    the breach is normally fixed by: refreshing ``ci_test_durations.json`` is
-    the standard remedy for a slow gate, and
+    **It does not touch the exit status.** Refreshing
+    ``ci_test_durations.json`` is the standard remedy for a slow gate, and
     ``.github/workflows/record-test-durations.yml`` refuses to harvest any run
     whose conclusion is not ``success`` (a red shard may never have reported
-    its durations). A shard failed purely for being slow therefore made the
+    its durations), so a shard failed purely for being slow would make the
     refresh impossible for exactly as long as it was needed. A red check also
     reads as "broken" to everything downstream that only sees an exit code, and
     this is not that. The signal is instead a GitHub annotation plus a step
@@ -882,16 +877,8 @@ def _enforce_no_leaked_threads(session) -> None:
     A worker thread that outlives the session is a defect on its own: the
     object that owns it was never closed, so whatever that object held -
     a SQLAlchemy engine, pooled SQLite connections, an fd on vault.db - is
-    still live too.
-
-    It was also the leading suspect for the Windows-only SIGSEGV that fires
-    *seconds after* a fully green pytest summary, on the theory that CPython
-    kills surviving daemon threads mid-instruction during ``Py_FinalizeEx``.
-    The evidence did not bear that out: run 35252455611 crashed with no
-    separator from this check anywhere in its log, i.e. with nothing but the
-    main thread alive. See ``tests/process_teardown`` for where that left the
-    diagnosis. This check stays because the defect it names is real on its own
-    terms, not because it is the fix.
+    still live too. It is not the cause of the Windows-only SIGSEGV after a
+    green pytest summary; see ``tests/process_teardown`` for that diagnosis.
 
     Threads with no frame of ours anywhere in their stack are reported but not
     failed on - a third-party pool we do not own is not ours to close.

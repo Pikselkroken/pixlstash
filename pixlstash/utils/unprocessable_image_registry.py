@@ -1,19 +1,19 @@
 """In-memory registry of pictures whose image file cannot be decoded.
 
-GitHub issue #585 ("Invalid Images break tasks"): the background pipeline is
-data-driven - every ``Missing*Finder`` re-selects any picture whose target
-column is still unset. When a picture points at a corrupt/undecodable file the
-task can never produce a value, nothing durably marks the row as done (the
-image-embedding task leaves the embedding NULL on failure, which ``fetch_work``
-treats as missing), so the same picture is picked up on every sweep forever.
+The background pipeline is data-driven - every ``Missing*Finder`` re-selects
+any picture whose target column is still unset. When a picture points at a
+corrupt/undecodable file the task can never produce a value, nothing durably
+marks the row as done (the image-embedding task leaves the embedding NULL on
+failure, which ``fetch_work`` treats as missing), so without this registry the
+same picture is picked up on every sweep forever.
 
-The reporter explicitly accepts that such a file may be "ignored for the
-remaining duration of the server process lifetime, or until it is modified". This
-registry implements exactly that: a process-lifetime, thread-safe set of picture
-ids that failed to decode, pinned to the file's ``(mtime, size)`` at the moment of
-failure. A finder consults :meth:`is_suppressed` to skip the picture; when the
-file is rewritten (the "still being written" / repaired case) its signature moves
-and suppression lifts automatically, so the picture is retried.
+Such a file is ignored for the remaining duration of the server process
+lifetime, or until it is modified. This registry is a process-lifetime,
+thread-safe set of picture ids that failed to decode, pinned to the file's
+``(mtime, size)`` at the moment of failure. A finder consults
+:meth:`is_suppressed` to skip the picture; when the file is rewritten (the
+"still being written" / repaired case) its signature moves and suppression
+lifts automatically, so the picture is retried.
 
 Nothing here is persisted - a server restart clears the registry, at which point
 each such picture is retried exactly once more (re-decoded, fails, re-marked),
@@ -172,9 +172,9 @@ class UnprocessableImageRegistry:
         deliberately refuses it too (``MissingFilePurgeTask`` skips a picture
         whose parent directory is missing, because purging would write
         ``file_removed=True`` and block a later restore). Between the two, a
-        picture on an unplugged drive had no owner at all: every batch finder
-        re-selected it on every sweep, produced nothing, and re-selected it
-        again.
+        picture on an unplugged drive would have no owner at all: every batch
+        finder would re-select it on every sweep, produce nothing, and
+        re-select it again.
 
         Suppression is the right answer and deletion is not, because this
         state ends by itself: the entry lifts the moment the parent directory
@@ -247,7 +247,7 @@ class UnprocessableImageRegistry:
         The signature is re-checked against the registry's OWN stored path, so
         callers never read ``Picture.file_path``: that ORM attribute is often
         deferred and the candidate pictures are detached by the time a finder
-        claims, so touching it there raised ``DetachedInstanceError`` (issue #585).
+        claims, so touching it there raises ``DetachedInstanceError``.
         """
         if picture_id is None:
             return False

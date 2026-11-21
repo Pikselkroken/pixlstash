@@ -10,9 +10,9 @@ directory before ``FaceAnalysis`` is constructed.
 
 **The root is a recorded location** rather than a constant, so the packs can be
 moved off the system drive - see :func:`insightface_root` and
-``POST /model-folders/{id}/relocate``. It is recorded exactly as #905 records the
-download folder's, and for the same reason: this path is machine-global, so it
-does not belong to one deployment's config file.
+``POST /model-folders/{id}/relocate``. It is recorded the same way as the
+download folder's, because this path is machine-global, so it does not belong
+to one deployment's config file.
 
 License note (the provenance decision is the user's; this module only makes the
 switch available):
@@ -87,11 +87,10 @@ def _pointer_path() -> str:
 
     Deliberately the *same* directory ``builtin_models`` records its own folder
     in, resolved by calling that module's seam rather than rebuilding
-    ``user_data_dir("pixlstash")`` here - a second expression for one directory
-    is the drift #905 spent a PR removing, and a test that redirects one pointer
-    must redirect both. The import is function-local so ``utils`` does not gain
-    a module-level dependency on ``services``, and so the monkeypatched
-    attribute is re-read on every call.
+    ``user_data_dir("pixlstash")`` here, so one directory has one expression,
+    and a test that redirects one pointer must redirect both. The import is
+    function-local so ``utils`` does not gain a module-level dependency on
+    ``services``, and so the monkeypatched attribute is re-read on every call.
     """
     from pixlstash.services.builtin_models import _pixlstash_data_dir
 
@@ -165,9 +164,7 @@ def insightface_root() -> str:
     (:mod:`pixlstash.services.builtin_caches`) and the ``FaceAnalysis(root=…)``
     the face pipeline constructs. That single-accessor property is what makes
     the root relocatable at all - a location only half the callers read would
-    move the shelf's row while the packs kept loading from the old directory,
-    which is precisely the failure #905 had to remove from the download folder
-    before it could be moved.
+    move the shelf's row while the packs kept loading from the old directory.
 
     Read on every call rather than cached, so a relocation applies to the next
     download instead of to the next restart.

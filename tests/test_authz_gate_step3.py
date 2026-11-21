@@ -1,27 +1,22 @@
-"""Step 3 of the centralised-authz refactor: the gate goes ENFORCING for the
-non-id-resolution policy classes (``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` /
-``PUBLIC``-consistency).
+"""The authz gate ENFORCING for the non-id-resolution policy classes
+(``OWNER_ONLY`` / ``LOCAL_OWNER_ONLY`` / ``PUBLIC``-consistency).
 
-This is the first step that actually DENIES, so every assertion here is
-both-directional per CLAUDE.md / §16.1: an out-of-scope principal is 403'd AND an
-in-scope principal still reaches the route (over-blocking - especially of the
-demo's share tokens - is its own regression).
+Every assertion here is both-directional per CLAUDE.md / §16.1: an out-of-scope
+principal is 403'd AND an in-scope principal still reaches the route
+(over-blocking - especially of the demo's share tokens - is its own regression).
 
-Toggle mechanism (principal ruling 2026-07-21): the shipped constant
-``AUTHZ_GATE_ENFORCING`` stays ``False`` (report-only) through Step 5; the
-owner-class enforcement *code* lands now and is proven by flipping the gate to
-``enforcing=True`` in these tests. Per-policy-class staging is carried by which
-branches are implemented - ``*_SCOPED`` / ``SCOPED_LIST`` / ``body_ids`` batch are
-pass-through until Step 4, asserted below. Because the shipped default stays
-report-only, none of this changes runtime behaviour until the Step-6 flip; the
-inline handler checks remain the live enforcement in the meantime.
+Toggle mechanism: the owner-class enforcement is proven by flipping the gate to
+``enforcing=True`` in these tests, independently of the shipped
+``AUTHZ_GATE_ENFORCING`` constant. The id-resolving classes (``*_SCOPED`` /
+``SCOPED_LIST`` / ``body_ids`` batch) are outside this file's owner-class
+enforcement, asserted below.
 
-Named regressions required by the plan:
-* §16.3 host-capability retarget (``owner_only`` -> ``local_owner_only``): a remote
-  owner COOKIE session is newly constrained vs a loopback one.
-* N2: reviews / tag_health flip - an unscoped-READ token (which the looser inline
-  ``fetch_scope_allowed`` gate admits) is newly 403'd by ``OWNER_ONLY``.
-* F-c rider: ``GET /users/me/auth`` tightened ``any_token`` -> ``owner_only``.
+Named cases:
+* §16.3 host-capability (``local_owner_only``): a remote owner COOKIE session is
+  constrained vs a loopback one.
+* reviews / tag_health - an unscoped-READ token (which the looser inline
+  ``fetch_scope_allowed`` gate admits) is 403'd by ``OWNER_ONLY``.
+* ``GET /users/me/auth`` is ``owner_only``, not ``any_token``.
 """
 
 import contextlib
@@ -146,7 +141,7 @@ def _bearer(token: str) -> dict:
 def test_owner_only_reviews_flip_both_directions():
     """GET /reviews is OWNER_ONLY. The inline ``fetch_scope_allowed`` gate ADMITS
     an unscoped-READ token (resource_type is None), so report-only lets it read;
-    the enforcing gate's ``require_unscoped_owner`` newly 403s it - while the owner
+    the enforcing gate's ``require_unscoped_owner`` 403s it - while the owner
     still reads (in-scope) and a resource-scoped token stays 403 in both modes."""
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
@@ -174,7 +169,7 @@ def test_owner_only_reviews_flip_both_directions():
 
 
 def test_owner_only_tag_health_flip():
-    """N2 sibling: GET /tag_health has the same unscoped-READ admit-then-deny
+    """Reviews sibling: GET /tag_health has the same unscoped-READ admit-then-deny
     contrast - report-only 200, enforcing 403 - with the owner still allowed."""
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
@@ -226,10 +221,9 @@ def test_owner_only_character_set_suggestion_both_directions(monkeypatch):
 
 
 def test_users_me_auth_tightened_to_owner_only():
-    """The owner-account read (username + has_password) was any_token - reachable
-    by a share token today. The F-c rider declares it OWNER_ONLY; the enforcing
-    gate 403s both an unscoped-READ and a resource-scoped token while the owner
-    still reads."""
+    """The owner-account read (username + has_password) is declared OWNER_ONLY;
+    the enforcing gate 403s both an unscoped-READ and a resource-scoped token
+    while the owner still reads."""
     with _owner_env() as env:
         server, owner, anon = env["server"], env["owner"], env["anon"]
 
@@ -259,10 +253,9 @@ def _is_locality_403(resp) -> bool:
 
 
 def test_local_owner_only_remote_cookie_regression():
-    """GET /filesystem/browse retargets owner_only -> local_owner_only. A remote
-    owner COOKIE session reaches it today (report-only; the §16.3 gap the retarget
-    closes) but is newly locality-403'd when enforcing, while a LOCAL owner cookie
-    is not locality-blocked in either mode."""
+    """GET /filesystem/browse is local_owner_only. A remote owner COOKIE session
+    reaches it under report-only but is locality-403'd when enforcing, while a
+    LOCAL owner cookie is not locality-blocked in either mode."""
     remote = {"X-Forwarded-For": "8.8.8.8"}  # spoofed via trusted testclient proxy
     with _owner_env() as env:
         server, owner = env["server"], env["owner"]
@@ -284,7 +277,7 @@ def test_local_owner_only_remote_cookie_regression():
 
 
 def test_local_owner_only_get_refused_at_the_gate(monkeypatch):
-    """#831: the GATE, not the middleware's path list, must refuse a READ token
+    """The GATE, not the middleware's path list, must refuse a READ token
     on a locality-tier GET.
 
     Every untemplated locality-tier GET sits in ``READ_BLOCKED_GET_PATHS`` - a
@@ -293,10 +286,10 @@ def test_local_owner_only_get_refused_at_the_gate(monkeypatch):
     - so the
     middleware answers a share token before routing and the gate's
     ``_enforce_unscoped_owner`` on the ``LOCAL_OWNER_ONLY`` branch never runs -
-    correct, load-bearing, and completely unobservable, which is why deleting it
-    left the whole suite green. Emptying that frozenset is exactly the shape of a
-    new locality GET added without its entry: the token now reaches the gate, and
-    the gate must still refuse it.
+    correct, load-bearing, and completely unobservable, so without this test
+    deleting it would leave the suite green. Emptying that frozenset is exactly
+    the shape of a new locality GET added without its entry: the token now
+    reaches the gate, and the gate must still refuse it.
 
     The 403 detail is asserted, not just the status: ``Owner-level (full,
     unscoped) access required`` comes from the gate's
@@ -372,11 +365,10 @@ def _build_scoped_decoy_app(gate):
 
 
 def test_scoped_and_list_policies_not_enforced_at_step3():
-    """A SET_SCOPED single-object route and a SCOPED_LIST route are declared, and
-    the gate is ENFORCING - but Step 3 leaves the id-resolving classes as
-    pass-through (their inline checks are the live enforcement until Step 4). The
-    gate must NOT deny them here; enforcing scoped classes at Step 3 would be
-    over-reach. ``auth=None`` is deliberate: a scoped class must not touch auth."""
+    """A SET_SCOPED single-object route and a SCOPED_LIST route are declared on an
+    ENFORCING decoy gate. The owner-class enforcement must not reach over into
+    the id-resolving classes, so the gate does NOT deny them here. ``auth=None``
+    is deliberate: a scoped class must not touch auth."""
     registry = {
         ("GET", "/api/v1/step3-scoped-decoy/thing/{id}"): RoutePolicy(
             AccessPolicy.SET_SCOPED, id_param="id"
@@ -420,7 +412,7 @@ def _build_owner_decoy_app(gate):
 def test_owner_class_without_auth_boot_fails_when_enforcing():
     """An enforcing gate whose registry declares an owner-class route but was given
     no AuthService must FAIL BOOT - a skipped owner check is the BOLA-by-omission
-    class this refactor exists to kill, never a silent pass-through."""
+    class the gate exists to kill, never a silent pass-through."""
     import pytest
 
     registry = {
@@ -505,8 +497,8 @@ def test_public_consistency_exempts_spa_catchall():
 
 
 def test_shipped_default_is_enforcing():
-    """Step 6 flipped the single-boolean switch: the gate now ships ENFORCING.
-    Report-only remains the one-line rollback (flip the constant back to False)."""
+    """The single-boolean switch ships the gate ENFORCING.
+    Report-only remains the one-line rollback (flip the constant to False)."""
     assert AUTHZ_GATE_ENFORCING is True, (
         "Step 6 ships AUTHZ_GATE_ENFORCING=True (enforcement live); report-only is "
         "reachable as the one-line rollback (plan §6) - flip the constant to False."

@@ -1390,7 +1390,7 @@ class ExportUtils:
             pics: The pictures in the order the writer numbered them.
 
         Returns:
-            The items the dataset snapshot records (#2123).
+            The items the dataset snapshot records.
         """
         image_by_stem = {}
         for name in os.listdir(dest_dir):
@@ -1510,7 +1510,7 @@ class ExportUtils:
     @staticmethod
     def generate_folder_export(server, request, task_id, export_tasks, background_data):
         """
-        Write pictures straight into a folder on the local machine (#291).
+        Write pictures straight into a folder on the local machine.
 
         The folder counterpart to :meth:`generate_zip`: a local owner already
         has the destination mounted, so packaging into a ZIP and downloading it

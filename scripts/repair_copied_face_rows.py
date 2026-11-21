@@ -1,17 +1,16 @@
 """Report face rows that were copied onto generated pictures.
 
-Plugin and ComfyUI I2I outputs used to inherit their source picture's face rows
-without always remapping the bounding box. A bbox is pixel coordinates, so on a
+A vault can hold plugin and ComfyUI I2I outputs carrying their source picture's
+face rows without a remapped bounding box. A bbox is pixel coordinates, so on a
 larger canvas the source's numbers collapse toward the top-left corner and
-capture no face at all. The plugin path also copied ``features``, so each copy
-carried the source's embedding: a single picture could accumulate dozens of
-different people's identities (81 observed in one library) and then match nearly
-every face search on merit, because every one of those embeddings really is a
-real face of a real person.
+capture no face at all. A copied ``features`` carries the source's embedding: a
+single picture can accumulate dozens of different people's identities and then
+match nearly every face search on merit, because every one of those embeddings
+really is a real face of a real person.
 
-Both copy paths now fail closed and copy nothing they cannot place
+Both copy paths fail closed and copy nothing they cannot place
 (``image_plugins/service.py`` and ``comfyui_service._copy_face_assignments``),
-so this script is a one-off repair for rows written before that fix.
+so this script is a one-off repair for rows they did not write.
 
 **This is deliberately report-only.** Detection remains partly heuristic, and
 deleting face rows costs character assignments and manually drawn boxes. Safe
@@ -32,8 +31,8 @@ wrong region. Copies that were rescaled properly are left alone -- right box,
 right person, no reason to touch them.
 
 Comparing against the *rescale* rather than against the original's raw numbers
-matters: the boxes that started this were not verbatim copies. A 178x218
-reference crop with box ``[0, 11, 178, 218]`` produced copies carrying
+matters: copied boxes are not always verbatim copies. A 178x218
+reference crop with box ``[0, 11, 178, 218]`` can produce copies carrying
 ``[25, 27, 153, 218]`` on 896x1440 and 1280x1920 canvases -- different numbers,
 still describing a region only a ~178x218 canvas has, and covering 1.9% of the
 picture in the top-left corner.

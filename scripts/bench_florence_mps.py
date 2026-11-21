@@ -6,7 +6,7 @@ model on the CPU in fp32 (what ships), then on ``mps`` in fp16 (the
 checkpoint's own dtype, so no cast), runs captions and ``<OD>`` detection over
 the same pictures on each, and prints ms/picture and how many outputs match.
 
-Run on an Apple Silicon Mac with PixlStash installed (issue #1786):
+Run on an Apple Silicon Mac with PixlStash installed:
 
     python scripts/bench_florence_mps.py ~/Pictures/some-folder --count 12
 """

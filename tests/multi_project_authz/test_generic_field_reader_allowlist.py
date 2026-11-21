@@ -1,11 +1,11 @@
-"""Issue #721: the two generic by-name field readers serve columns only.
+"""The two generic by-name field readers serve columns only.
 
-``GET /pictures/{id}/{field}`` and ``GET /characters/{id}/{field}`` used to hand
-back *any* attribute of their object by name, relationships included, because
-they end in ``safe_model_dict(getattr(obj, field))`` and ``safe_model_dict``
-recurses into SQLModel instances and collections. The AuthzGate authorises the
-*object*; nothing bounded which of that object's attributes came back. Reproduced
-with the gate enforcing, before the fix:
+``GET /pictures/{id}/{field}`` and ``GET /characters/{id}/{field}`` end in
+``safe_model_dict(getattr(obj, field))``, and ``safe_model_dict`` recurses into
+SQLModel instances and collections, so without an allowlist they hand back
+*any* attribute of their object by name, relationships included. The AuthzGate
+authorises the *object*, not which of that object's attributes come back.
+Unbounded, with the gate enforcing, they would answer:
 
 * ``GET /pictures/1/projects`` -> ``{"projects":[{"id":1,"name":"P1",...}]}``
   while the same token got ``403`` on ``GET /projects/1``.
@@ -19,15 +19,15 @@ with the gate enforcing, before the fix:
 Both directions are asserted here, because over-blocking is its own regression
 (CLAUDE.md §Security & authorization review process): every relationship is
 refused, **and** the columns, the synthesised character ``thumbnail``, the
-large-binary base64 branch and #719's narrowed ``project_id`` all still answer,
+large-binary base64 branch and the narrowed ``project_id`` all still answer,
 for the owner and for a scoped token alike.
 
-**Reproduction note carried over from #719.** The fixture's set/character
-PATCHes write ``PictureProjectMember`` join rows but leave the denormalised
+**Reproduction note.** The fixture's set/character PATCHes write
+``PictureProjectMember`` join rows but leave the denormalised
 ``Picture.project_id`` NULL, so a naive probe reads ``null`` whether anything
-narrows or not. That false negative is why this survived an earlier review. The
-tests below backfill the scalar through ``PATCH /pictures/project`` and assert
-the backfill landed before reading anything.
+narrows or not. The tests below backfill the scalar through
+``PATCH /pictures/project`` and assert the backfill landed before reading
+anything.
 """
 
 import json
@@ -86,7 +86,7 @@ def test_declared_servable_exceptions_are_pinned():
 
     ``PICTURE_EXTRA_SERVABLE_FIELDS`` / ``CHARACTER_EXTRA_SERVABLE_FIELDS`` are
     the only way a non-column name reaches the wire from these two routes. Each
-    member is a live consumer with no dedicated endpoint to move to yet (#721);
+    member is a live consumer with no dedicated endpoint to move to yet;
     adding a member without recording why is the defect this whole file exists
     to stop.
     """
@@ -436,7 +436,7 @@ def test_relationship_and_unknown_name_are_indistinguishable(env):
 
 
 def test_servable_picture_fields_still_work(env):
-    """Columns, the large-binary base64 branch and #719's narrowed
+    """Columns, the large-binary base64 branch and the narrowed
     ``project_id`` all still answer -- owner and picture-scoped token."""
     _backfilled_env(env)
     owner, anon, mint, projects = (
@@ -841,10 +841,10 @@ def test_dedicated_faces_routes_enforce_object_scope(env):
 def test_bbox_is_serialised_exactly_as_the_relationship_path_did(env):
     """`bbox` comes off the `bbox_` text column via the model property.
 
-    The old path went through `safe_model_dict`, which strips the trailing
-    underscore and `json.loads`es the value. `Face.to_public_dict` uses the
-    `bbox` property, which does the same `json.loads` on the same column, so the
-    wire value is unchanged. Asserted against the raw stored text rather than
+    The relationship path goes through `safe_model_dict`, which strips the
+    trailing underscore and `json.loads`es the value. `Face.to_public_dict` uses
+    the `bbox` property, which does the same `json.loads` on the same column, so
+    the wire value is the same. Asserted against the raw stored text rather than
     against a hardcoded literal, so it cannot drift.
     """
     _backfilled_env(env)

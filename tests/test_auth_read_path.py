@@ -1,27 +1,23 @@
-"""Auth reads bypass the serialised DB writer queue (issue #651).
+"""Auth reads bypass the serialised DB writer queue.
 
-Every authenticated request used to resolve its principal through
-``VaultDatabase.run_task``, i.e. the single-writer queue.  ``DBPriority.IMMEDIATE``
-only wins queue *ordering*: the worker loop still runs the in-flight task's
-session to completion first, so an API request inherited the full duration of
-whatever background batch was committing.  The auth reads (owner lookup, token
-candidate fetch, guest-session cookie lookup) now run on
-``run_immediate_read_task`` instead, and the ``last_used_at`` refresh is
-fire-and-forget.
+The auth reads (owner lookup, token candidate fetch, guest-session cookie
+lookup) run on ``run_immediate_read_task`` rather than through
+``VaultDatabase.run_task``, the single-writer queue, and the ``last_used_at``
+refresh is fire-and-forget.  ``DBPriority.IMMEDIATE`` only wins queue
+*ordering*: the worker loop still runs the in-flight task's session to
+completion first, so an API request on the queue would inherit the full
+duration of whatever background batch was committing.
 
-The security-critical property that must survive that move is **revoke → immediate
-401**.  Serialising through the writer queue used to be what guaranteed it; the
-replacement guarantee is two-part and is what these tests pin:
+The security-critical property is **revoke → immediate 401**.  Its guarantee is
+two-part and is what these tests pin:
 
 1. Every revocation path commits the delete (synchronously, on the writer queue)
-   *before* it flushes the token cache, so the next lookup's read - which now runs
+   *before* it flushes the token cache, so the next lookup's read - which runs
    on the read path - necessarily observes the committed delete.
 2. ``_flush_token_cache`` bumps ``_token_cache_epoch``, so a lookup that read the
    token row just *before* the delete committed cannot install its stale result
    into the cache just *after* the flush and keep a revoked token alive for the
-   full 5-minute cache TTL.  (That window existed before this change too - the
-   cache write has always been outside the queue - so closing it is a strict
-   improvement, not a repair of something the refactor broke.)
+   full 5-minute cache TTL.
 
 Both directions are asserted: revoked/deleted credentials are refused, and valid
 tokens, cookie sessions and guest-session cookies keep working.  Over-blocking
@@ -176,8 +172,8 @@ def test_revoked_token_is_401_immediately_while_a_slow_write_is_in_flight(
 ):
     """Revoke → immediate 401, with the writer thread busy on both sides of it.
 
-    This is the regression test for the TOCTOU the #651 refactor could have
-    introduced.  A revocation performed on an idle server would not exercise the
+    This guards the TOCTOU that reading auth off the writer queue could
+    introduce.  A revocation performed on an idle server would not exercise the
     bug at all, so the writer is deliberately held busy while the revocation
     lands AND while the post-revocation request is served.
     """
@@ -356,7 +352,7 @@ def test_cookie_session_authenticates_while_a_slow_write_is_in_flight(
 
 
 def test_auth_reads_submit_nothing_to_the_writer_queue(server, owner_client):
-    """Direct evidence: the auth read helpers no longer call ``run_task`` at all.
+    """Direct evidence: the auth read helpers do not call ``run_task`` at all.
 
     The spy filters on the calling thread so concurrent background work on the
     WorkPlanner threads cannot make this flaky.

@@ -272,7 +272,7 @@ def test_anomaly_region_model_not_loaded_is_503():
 def test_anomaly_region_cache_hit_is_scope_gated():
     """The scope check gates the cache-HIT path, not just the cold path.
 
-    Regression pin for the BOLA class this codebase keeps reproducing: an
+    Pins the cache-hit BOLA path: an
     owner request warms the LRU cache for (picture, tag); a scoped token whose
     grant does NOT include that picture must still get 403 on the same key,
     proving enforce_picture_scope runs before the cache lookup/return.
@@ -421,7 +421,7 @@ def test_anomaly_region_model_work_runs_on_the_gpu_worker():
 
     On Metal, model work on a request thread beside the GPU worker kills the
     process, and on every host Grad-CAM's in-place fp32 cast would race a tag
-    batch on the shared model (docs/apple-metal-thread-safety.md, #1775).
+    batch on the shared model (docs/apple-metal-thread-safety.md).
     """
     temp_dir, server, client, picture_ids = _setup_server_with_pictures()
     try:

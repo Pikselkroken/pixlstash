@@ -738,9 +738,8 @@ class Vault:
         treats it as an *allowlist* of places a purge may delete from, where
         empty is safe, while the folder-export destination check treats it as
         a *blocklist* of places nothing may be written to, where empty silently
-        permits what it exists to refuse
-        (#1177 item 59). Returning ``()`` on error therefore fails closed for
-        one caller and open for the other. Only the caller knows which
+        permits what it exists to refuse. Returning ``()`` on error therefore
+        fails closed for one caller and open for the other. Only the caller knows which
         direction is safe, so the error is made distinguishable from "no
         reference folders are configured" and the allowlist caller is the one
         that catches it.
@@ -1053,7 +1052,7 @@ class Vault:
 
     @property
     def unprocessable_images(self):
-        """Registry of pictures whose image file cannot be decoded (issue #585).
+        """Registry of pictures whose image file cannot be decoded.
 
         Lives on the database so task threads (which mark decode failures) and
         finder threads (which suppress them) reach the same instance via their
@@ -1755,9 +1754,9 @@ class Vault:
         transaction and wakes the planner; ``MissingDescriptionFinder`` then
         captions them in properly sized batches. Unlike
         :meth:`reset_description_interactive` no per-picture task is submitted:
-        one urgent single-image task per picture ran the captioner N times at
-        batch size 1 while the finder, which cannot tell those sentinels from
-        its own, captioned the same pictures a second time (#1162).
+        one urgent single-image task per picture would run the captioner N times
+        at batch size 1 while the finder, which cannot tell those sentinels from
+        its own, captioned the same pictures a second time.
 
         Args:
             picture_ids: Primary keys of the pictures to reset.
@@ -2263,11 +2262,8 @@ class Vault:
     def is_worker_running(self, worker_type: TaskType) -> bool:
         """Whether *worker_type* will actually be scheduled right now.
 
-        Both conditions matter and used to be conflated: the planner thread has
-        to be alive, and a finder for this task type has to still be registered
-        with it. Ignoring the argument meant a dead planner and a detached
-        finder produced the same answer, and callers reported whichever symptom
-        they happened to name.
+        Both conditions matter: the planner thread has to be alive, and a
+        finder for this task type has to still be registered with it.
         """
         if not self._work_planner or not self._work_planner.is_running():
             return False
@@ -2650,7 +2646,7 @@ class Vault:
 
         Mirrors ``MissingThumbnailFinder._fetch_missing``: keyed on
         ``thumbnail_width IS NULL`` for live, file-backed pictures. Excludes
-        undecodable pictures (issue #585) so the thumbnail worker's
+        undecodable pictures so the thumbnail worker's
         `remaining` can reach 0 instead of stalling on files that can never
         produce a thumbnail.
         """

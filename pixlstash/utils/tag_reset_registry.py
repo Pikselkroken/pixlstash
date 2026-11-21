@@ -1,4 +1,4 @@
-"""In-memory record of when each picture's tags were last reset (#1361).
+"""In-memory record of when each picture's tags were last reset.
 
 A retag deletes a picture's Tag rows and writes a fresh sentinel, but the new
 sentinel can be byte-identical to the old one, so the Tag table alone cannot
@@ -10,8 +10,8 @@ those rows as if another writer had added them.
 Every writer that replaces a picture's tags *in place of the tagger* - a
 retag reset, and a sidecar replacing them on an existing picture - calls
 :meth:`mark_reset` after its commit. A manual edit does not: a tag the owner
-adds or replaces while tagging is pending keeps the #1357 behaviour, where the
-tagger adds its tags beside it. a :class:`TagTask` reads :meth:`current` before its pictures are read
+adds or replaces while tagging is pending is kept, and the tagger adds its tags
+beside it. A :class:`TagTask` reads :meth:`current` before its pictures are read
 and drops the write for any picture reset since. Marking after the commit makes
 the check err one way only: a task can at worst be judged stale when it was not,
 which leaves the sentinel for the next sweep.

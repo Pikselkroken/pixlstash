@@ -346,7 +346,7 @@ def quantless_name(filename: str) -> str:
 
     Two files with the same answer are one model stored at different
     precisions, which is how a ComfyUI template's ``bf16`` file is found on a
-    shelf holding the ``fp8`` one (#2001).
+    shelf holding the ``fp8`` one.
 
     Examples:
         >>> quantless_name("z_image_turbo_bf16.safetensors")

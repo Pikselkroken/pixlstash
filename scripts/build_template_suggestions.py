@@ -1,6 +1,6 @@
 """Rebuild ``pixlstash/data/workflow_templates.json`` from ComfyUI's templates.
 
-The model shelf's New workflow set picker (#1999, #2001) lists ComfyUI's
+The model shelf's New workflow set picker lists ComfyUI's
 workflow templates with the files each one loads, so a template whose files are
 all on the shelf is one press from a set. The app never fetches the list at
 runtime: it reads the committed file this script writes.
@@ -33,13 +33,13 @@ previous list had. A gated file has none.
 
 **The graphs are kept too**, one minified file per template in
 ``pixlstash/data/workflow_templates/``, so a workflow can be made from one with
-no ComfyUI reachable (#2000). One file each, so the daily PR's file list says
+no ComfyUI reachable. One file each, so the daily PR's file list says
 which graphs changed. A name that is not a plain file name is skipped.
 
 **And the catalogue itself**, ComfyUI's ``index.json`` as the wheel holds it
 (minified), in ``pixlstash/data/workflow_templates_index.json``: what the
 Templates tab lists while no ComfyUI is answering, read by the same code that
-reads a live ComfyUI's (#2000).
+reads a live ComfyUI's.
 
 **The daily refresh** (``.github/workflows/template-suggestions.yml``) runs
 this with ``--summary``, which writes the PR body: the templates added,

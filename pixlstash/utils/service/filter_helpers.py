@@ -444,7 +444,7 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
 def visible_project_ids(server, request) -> set[int] | None:
     """Return project IDs the current token scope may *learn about*.
 
-    A character or picture set may belong to several projects (issue #125) and
+    A character or picture set may belong to several projects and
     every serialisation of one carries a ``project_ids`` list. That list is
     *membership metadata about other projects*, not part of the object the token
     was granted: a token scoped to one character legitimately reads that
@@ -516,7 +516,7 @@ def narrow_project_fields(
     The legacy scalar ``project_id`` must be derived from the narrowed list,
     never serialised straight off the model: the stored scalar names the
     entity's *primary* project, which a token scoped to a secondary project
-    (or to the entity itself) has no grant to learn (issue #125 / R1b).
+    (or to the entity itself) has no grant to learn.
 
     Args:
         payload: The response dict being built; mutated in place.
@@ -527,7 +527,7 @@ def narrow_project_fields(
         The same *payload*, with ``project_ids`` narrowed and ``project_id``
         set to the first narrowed id (the primary project when the caller may
         see it) or ``None`` when none are visible. A scoped caller also loses a
-        picture set's parent ids: the parent can lie outside the grant (#2124);
+        picture set's parent ids: the parent can lie outside the grant;
         and a training set's ``building`` state, which names pictures and runs
         outside the set.
     """
@@ -588,8 +588,7 @@ def narrow_picture_project_ids(server, request, payloads: Iterable[dict]) -> Non
     built from that projection serialises the picture's *primary* project id
     straight off the model. That is a fact a token scoped to the picture, to a
     set, or to a *secondary* project has no grant to learn, and cannot obtain
-    from ``GET /projects/{id}``, which 403s it (issue #719, backend architecture
-    §16.6).
+    from ``GET /projects/{id}``, which 403s it (backend architecture §16.6).
 
     Owners and unscoped tokens return on the first line: their payload is
     untouched and no membership query runs, so neither the response nor the cost
@@ -638,7 +637,7 @@ def narrow_project_assignments(
     which project". Every key is a project id, so an unnarrowed mapping tells a
     ``picture_set``- or ``picture``-scoped token which projects exist and which
     of its pictures are filed under them - the facts
-    :func:`visible_project_ids` exists to withhold (issue #125 / R1b, #708 F1).
+    :func:`visible_project_ids` exists to withhold.
 
     Args:
         assignments: ``project_id -> [picture_id, ...]``, straight from the join

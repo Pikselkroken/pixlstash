@@ -821,13 +821,11 @@ def built_app():
 
 
 def test_all_routes_declare_access_policy(built_app):
-    """AUDIT MODE: every mounted route is inventoried against a declaration set.
+    """Every mounted route is inventoried against a declaration set.
 
-    Phase 0 has no authz registry, so the declaration set is empty and the full
-    current route set lives in _CURRENT_ROUTE_ALLOWLIST - this test denies
-    nothing and enforces no access policy. It is the scaffolding Phase 1 grows
-    into: when the registry lands, ``declared`` becomes the registry's keys and
-    each declared route burns down out of the allowlist. Failing in EITHER
+    ``declared`` is the authz registry's keys (``ROUTE_POLICIES``); a mounted
+    route must be declared there or listed in _CURRENT_ROUTE_ALLOWLIST. Failing
+    in EITHER
     direction keeps the coverage matrix arithmetic (docs/backend_architecture.md
     §16.2): a new undeclared route can't merge unnoticed, and a stale allowlist
     entry can't rot.
@@ -1023,7 +1021,7 @@ def test_coverage_matrix_document_matches_the_registry():
 
     Failing in BOTH directions is the point. A new route that lands a registry
     declaration but no row leaves the matrix incomplete, which is exactly the
-    BOLA-by-omission mechanism this repo has shipped three times; a row with no
+    BOLA-by-omission mechanism; a row with no
     declaration means the document asserts coverage that does not exist. The
     policy check catches the subtler drift: a row that exists but names the
     wrong access level is worse than a missing row, because it reads as
@@ -1183,7 +1181,7 @@ def _route_template(app, method: str, path: str):
 
 
 def test_the_comfyui_scope_admits_every_route_the_pack_calls(built_app):
-    """The link key's allow-list and the pack's calls are the same set (#1811).
+    """The link key's allow-list and the pack's calls are the same set.
 
     The ComfyUI link key reaches only ``auth.COMFYUI_SCOPE_ROUTES``. A route
     the pack starts calling without an entry there is a node that fails with
@@ -1500,9 +1498,7 @@ def _iter_body_project_refs(app):
     over all of them.
 
     Nesting is unbounded (recursion terminates on models already open on the
-    current path, so a self-referential schema is safe). An earlier ``depth <= 4``
-    cap descended through at most five nested models and silently dropped anything
-    below that; a ``project_id`` six models down was measured as missed.
+    current path, so a self-referential schema is safe).
     """
     from pixlstash.route_inventory import (
         flatten_dependant_fields,
@@ -1685,12 +1681,11 @@ def test_query_parameter_enumeration_descends_nested_depends():
     does, on a synthetic app, which is the only way to make the claim non-vacuous
     without adding a real route for the sake of a test.
 
-    It is also the regression test for the flattening itself.
+    It is also the test for the flattening itself.
     ``pixlstash.route_inventory.flatten_dependant_fields`` is a local walk over
-    ``Dependant``'s own fields precisely because the FastAPI helper it replaced
-    (``get_flat_dependant``) was removed in 0.141 - and a walk that silently
-    stopped descending would report *fewer* parameters, i.e. false coverage, with
-    every other guardrail still green.
+    ``Dependant``'s own fields, and a walk that silently stopped descending would
+    report *fewer* parameters, i.e. false coverage, with every other guardrail
+    still green.
     """
     from fastapi import Depends, FastAPI, Query
 
@@ -1928,15 +1923,15 @@ def test_picture_metadata_fields_membership_is_pinned():
     host information, and letting it ride into `GET /pictures/{id}/metadata`,
     `GET /pictures/{id}/{field}`, `GET /pictures/search`,
     `GET /pictures/likeness-groups`, `GET /picture_sets/{id}` and
-    `GET /stacks/{stack_id}/pictures?fields=full` without narrowing it, is the
-    #719 defect repeated. If the new column is safe for a scoped token, add it to
+    `GET /stacks/{stack_id}/pictures?fields=full` without narrowing it, is a
+    scoped-token disclosure. If the new column is safe for a scoped token, add it to
     the set below. If it is not, narrow it at those six sites the way
     `narrow_picture_project_ids` does.
 
     **Membership in the set below does NOT certify a column as safe.** The set is
     the *current* projection, pinned so a change is noticed; it is not a list of
     columns anyone has cleared. Three members are known disclosures to a scoped
-    token, reproduced during the #719 review and deliberately left unnarrowed
+    token, deliberately left unnarrowed
     pending a decision, so nothing here should be read as their having been
     reviewed and passed:
 
@@ -1984,17 +1979,17 @@ def test_picture_metadata_fields_membership_is_pinned():
 
 
 def test_matched_route_path_is_prefix_stripped(built_app):
-    """Lock in the Phase-1 gate-keying fact: scope['route'].path is UNPREFIXED.
+    """Lock in the gate-keying fact: scope['route'].path is UNPREFIXED.
 
     OBSERVATION-ONLY (no authz code). Under the installed FastAPI, the effective
     (prefixed) path from the inventory, e.g. /api/v1/pictures/{id}/metadata, is
     NOT the same string as the underlying route object's own path
     (/pictures/{id}/metadata) - the one exposed at request time via
     request.scope['route'].path. They differ on the vast majority of routes.
-    Phase 1's gate must therefore key on route-object IDENTITY, not on the
+    The gate must therefore key on route-object IDENTITY, not on the
     prefixed template string, or it would fail to match (fail-open) every
     included route. This test documents and pins that fact so nobody keys the
-    gate on the wrong path by reflex. See the principal-engineer decision memo.
+    gate on the wrong path by reflex.
     """
     from fastapi.routing import iter_route_contexts
 
@@ -2123,14 +2118,13 @@ def test_authz_startup_boot_fails_on_undeclared_route_when_enforcing():
 
 
 def test_authz_gate_report_only_denies_nothing():
-    """Report-only mode (the one-line rollback, plan §6) denies nothing: an
+    """Report-only mode (the one-line rollback) denies nothing: an
     explicitly report-only gate with an empty registry lets every route through and
     boot proceeds even though every route is a miss.
 
-    Step 6 (2026-07-21) flipped the SHIPPED default to enforcing, so
-    ``AUTHZ_GATE_ENFORCING`` is now True; report-only is no longer the default but
-    remains available as the single-boolean rollback (flip the constant back to
-    False to restore this behaviour everywhere)."""
+    The SHIPPED default is enforcing (``AUTHZ_GATE_ENFORCING`` is True);
+    report-only remains available as the single-boolean rollback (flip the
+    constant to False to restore this behaviour everywhere)."""
     from starlette.testclient import TestClient
 
     from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
@@ -2399,9 +2393,9 @@ def _scan_for_engine_factories(root: Path, base: Path) -> dict[str, list]:
 def test_no_engine_is_built_outside_create_configured_engine():
     """Arithmetic completeness: nothing under ``pixlstash/`` builds its own engine.
 
-    Scoped to the whole package, not one directory. A bare engine planted in
-    ``services/snapshot_service.py`` left the previous, restore-package-only
-    version of this guardrail entirely green.
+    Scoped to the whole package, not one directory, so a bare engine planted in
+    ``services/snapshot_service.py`` is caught as well as one in the restore
+    package.
     """
     found = _scan_for_engine_factories(PIXLSTASH_DIR, REPO_ROOT)
 
@@ -2472,8 +2466,8 @@ def test_engine_guardrail_detects_every_known_escape_shape(shape, tmp_path):
     """The guardrail's own regression test.
 
     Each shape is planted inside a **nested subpackage**, which also pins the
-    recursion: the previous ``os.listdir`` version never descended, so a new
-    subpackage under ``services/restore/`` was a free pass.
+    recursion: a scan that never descended would make a new
+    subpackage under ``services/restore/`` a free pass.
     """
     nested = tmp_path / "pkg" / "sub" / "deeper"
     nested.mkdir(parents=True)
@@ -2846,8 +2840,8 @@ def test_private_address_guardrail_reads_a_named_file_of_any_kind(tmp_path):
     """The selection half, which the regex teeth above cannot reach.
 
     A file reached through ``_PRIVATE_ADDRESS_FLAT_DIRS`` is opened because it
-    was named, not because of its extension - the bug this pins is three
-    Dockerfiles that were listed and then filtered back out by the suffix set.
+    was named, not because of its extension, so a listed Dockerfile is not
+    filtered back out by the suffix set.
     """
     dockerfile = tmp_path / "Dockerfile.demo"
     dockerfile.write_text(f"EXPOSE 9537  # was {_TEETH_OFFENDER}\n")
@@ -2966,13 +2960,11 @@ def test_dockerfiles_install_every_runtime_dependency():
 def test_frontend_import_extensions_match_the_staging_allowlist():
     """The importer's client-side filter must say exactly what the server takes.
 
-    The frontend used to filter a drop against the lists it uses to *display*
-    pictures, which are far wider than what the staging route accepts. A model
-    file, a `.psd` or a `.wmv` therefore uploaded in full - a gigabyte, in the
-    report that prompted this - before the route skipped it as unsupported and
-    the commit came back "No staged files to import". Two allowlists with
-    nothing holding them together is what made that possible, so this is the
-    thing holding them together.
+    The lists the frontend uses to *display* pictures are far wider than what
+    the staging route accepts, so filtering a drop against them would upload a
+    model file, a `.psd` or a `.wmv` in full before the route skipped it as
+    unsupported and the commit came back "No staged files to import". Two
+    allowlists need something holding them together, and this is it.
     """
     from pixlstash.routes.pictures._import import STAGING_ALLOWED_MEDIA_EXTS
 
@@ -3004,13 +2996,8 @@ def test_base_model_kinds_agree_across_the_stack():
     The server names a card after its base model; the client's
     ``checkpointModel`` picks the model row the card SHOWS and reads it to a
     screen reader. Both walk a preference order over slot kinds, and when they
-    disagree one card says two things: #1449 shipped with the name row reading
-    ``flux1-dev`` and the model row reading ``ae.safetensors``, its VAE,
-    because the client still took "the first slot".
-
-    A guardrail of this shape guarded ``BASE_WIDGETS`` until F1b deleted the
-    shelf that held it, and it was removed on the grounds that no second list
-    was left. One is: this is that list, and this is that guardrail.
+    disagree one card says two things, e.g. the name row reading
+    ``flux1-dev`` and the model row reading ``ae.safetensors``, its VAE.
 
     The server's own copy needs no assertion - it is derived from
     ``CHECKPOINT_WIDGETS`` at import - so a widget added there reaches the
@@ -3165,8 +3152,7 @@ def _action_scan_targets(root: Path) -> tuple[list[Path], list[Path]]:
 
     Returns ``(workflow_files, action_files)``. A workflow may be named
     ``*.yml`` or ``*.yaml`` - GitHub accepts both - and a composite action can
-    live at any depth under ``.github/actions/``, not only the one level down
-    the original ``*/action.yml`` glob assumed (PR #1203 review, thread 2).
+    live at any depth under ``.github/actions/``, not only one level down.
     """
     workflows = root / ".github" / "workflows"
     actions = root / ".github" / "actions"
@@ -3214,10 +3200,9 @@ def _floating_action_refs(paths: list[Path]) -> list[str]:
 
 
 def test_every_action_reference_is_pinned_to_a_sha():
-    """A floating tag on a workflow action is a supply-chain hole (#1177 item 60).
+    """A floating tag on a workflow action is a supply-chain hole.
 
-    #1192 pinned ``ci.yml`` and ``docker-build.yml``; this closes the sweep
-    over every remaining workflow and composite action so a *new* floating
+    This sweeps every workflow and composite action so a *new* floating
     tag fails the build instead of quietly shipping.
     """
     workflow_files, action_files = _action_scan_targets(REPO_ROOT)
@@ -3236,10 +3221,9 @@ def test_every_action_reference_is_pinned_to_a_sha():
 def test_action_pin_guardrail_has_teeth(tmp_path):
     """Both directions, or the guardrail can pass by being broken.
 
-    Also covers PR #1203's review of this guardrail: a ``.yaml`` workflow and
-    a composite action nested two directories deep (thread 2's discovery
-    gap), an uppercase-hex SHA and a ``uses:`` mention that is not the step
-    key itself (thread 1's false positive and false negative). Routed through
+    Also covers a ``.yaml`` workflow, a composite action nested two
+    directories deep, an uppercase-hex SHA and a ``uses:`` mention that is not
+    the step key itself. Routed through
     ``_action_scan_targets`` rather than a hand-built file list, so a future
     change that narrows the glob back to ``*.yml`` / one-level actions is
     caught here too.
@@ -3310,8 +3294,7 @@ def test_a_mark_flip_carries_every_table_a_card_key_appears_in():
     """``_KEYED_TABLES`` is derivable, so it is derived rather than remembered.
 
     A model fix re-keys every card of a topology and carries the card tables
-    across (``hub/workflow_card_writes.set_model_fix``), which the cut-over's
-    conversion reads once (#1623). The carry-over loops over
+    across (``hub/workflow_card_writes.set_model_fix``). The carry-over loops over
     ``_KEYED_TABLES``, so a card table added to the schema and not to that
     tuple is a name, a set of pins or a stack membership silently dropped by
     the next re-key - a loss with no error and no log, on rows that cannot be

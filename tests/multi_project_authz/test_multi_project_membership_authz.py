@@ -1,13 +1,13 @@
-"""Issue #125 - multi-project characters / picture sets, and what it does to scope.
+"""Multi-project characters / picture sets, and what it does to scope.
 
 Making a character or picture set reachable from several projects **widens** what
-a project-scoped share token can see: a token for project B now reaches an entity
+a project-scoped share token can see: a token for project B reaches an entity
 whose *primary* project is A, as long as B is among its memberships. That is the
 intended semantics, and it is exactly the kind of change that must be pinned in
 both directions, because the two failure modes are opposite and both are bugs:
 
 * **Under-grant (over-blocking).** Reading the legacy scalar
-  ``Character.project_id`` / ``PictureSet.project_id`` instead of the new join
+  ``Character.project_id`` / ``PictureSet.project_id`` instead of the join
   tables makes a secondary membership invisible: project B's token is refused an
   entity it legitimately shares, and B's listings silently omit it. Over-blocking
   is its own regression (CLAUDE.md §Security & authorization review process).
@@ -338,7 +338,7 @@ def test_locked_members_listing_both_directions(env):
 
 def test_scoped_list_pictures_not_over_blocked(env):
     """SCOPED_LIST pass-through must survive the change, including the
-    ``character_id=UNASSIGNED`` branch that was a historical leak vector."""
+    ``character_id=UNASSIGNED`` branch, a known leak vector."""
     anon, tok = env["anon"], env["tokens"]["P2"]
     paths = (
         f"{API}/pictures",
@@ -1377,7 +1377,7 @@ def test_project_path_routes_are_not_an_existence_oracle(env):
     """Out-of-scope direction: for a token with no project visibility at all,
     every one of the four path routes answers identically for a project that
     holds its entity, a project that does not, and a project that does not
-    exist. Status *and* body, because the body used to carry the distinction
+    exist. Status *and* body, because the body can carry the distinction
     ("Picture set not found" vs "Project not found")."""
     anon, mint = env["anon"], env["mint"]
 
@@ -1566,8 +1566,8 @@ def _assert_picture_reaches_both_projects(env, picture_id, where):
 
 
 def test_add_member_to_shared_set_joins_every_project(env):
-    """``POST /picture_sets/{id}/members/{picture_id}`` - the reviewer's original
-    reproduction: a picture added *after* the set became P1+P2."""
+    """``POST /picture_sets/{id}/members/{picture_id}``: a picture added *after*
+    the set became P1+P2."""
     r = env["owner"].post(f"{API}/picture_sets/{env['set_id']}/members/{env['pic_b']}")
     assert r.status_code in (200, 201), r.text
     _assert_picture_reaches_both_projects(

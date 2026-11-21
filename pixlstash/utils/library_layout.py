@@ -116,7 +116,7 @@ def refusal_for_folder_name(name: str) -> str | None:
     The refusing twin of :func:`folder_name`: the same character class and the
     same reserved names, but a name the owner typed is refused with the reason
     rather than rewritten, because a folder that silently becomes ``con_`` or
-    ``a_b`` is not the folder they asked for (#2206).
+    ``a_b`` is not the folder they asked for.
 
     Args:
         name: One path component, as typed.
@@ -499,7 +499,7 @@ def migrate_destination(
 ) -> str | None:
     """Where the whole-library migration puts a picture, or ``None`` to leave it.
 
-    v1.11 Phase 4c, and **deliberately not the move-when-false rule.** Under
+    **Deliberately not the move-when-false rule.** Under
     that rule a flat library parses against nothing, can never be false, and
     never moves - which is exactly why old libraries need no migration. This is
     the owner asking for something else: *make it all match, now.* So it does
@@ -514,8 +514,8 @@ def migrate_destination(
     pressed the button to be rid of; and a folder of the owner's own is not an
     override here, because the whole point of the gesture is that nothing is.
     Two files of one name from two old folders therefore meet, which is what
-    the migration's suffix rule is for (decided once, 2026-09-01; the rule's
-    own moves still carry the tail and still refuse a taken name).
+    the migration's suffix rule is for (the rule's own moves still carry the
+    tail and still refuse a taken name).
 
     Args:
         sweep_unfiled: Also move the pictures nothing files into
@@ -680,7 +680,7 @@ def read_components(
     """:func:`read_named_components`, one entry per component consumed.
 
     A ``Global`` component consumes its segment and names nothing, so it is
-    ``None`` here and absent there. The Media sidebar's Folders tree (#2458)
+    ``None`` here and absent there. The Media sidebar's Folders tree
     labels every level of a real folder with this, so it has to know which
     component each reading belongs to, and passes *index* (from
     :func:`name_index` over *known_names*) so it is not rebuilt per folder.

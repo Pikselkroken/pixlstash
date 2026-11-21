@@ -323,14 +323,14 @@ class WorkPlanner:
         Supported replacement for reaching into `_task_finders` from a test
         fixture: the planner keeps the finder set in three structures, all of
         which have to stay consistent, and mutating them from another thread
-        used to race the loop's own read. Detached finders are marked exhausted
+        would race the loop's own read. Detached finders are marked exhausted
         so a finder that `depends_on()` one of them is not blocked for ever
         waiting for a report that will never come again.
 
         The `_finder_name_by_task_type` entry is deliberately kept: it is how
         `depends_on()` resolves a TaskType to the name `_finder_exhausted` is
-        keyed by. Popping it made the exhausted flag written below unreachable,
-        so the dependent finder blocked for ever anyway.
+        keyed by. Popping it would make the exhausted flag written below
+        unreachable, so the dependent finder would block for ever anyway.
         """
         removed = set()
         with self._lock:

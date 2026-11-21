@@ -1,4 +1,4 @@
-"""Share-ready copies of pictures, written into a staging folder (#2417).
+"""Share-ready copies of pictures, written into a staging folder.
 
 Every way of sharing a picture from the desktop - the Share dialog, copying as
 files, dragging out, sending to a folder - hands over a copy made here, never
@@ -142,7 +142,7 @@ def make_share_copies(
             :func:`_made_name`).
         link_originals: Hand over the originals themselves, generation data and
             all, as hard links under the share names: nothing is copied, so a
-            drag of a whole view starts at once (#2420). Overrides resizing,
+            drag of a whole view starts at once. Overrides resizing,
             watermarking and stripping. Each link goes into *link_root*'s batch
             (the library's drive) or else *root*'s; an original on a drive
             neither is on is copied, and that is logged.

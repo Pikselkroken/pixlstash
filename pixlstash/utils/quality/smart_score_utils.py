@@ -38,7 +38,7 @@ def compress_raw_score(raw):
 
     Continuous at 0 (both branches give :data:`SCORE_FLOOR_BAND`) and strictly increasing
     everywhere below 1, so two pictures with different raw scores keep a different final
-    score no matter how far below the old clamp floor they sit.
+    score no matter how low they sit.
 
     Args:
         raw: Scalar or array of unbounded raw scores.

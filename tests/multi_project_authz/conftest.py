@@ -1,17 +1,14 @@
 """Fixtures for the suites that share one multi-project authz environment.
 
 Two files assert against the same world - the three projects, the shared set and
-the shared character, and the scoped tokens the #719/#721 leaks were reproduced
-with - so they live in one package and take the environment from this
-``conftest.py``.
+the shared character, and the scoped tokens - so they live in one package and
+take the environment from this ``conftest.py``.
 
-They used to share it by module-namespace copy instead
-(``env = _multi_project.env`` in the borrowing file), which is what a package
-conftest exists to replace: pytest resolves a fixture's parameters against the
-module it was collected in, so a copied fixture keeps working right up until it
-grows a dependency the copy never mentioned - then every test in the borrowing
-module errors at setup and nothing about the exporting module changes colour.
-Here ``env`` can take whatever it needs and both modules keep resolving it.
+A package conftest rather than a module-namespace copy (``env =
+_multi_project.env``), because pytest resolves a fixture's parameters against
+the module it was collected in, so a copied fixture breaks at setup as soon as
+it grows a dependency the copy never mentioned. Here ``env`` can take whatever
+it needs and both modules keep resolving it.
 
 Because these fixtures sit in a package conftest rather than in ``tests/``,
 ``env`` stays ``autouse`` for exactly the two suites in this directory and for

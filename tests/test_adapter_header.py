@@ -2,8 +2,8 @@
 
 Fixtures are built here rather than committed: a real adapter is hundreds of
 megabytes, and every property under test lives in the first few hundred bytes.
-The shapes below are taken from real files measured on 2026-08-07 (ai-toolkit
-output and a model-site download), not invented.
+The shapes below are taken from real files (ai-toolkit output and a model-site
+download), not invented.
 """
 
 import json

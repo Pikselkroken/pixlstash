@@ -6,12 +6,8 @@ is easy to miss and hard to notice: **a GET to a nonexistent API path returns
 200**, so a bare ``assert resp.status_code == 200`` is fully satisfied by a
 typo'd, renamed, or never-existing URL, and proves nothing at all.
 
-That is not hypothetical. ``test_integration_scoped_list_pass_through_not_over
-blocked`` asserted 200 against ``/stacks/{id}/stack`` - a route that has never
-existed - and stayed green while its docstring claimed to cover
-``/stacks/{id}/pictures``, one of this repo's three historical whole-library BOLA
-leaks (CLAUDE.md, "Security & authorization review process"). A red test gets
-fixed; a green one that proves nothing silently certifies a leak vector.
+A red test gets fixed; a green one that proves nothing silently certifies a
+leak vector.
 
 The remedy has to be structural rather than a one-off URL correction, because the
 failure mode is silence. :func:`no_spa_fallback` makes the vacuous case impossible
@@ -30,8 +26,7 @@ Usage, one line per module::
     pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 This module is the interim home. The guard belongs in ``tests/conftest.py`` as an
-``autouse`` fixture, which would extend it to every suite without the opt-in line;
-that file was owned by another change when this landed.
+``autouse`` fixture, which would extend it to every suite without the opt-in line.
 """
 
 import pytest
@@ -127,12 +122,11 @@ def assert_real_route(app, method: str, path: str, template: str = "") -> None:
     200 from the frontend fallback.
 
     **Pass ``template`` whenever the path's last segment is a free variable.**
-    Since #1410 moved the cards onto ``/workflows/{workflow_key}`` (now
-    ``{workflow_id}``, #1623), every string
-    in that position matches something - ``/api/v1/workflows/anything-at-all``
-    included - so the bare form no longer proves the handler under test is the
+    With a route such as ``/workflows/{workflow_id}``, every string in that
+    position matches something - ``/api/v1/workflows/anything-at-all``
+    included - so the bare form does not prove the handler under test is the
     one that answered, and a renamed handler would leave the assertion green.
-    Naming the template restores that: it is the route's own path as FastAPI
+    Naming the template proves it: it is the route's own path as FastAPI
     declares it, and it fails when the declaration moves.
 
     Args:

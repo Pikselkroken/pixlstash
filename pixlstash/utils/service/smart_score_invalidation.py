@@ -339,7 +339,7 @@ def invalidate_for_penalised_tag_change(
     """NULL the cached score of every picture carrying one of *changed_tags*.
 
     Re-weighting a penalised tag only moves the score of pictures that actually carry
-    that tag, so invalidating the whole library (the previous behaviour) forced a full
+    that tag, so invalidating the whole library would force a full
     re-score of every picture on any settings edit - tens of thousands of GPU-backed
     recomputes to fix a few hundred rows.
 

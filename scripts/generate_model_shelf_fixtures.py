@@ -1,6 +1,6 @@
 """Generate the model-shelf fixture tree on demand.
 
-The shelf (v1.10) has to look right against 1,800 adapters, a real training run
+The shelf has to look right against 1,800 adapters, a real training run
 and a folder that is not there. The real thing is hundreds of gigabytes, so it is
 generated rather than committed, and three things keep that honest:
 
@@ -28,7 +28,7 @@ has to recognise, so the fixture set owes it one real duplicate pair. It is the
 only one; everything in ``adapters/`` is distinct.
 
 Proportions below (metadata mix, rank mix, dtype mix, size spread) were measured
-against a real 91-file adapter folder on 2026-08-09. That is one owner's library:
+against a real 91-file adapter folder. That is one owner's library:
 self-trained files carry ``ss_*`` metadata while model-site downloads carry only
 ``format``, so the ratio moves with where the files came from. It is here to stop
 the mix being *backwards*, not to be exact.
@@ -453,7 +453,7 @@ def _adapter_names(count: int) -> list[str]:
 
 
 def _aitoolkit_metadata(name: str, base: str, step: int, rank: int) -> dict[str, str]:
-    """The metadata block ai-toolkit really writes, as measured 2026-08-07."""
+    """The metadata block ai-toolkit really writes."""
     return {
         "format": "pt",
         "ss_base_model_version": base,

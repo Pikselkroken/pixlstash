@@ -3,8 +3,8 @@
 A path pasted raw into a connection string is cut short by any character the
 string's grammar reserves. In a SQLite ``file:`` URI ``?`` starts the query and
 ``#`` the fragment; SQLAlchemy's URL parser also splits on ``?``. A library
-folder named ``odd #1?`` then opened a truncated path, created a stray file
-beside the folder, and left the real vault unmigrated (#2210).
+folder named ``odd #1?`` would open a truncated path, create a stray file
+beside the folder, and leave the real vault unmigrated.
 
 Every SQLite open that goes through a URI or a SQLAlchemy URL builds it here.
 ``tests/test_architecture_guardrails.py`` fails the build on a hand-built

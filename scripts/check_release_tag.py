@@ -6,26 +6,21 @@ Usage::
 
 Exits 0 when the tag is a supported release tag naming that exact version.
 The comparison is PEP 440 normalised, so ``v1.12.0-dev.2``, ``v1.12.0.dev.2``
-and ``v1.12.0.dev2`` all match a pyproject version of ``1.12.0.dev.2``. The
-release workflows used to compare the two as raw strings, which accepted the
-``-dev`` spelling in the format check and then rejected it in the equality
-check: v1.12.0-dev.1 and v1.12.0-dev.2 both failed there with the tag and the
-version naming the same release.
+and ``v1.12.0.dev2`` all match a pyproject version of ``1.12.0.dev.2``.
 
-Both operands are shape-checked, not just the tag. A raw string comparison
-forced the pyproject version through the tag pattern transitively - it could
-only be equal to a tag that had already matched - and normalising the
-comparison drops that. The version string names the installer file and the
-Inno Setup ``PIXLSTASH_VERSION``, so an unvalidated one ships in artifact
-names while the wheel normalises it away.
+Both operands are shape-checked, not just the tag, because a normalised
+comparison does not force the pyproject version through the tag pattern. The
+version string names the installer file and the Inno Setup
+``PIXLSTASH_VERSION``, so an unvalidated one ships in artifact names while the
+wheel normalises it away.
 
 Every shape the pattern admits parses, so there is no ``InvalidVersion``
 branch to carry: a pattern loosened past PEP 440 would raise, and an
 unhandled raise exits non-zero, which is the same fail-closed answer.
 
-Requires ``packaging``. Every caller installs it explicitly: the one workflow
-that relied on it arriving with ``build`` would have started rejecting valid
-tags the moment the validation step moved ahead of the wheel build.
+Requires ``packaging``. Every caller installs it explicitly rather than relying
+on it arriving with ``build``, because the validation step runs ahead of the
+wheel build.
 """
 
 import re

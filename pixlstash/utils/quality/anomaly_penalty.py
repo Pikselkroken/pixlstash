@@ -1,7 +1,6 @@
 """Calibrated, precision-aware anomaly penalty for smart scoring.
 
-Replaces the old binary "sum integer weights of present penalised tags" rule. Each
-anomaly tag contributes by its *calibrated probability* (the tagger's stored sigmoid
+Each anomaly tag contributes by its *calibrated probability* (the tagger's stored sigmoid
 confidence) discounted by the tag's measured *precision*, so a flaky classifier and a
 borderline detection both penalise less than a confident, reliable one. Correlated
 defects are grouped into families and combined with noisy-OR, so a single bad render
@@ -38,12 +37,10 @@ distinct things are wrong?" are different questions:
    keeps *rising* with the number of distinct defects - with diminishing returns, since
    correlated defects in one family are partly redundant - instead of saturating.
 
-The previous implementation ran noisy-OR across *all* members of a family and multiplied by
-the family's maximum member weight. Both were wrong: with the tagger's near-binary
-confidences the noisy-OR pinned at ~0.9/0.99/0.999 for 1/2/3 defects, so defect *count*
-barely moved the score and roughly a fifth of the library tied at the clamp floor; and
-taking the family max made ``incorrect reflection`` (weight 3) as punishing as
-``bad anatomy`` (weight 5). Severity is now per-tag, via :func:`_tag_severity`.
+Noisy-OR is not used across a whole family because, with the tagger's near-binary
+confidences, it saturates and defect *count* barely moves the score. Severity is per-tag,
+via :func:`_tag_severity`, so ``incorrect reflection`` (weight 3) is not as punishing as
+``bad anatomy`` (weight 5).
 
 Severity maps weight into a band rather than scaling linearly from zero
 (:data:`SEVERITY_BASE` + :data:`SEVERITY_WEIGHT_SPAN` × ``weight/5``): any confirmed defect
@@ -54,8 +51,7 @@ count bands.
 Constants are calibrated so that, on an otherwise-good picture (raw base score ≈ 0.65,
 measured as the median of demo-vault pictures with no anomaly predictions), one anatomy
 defect lands in 1.5–2.2 on the [1, 5] scale, two land in 1.0–1.5, and three or more sit at
-the floor band. See ``docs/reviews/2026-06-smart-score-calibrated-anomaly-plan.md`` for the
-original rationale.
+the floor band.
 """
 
 from pixlstash.db_models.tag import (
@@ -231,11 +227,11 @@ def _tag_severity(
 ) -> float:
     """Per-tag severity: ``SEVERITY_GAIN × (BASE + SPAN × weight/5)``.
 
-    Replaces the old per-*family* severity, which took the family's maximum member weight
-    and so punished ``incorrect reflection`` (weight 3) exactly as hard as ``bad anatomy``
-    (weight 5). A weight of 0 - a tag absent from the effective table whose family is also
-    empty, or a legacy explicit 0 such as the default ``silicone breasts`` - yields 0
-    severity and is skipped by :func:`anomaly_penalty`.
+    Severity is per tag, not per family, so ``incorrect reflection`` (weight 3) is not
+    punished as hard as ``bad anatomy`` (weight 5). A weight of 0 - a tag absent from the
+    effective table whose family is also empty, or a legacy explicit 0 such as the
+    default ``silicone breasts`` - yields 0 severity and is skipped by
+    :func:`anomaly_penalty`.
     """
     weight = _tag_weight(tag, family_name, weights, family_max)
     if weight <= 0.0:

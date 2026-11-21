@@ -329,7 +329,7 @@ def _chunks(items: Sequence[Any], size: int) -> Iterable[List[Any]]:
 def _project_ids_of(entity: dict) -> Set[int]:
     """Read an entity's full project membership from a list-endpoint payload.
 
-    ``project_ids`` carries every project since issue #125; ``project_id`` is the
+    ``project_ids`` carries every project; ``project_id`` is the
     legacy scalar naming only the primary project and is used purely as a
     fallback for a server old enough not to send the list.
 

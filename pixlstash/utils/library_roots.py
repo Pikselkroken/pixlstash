@@ -1,23 +1,12 @@
 """The directories a PixlStash installation reads or writes as library content.
 
-One list, several callers, because it used to be three partial ones and the
-gaps were exactly the routes that move files:
-
-* ``POST /pictures/export/folder`` knew every root (#1177 item 2, #1206 item 1).
-* ``POST /import-folders`` knew only the active vault's ``image_root``, so a
-  watch folder could be pointed at another library's folder or at one of this
-  library's own reference folders - and one carrying ``delete_after_import``
-  then copies every file into the active library and unlinks the original,
-  leaving the owning library's rows pointing at files that are gone.
-* The reference-folder create/update/relocate routes knew ``image_root`` and
-  the other reference-folder rows, so a relocation would physically move
-  pictures into another library's folder, or into a ``delete_after_import``
-  watch folder that then eats them.
-
-Issue #1206 item 1 asked for one shared list. This is it.
+One list, several callers, because the routes that move files must all know
+every root: a partial list lets a watch folder point at another library's
+folder and unlink its originals, or a relocation move pictures into another
+library's folder.
 
 Two rules read it, because writing files and naming a folder to read are
-different acts (#1223):
+different acts:
 
 * The folder export may not write inside any of these roots.
 * A watch or reference folder may not equal, sit inside or contain a library's
@@ -25,15 +14,15 @@ different acts (#1223):
   inside, or around, a watch or reference folder of any registered library
   (``LibraryRegistry``, so the CLI too).
 
-Watch and reference folders were allowed to overlap each other for one release
-and the allowance bought nothing. Whichever worker reaches a shared file first
-decides what happens to it: ``WatchFolderImportTask`` copies it into
-``image_root`` while ``ReferenceFolderScanTask`` indexes the original in place
-under its own row, so the same pixels land twice; and a watch folder carrying
+Watch and reference folders may not overlap each other because whichever
+worker reaches a shared file first decides what happens to it:
+``WatchFolderImportTask`` copies it into ``image_root`` while
+``ReferenceFolderScanTask`` indexes the original in place under its own row,
+so the same pixels land twice; and a watch folder carrying
 ``delete_after_import`` unlinks the original, which is a file the owner asked
 to have indexed where it lies. The third outcome is the scan winning the race
 and the import skipping the file on its hash, i.e. nothing at all. Duplicate,
-destroy or no-op (#1223).
+destroy or no-op.
 """
 
 import functools
@@ -72,8 +61,8 @@ def folder_overlaps_library_detail(library: str) -> str:
     """Said to a watch or reference folder that overlaps the library at *library*.
 
     Named for the reason :func:`folder_overlaps_folder_detail` names its folder:
-    a library kept inside Downloads refused Downloads without saying which
-    library was in the way (#1986).
+    a library kept inside Downloads refuses Downloads, and the owner needs to
+    know which library is in the way.
     """
     return (
         f"That folder overlaps a library's folder ({library}). Watch folders and "
@@ -209,8 +198,8 @@ def refuse_path_inside_a_library(
         path: An absolute path a caller wants files written to.
         server: The running server.
         vault: The vault holding the active lease.
-        status_code: The refusal's status. The folder export has answered 400
-            since #1177 and its callers read that.
+        status_code: The refusal's status. The folder export answers 400 and
+            its callers read that.
 
     Raises:
         HTTPException: 503 when the roots could not be listed, *status_code*
@@ -239,8 +228,8 @@ def refuse_overlapping_folder(
 
     A watch or reference folder may not equal, sit inside or contain a
     library's folder, nor another watch or reference folder: two roots over one
-    file index it twice, and a ``delete_after_import`` watcher unlinks it
-    (#1223). The reverse rule, a library added over one of these folders, is
+    file index it twice, and a ``delete_after_import`` watcher unlinks it.
+    The reverse rule, a library added over one of these folders, is
     :meth:`~pixlstash.hub.registry.LibraryRegistry.refuse_overlapping_watch_or_reference_folder`.
     Callers hold :data:`~pixlstash.hub.registry.FOLDER_OVERLAP_LOCK` from this
     check until their write commits; see :func:`holding_folder_overlap_lock`.
@@ -282,7 +271,7 @@ def holding_folder_overlap_lock(func):
 
     For the watch and reference folder writes: the overlap check and the row it
     protects must be one step, or a concurrent library add passes this check
-    and this write passes its check (#1223). ``functools.wraps`` keeps the
+    and this write passes its check. ``functools.wraps`` keeps the
     signature FastAPI reads.
     """
 

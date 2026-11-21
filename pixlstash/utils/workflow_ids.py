@@ -43,7 +43,7 @@ def tagged_workflow_id(document) -> str | None:
     """The workflow id an editor-format *document* is tagged with.
 
     A manual id, or an automatic one: an automatic workflow the owner saved
-    over files its runs on itself as a manual one does (#1849), and whether
+    over files its runs on itself as a manual one does, and whether
     the hub holds the id as such is the reader's to check. ``None`` for no
     tag, and for anything that is not a workflow id: the tag came in with a
     picture, from wherever that picture was made.

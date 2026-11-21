@@ -94,7 +94,7 @@ def validate_reference_folder_path(path: str) -> str | None:
 
     Returns:
         An error message string if the path is invalid, or ``None`` if it
-        passes all Phase-1 checks (absolute + not on the blocklist).
+        passes all checks (absolute + not on the blocklist).
     """
     if not os.path.isabs(path):
         return "Path must be absolute."
@@ -151,8 +151,8 @@ def data_folder_conflict_detail(
     """The refusal for a folder that overlaps the library's own storage.
 
     Names the data folder and which way round the overlap is, because a bare
-    "overlaps" left the owner guessing which folder was meant - a library kept
-    inside Downloads makes Downloads unusable, and nothing said so (#1986).
+    "overlaps" leaves the owner guessing which folder is meant - a library kept
+    inside Downloads makes Downloads unusable.
     Shared by every folder kind that refuses the data folder, so they agree.
 
     Args:
@@ -188,18 +188,14 @@ def validate_reference_folder_conflicts(
     answer this identically: ``routes.reference_folders`` (the "add a reference
     folder" routes) and
     ``services.folder_structure_commit_service.register_reference_folder`` (a
-    reference-mode folder-structure commit). The commit path used to check
-    nothing at all, so a root that *contains* ``image_root``, or that contains
-    - or sits inside - another reference folder, was accepted and then indexed
-    by two scans that each believe they own the files.
+    reference-mode folder-structure commit). A root that *contains*
+    ``image_root``, or that contains - or sits inside - another reference
+    folder, would be indexed by two scans that each believe they own the files.
 
     Every path is resolved before it is compared, for the reason
     `validate_reference_folder_path` resolves its own: these are string
-    comparisons, and two names for one directory do not compare equal. The
-    "add a reference folder" route stores rows resolved, the commit path did
-    not, so a symlink to a registered root - or to one containing
-    ``image_root`` - matched no row and was accepted as a free path, and two
-    scans then indexed the same files each believing it owned them. Resolving
+    comparisons, and two names for one directory do not compare equal; an
+    unresolved symlink to a registered root would match no row. Resolving
     here rather than at each call site is the same argument that comment makes:
     a call site is where it gets forgotten.
 

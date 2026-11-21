@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build the Python runtime embedded in the PixlStash desktop installer.
 
-Unlike the old hosted "compute backend" tarballs, this runtime is **bundled into
-the installer** (electron-builder ``extraResources``) and ships a fully-working
-CPU env on Windows/Linux, or a Metal env on macOS (the default PyPI macOS torch
-includes MPS). GPU acceleration (CUDA/ROCm) is *not* baked in - the desktop app
-adds it on first use as a PYTHONPATH overlay by pip-installing the heavy wheels
+This runtime is **bundled into the installer** (electron-builder
+``extraResources``) and ships a fully-working CPU env on Windows/Linux, or a
+Metal env on macOS (the default PyPI macOS torch includes MPS). GPU acceleration
+(CUDA/ROCm) is *not* baked in - the desktop app adds it on first use as a
+PYTHONPATH overlay by pip-installing the heavy wheels
 straight from PyPI / PyTorch. So we host nothing.
 
 This produces ``<output-dir>/python`` (a relocatable standalone CPython with the

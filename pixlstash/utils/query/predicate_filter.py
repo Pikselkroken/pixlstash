@@ -3,16 +3,14 @@
 PixlStash selects ``Picture`` rows by the same vocabulary (score range, smart-score
 bucket, resolution bucket, ComfyUI model/LoRA membership, tag include/exclude, hidden
 tags, tag-confidence thresholds, format, deleted/imported flags, face presence, path
-prefix, …) in several independent places.  Historically the WHERE-clause logic - down
-to byte-for-byte copies of raw ``text()`` ``EXISTS`` / ``json_each`` snippets - was
-duplicated across all of them.
+prefix, …) in several independent places.
 
 ``PredicateFilter`` is the single source of truth for that logic.  It has three
 consumers:
 
 * **compile** - :meth:`predicates` / :meth:`apply` turn the declarative fields into
-  SQLAlchemy WHERE clauses (the raw ``text()`` snippets are moved here verbatim, bound
-  params intact).
+  SQLAlchemy WHERE clauses (the raw ``text()`` snippets live here, bound params
+  intact).
 * **match** - :meth:`matches` narrows the same predicate set to a single picture id.
   This is exactly the set predicate restricted to one row; there is no separate
   Python-side re-implementation of the SQL semantics.  Staging auto-triage consumes

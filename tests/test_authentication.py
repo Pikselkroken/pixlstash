@@ -528,10 +528,10 @@ def test_seed_desktop_session_rejects_short_token(server, monkeypatch):
 
 
 def test_seed_desktop_session_rejects_token_below_contract_floor(server, monkeypatch):
-    """A 16-31 char token is now rejected: the floor matches the 32+ char contract.
+    """A 16-31 char token is rejected: the floor matches the 32+ char contract.
 
     The shell ships a 32-byte token rendered as 64 hex chars, so the documented
-    contract is 32+ chars. A token between the old floor (16) and the contract
+    contract is 32+ chars. A token between 16 chars and the contract
     (32) must be refused so a regression in the shell's generator can't hand out
     a weaker owner credential.
     """
@@ -1022,16 +1022,16 @@ def test_secure_required_rejects_remote_plaintext(server, monkeypatch):
 def test_login_lockout_response_carries_retry_after(server):
     """The 429 backoff must tell the client how long to wait.
 
-    Regression for #1097: a custom CORS exception handler rebuilt every
-    HTTPException as a fresh JSONResponse and dropped exc.headers, so
-    Retry-After never reached a client. Only the login 429 and the authz
+    An exception handler that rebuilt every HTTPException as a fresh
+    JSONResponse would drop exc.headers, so Retry-After would never reach a
+    client. Only the login 429 and the authz
     gate's 503 raise HTTPException(headers=...) - the other backoff paths
     (rate_limiter, restore, library admission) build their response directly
     and never pass through an exception handler at all.
 
     The Origin header matters: it is what makes CORSMiddleware stamp the
     response, and proving Retry-After survives *alongside* the CORS pair is
-    the whole point of deleting the handler that used to overwrite it.
+    the whole point.
     """
     server.auth._login_lockout_until = time.monotonic() + 30
 

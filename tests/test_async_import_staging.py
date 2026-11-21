@@ -1,4 +1,4 @@
-"""Tests for the async streaming-staging import (#459).
+"""Tests for the async streaming-staging import.
 
 Covers the two-phase flow end to end:
 
@@ -154,7 +154,7 @@ def test_staging_import_dedupes_identical_files(owner_server):
     """Two byte-identical staged files import once; the second is a duplicate.
 
     Each file is streamed with the client's own ``key``, and the status names
-    every file's outcome by that key (#2512), so the grid can mark the tile
+    every file's outcome by that key, so the grid can mark the tile
     that turned out to be a duplicate rather than report a total at the end.
     """
     _srv, client = owner_server
@@ -544,12 +544,11 @@ def test_open_with_nonexistent_project_errors(owner_server):
 def test_direct_import_with_nonexistent_project_errors(owner_server):
     """The direct multipart endpoint fails fast on a stale project id too.
 
-    It used to skip the check the staging path runs, so the id only failed at
-    the membership INSERT - after every file had been imported and committed.
-    The caller (the ComfyUI saver node, which stores the project as
-    "<name> #<id>" and so replays whatever id was current when the workflow was
-    authored) was told the import failed while the pictures were already in the
-    vault.
+    It runs the check the staging path runs, so the id fails before any file is
+    imported rather than at the membership INSERT. The caller (the ComfyUI saver
+    node, which stores the project as "<name> #<id>" and so replays whatever id
+    was current when the workflow was authored) must not be told the import
+    failed while the pictures are already in the vault.
     """
     srv, client = owner_server
     r = client.post(

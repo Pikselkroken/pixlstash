@@ -1,6 +1,6 @@
 """Read the first worksheet of an uploaded .xlsx with the standard library.
 
-Used for the tag-group import (issue #2469), where the file is untrusted input, so
+Used for the tag-group import, where the file is untrusted input, so
 the reader is deliberately narrow:
 
 * Only ``xl/worksheets/sheet1.xml`` and, when the book has one,

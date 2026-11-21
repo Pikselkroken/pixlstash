@@ -12,7 +12,7 @@ accumulate from:
 
 What counts as "not orphaned" (kept):
   * every managed picture file (``Picture.file_path`` joined to image_root);
-  * its pre-#1164 sibling thumbnail ``{stem}_thumb.webp``;
+  * its legacy sibling thumbnail ``{stem}_thumb.webp``;
   * its sidecar caption ``{stem}.txt`` / ``{stem}.caption``;
   * system content under image_root: ``vault.db`` (+ ``-wal``/``-shm``/
     ``-journal``), and the ``snapshots/``, ``.pixlstash-thumbnails/``,

@@ -4,16 +4,11 @@ Plain functions and constants only: everything pytest has to *resolve* lives in
 ``conftest.py`` next door, and everything a test module has to *call* lives
 here, where a normal ``from ... import`` reaches it.
 
-That split is the point of this package. The two suites used to share one
-environment by having ``test_generic_field_reader_allowlist.py`` copy names out
-of ``test_multi_project_membership_authz.py``'s module namespace
-(``env = _multi_project.env``). Fixtures do not survive that: pytest resolves a
-fixture's parameters against the module it is *collected* in, so the moment the
-copied ``env`` grew a ``_module_env`` dependency that had not also been copied,
-every test in the borrowing module errored at setup with ``fixture
-'_module_env' not found`` - silently, and only in the borrowing file. Fixtures
-now come from the package ``conftest.py``, where dependencies resolve
-themselves and nothing has to be re-exported by hand.
+That split is the point of this package. Fixtures do not survive being copied
+between module namespaces: pytest resolves a fixture's parameters against the
+module it is *collected* in, so a copied fixture loses any dependency that was
+not also copied. Fixtures come from the package ``conftest.py``, where
+dependencies resolve themselves and nothing has to be re-exported by hand.
 """
 
 import contextlib
@@ -138,11 +133,6 @@ def _detach_volatile_finders(server):
     edits the planner's three finder structures under the planner's own lock and
     marks each removed finder exhausted, so a finder that `depends_on()` one of
     them is not left waiting for a report that will never come.
-
-    This used to stop the planner, wait out its thread by hand and start it
-    again, because editing `_task_finders` under a live loop threw IndexError
-    there and killed the planner outright. That is fixed in the planner itself,
-    so the stop/wait/restart dance is gone.
     """
     planner = server.vault._work_planner
     finders = server.vault._planner_work_finders
@@ -471,9 +461,9 @@ def _make_face(server, picture_id: int) -> int:
     """Insert a synthetic face row on *picture_id*.
 
     The face-assign path is exercised through its ``face_ids`` branch so the test
-    does not depend on the detector finding a face in the CPU test profile (the
-    reviewer's own probe failed twice for exactly that reason). ``face_index`` is
-    deliberately far outside the detector's range so a real extraction running in
+    does not depend on the detector finding a face in the CPU test profile.
+    ``face_index`` is deliberately far outside the detector's range so a real
+    extraction running in
     the background cannot collide with the (picture, frame, face) unique
     constraint.
     """

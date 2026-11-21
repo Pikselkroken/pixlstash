@@ -66,14 +66,14 @@ LIBRARY_OWN_FOLDERS = tuple(
 def is_pixlstash_thumbnail(name_or_path: str) -> bool:
     """True when this file is a thumbnail PixlStash itself wrote.
 
-    Until #1164 a managed picture kept its thumbnail *beside* the original as
-    ``<name>_thumb.webp``, so a walk of a library's own folder finds them, and
-    ``.webp`` is a supported extension. Indexing one makes it a picture, which
-    earns it a thumbnail of its own - ``<name>_thumb_thumb.webp`` - which the
-    next walk indexes in turn. That is not a slow leak: it is a generation per
-    pass, and it was found four deep in a real library. New thumbnails live in
-    ``.pixlstash-thumbnails/``, a dot-folder every walk prunes, but a library
-    is migrated one picture at a time, so the old siblings stay excluded.
+    A library not yet migrated keeps a managed picture's thumbnail *beside* the
+    original as ``<name>_thumb.webp``, so a walk of a library's own folder finds
+    them, and ``.webp`` is a supported extension. Indexing one makes it a
+    picture, which earns it a thumbnail of its own - ``<name>_thumb_thumb.webp``
+    - which the next walk indexes in turn, a generation per pass. New
+    thumbnails live in ``.pixlstash-thumbnails/``, a dot-folder every walk
+    prunes, but a library is migrated one picture at a time, so the old
+    siblings stay excluded.
     """
     return name_or_path.lower().endswith(THUMBNAIL_SUFFIX)
 
@@ -81,15 +81,13 @@ def is_pixlstash_thumbnail(name_or_path: str) -> bool:
 def is_hidden_entry(name: str) -> bool:
     """True for a dot-prefixed file or directory name.
 
-    The one rule every walk of a picture tree has to agree on: the Phase 2
+    The one rule every walk of a picture tree has to agree on: the
     folder-structure read, ``local_import_pictures``, and
     ``ReferenceFolderScanTask``. A dot-folder is either a vault's own cache
     (``.pixlstash-thumbnails/``, the older ``.ref_thumbs/``, ``.pixlstash``
     sidecar stores) or something the owner deliberately hid; neither is content
-    to index. Two of the three pruned them and the scan did not, so a
-    reference-mode commit's read and its indexing pass disagreed about what was
-    under one root - the read's count excluded the cache and the scan indexed
-    it as pictures, which the mapping then filed.
+    to index. Every walk must agree so a reference-mode commit's read and its
+    indexing pass see the same files under one root.
     """
     return name.startswith(".")
 

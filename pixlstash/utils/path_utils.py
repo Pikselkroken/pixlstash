@@ -10,8 +10,7 @@ class LibraryRootsUnavailable(RuntimeError):
     library" - :meth:`pixlstash.vault.Vault.reference_folder_roots` and
     :func:`pixlstash.services.config_service.get_import_folder_paths` - instead
     of returning an empty collection, because "there are none" and "we do not
-    know" are the same value with opposite safety (#1177 items 59, and the
-    import-folder sibling found in its review).
+    know" are the same value with opposite safety.
 
     Each list is read as an **allowlist** in one place and a **blocklist** in
     another. The scrapheap purge asks which roots its unattended ``os.remove``

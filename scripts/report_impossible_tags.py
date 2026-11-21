@@ -1,9 +1,9 @@
 """Dry-run report: what would the "Impossible tags" grid filters surface and clear?
 
-Validates the impossible-tag plan (docs/reviews/2026-06-impossible-tags-review-plan.md)
-against the real vault BEFORE the endpoints/UI are built. Read-only: opens the vault in
-SQLite read-only mode and never writes. Shares the exact classifier the scan service uses
-(pixlstash.utils.service.person_tags) so the report can't drift from what would ship.
+Reports what the impossible-tag filters would flag against the real vault. Read-only:
+opens the vault in SQLite read-only mode and never writes. Shares the exact classifier
+the scan service uses (pixlstash.utils.service.person_tags) so the report can't drift
+from what would ship.
 
 It prints, for the chosen scope:
   * base rates - person-tagged pictures, and how many have no detected face,

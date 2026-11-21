@@ -1,10 +1,9 @@
 """Rebuild ``tests/ci_test_durations.json`` from pytest ``--durations`` output.
 
-The blocking backend gate splits the suite with ``--ci-shard i/8``. That deal
-used to be a positional round-robin, which balances test *count* exactly and
-test *time* not at all: eight shards of the same run measured 744 s to 1205 s,
-so the gate waited ~460 s on its slowest shard every time. ``--ci-shard`` now
-places tests longest-processing-time-first using the map this script writes.
+The blocking backend gate splits the suite with ``--ci-shard i/8``. A positional
+round-robin balances test *count* exactly and test *time* not at all, so
+``--ci-shard`` places tests longest-processing-time-first using the map this
+script writes.
 
 **Why the map is committed rather than cached or downloaded as an artifact.**
 The eight shards run in eight processes on eight runners and never talk to each

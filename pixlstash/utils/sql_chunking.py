@@ -5,8 +5,8 @@ SQLite limits how many bound parameters a single statement may carry
 Any ``WHERE col IN (:a, :b, ...)`` built from a caller-sized id list can cross
 that cap and fail at execution time, so those loads are chunked.
 
-The limit and the chunker used to be redeclared in five modules, each with its
-own copy of this rationale and no shared value to change. They live here now.
+Every chunked load uses the limit and the chunker from here, so there is one
+value to change.
 """
 
 from typing import Iterator, Sequence, TypeVar

@@ -376,8 +376,8 @@ def test_create_job_owner_works():
 
 def test_create_job_takes_base_model_from_the_recipe_and_refuses_a_client_one():
     """The job's base model is what the trainer loads: the recipe's locked
-    model, read by the server. A client-sent base_model is refused (review
-    F4), so the row cannot claim a model the run did not train."""
+    model, read by the server. A client-sent base_model is refused, so the row
+    cannot claim a model the run did not train."""
     from pixlstash.training import presets
 
     temp_dir, owner, server, read_token = _setup()
@@ -835,7 +835,7 @@ def test_live_view_draws_a_run_from_its_folder_and_its_logs():
 
 
 def test_live_view_scores_a_character_runs_previews(monkeypatch):
-    """#2522: each preview against the character, and each step's mean."""
+    """Each preview against the character, and each step's mean."""
     import numpy as np
 
     from pixlstash.services.training_service import handle_for_run
@@ -917,7 +917,7 @@ def test_live_view_of_a_run_that_finished_while_pixlstash_was_closed():
 
 
 def test_live_view_rows_from_disk_keep_the_documented_shape():
-    """#2650: with no readable prompts, a row per sample index on disk, role null."""
+    """With no readable prompts, a row per sample index on disk, role null."""
     temp_dir, owner, server, read_token = _setup()
     try:
         config = {"config": {"process": [{"train": {"steps": 1500}}]}}
@@ -1032,7 +1032,7 @@ def test_live_and_cover_refuse_a_read_token():
 
 
 def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
-    """The snapshot is the frozen record (#2123): the zip holds each image whose
+    """The snapshot is the frozen record: the zip holds each image whose
     bytes still match, every frozen caption, and says which image it left out.
     The set's runs name the LoRAs they made."""
     temp_dir, owner, server, read_token = _setup()
@@ -1169,7 +1169,7 @@ def test_a_runs_snapshot_reads_back_and_exports_what_it_trained_on():
 
 
 def test_a_run_that_fits_only_with_comfyui_quit_says_so_and_takes_the_answer():
-    """#2558: Z-Image's q8 needs 16000 MB. On a 24 GB card where ComfyUI
+    """Z-Image's q8 needs 16000 MB. On a 24 GB card where ComfyUI
     keeps 7500 MB after unloading, it fits only with ComfyUI quit, 700 short
     beside it; Save memory (10800) fits beside it."""
     temp_dir, owner, server, read_token = _setup()
@@ -2238,12 +2238,11 @@ def test_create_job_on_a_reference_set_is_filed_under_its_character():
 def _all_resource_token(server) -> str:
     """Construct the ALL+resource_type "footgun" token directly in the DB.
 
-    The supported token API (``auth.create_token``) now rejects this
-    scope+resource combination at the source (the F3 fix in
-    feature-slick-grid-updates), so it can no longer be minted via
+    The supported token API (``auth.create_token``) rejects this
+    scope+resource combination at the source, so it cannot be minted via
     ``POST /users/me/token``. We insert the row directly to prove the training
     handler guard is genuine defense-in-depth: even if such a token somehow
-    existed (legacy, or minted before that fix), every training endpoint must
+    existed (a legacy row), every training endpoint must
     still reject it (403), because ``require_unscoped_owner`` checks
     ``matched_token.resource_type``.
     """
@@ -2587,8 +2586,7 @@ def test_job_responses_carry_no_absolute_host_paths():
 
 def test_host_path_redaction_covers_spaces_file_uris_and_windows_paths():
     """A path with spaces is redacted to its end, a file:// URI is redacted, and
-    a Windows path still is. Found by review F5: the old pattern stopped at the
-    first space and never matched a URI."""
+    a Windows path still is."""
     assert _redact_host_paths("/home/me/AI Toolkit/run.py") == "<host path>"
     assert _redact_host_paths("file:///home/me/x") == "<host path>"
     assert _redact_host_paths(r"D:\ai\run.py") == "<host path>"
@@ -2605,7 +2603,7 @@ def test_job_error_with_spaced_path_and_file_uri_is_redacted():
     """The route-level half of the redaction test: a report and an error that
     name a spaced path and a file:// URI carry neither name back. The job's name
     and trigger word are the owner's own text and come back as written, even
-    where the path pattern would read them as a path (#2294)."""
+    where the path pattern would read them as a path."""
     temp_dir, owner, server, read_token = _setup()
     try:
         name, trigger = "Cats / Dogs (cdx)", "sky 1:1 / wide"
@@ -2714,9 +2712,9 @@ def test_put_config_refuses_ai_toolkit_values_that_are_not_real():
 
 
 def test_patch_config_refuses_the_ai_toolkit_keys_and_names_the_route():
-    """PATCH /users/me/config no longer writes the ai-toolkit keys: each one is a
+    """PATCH /users/me/config does not write the ai-toolkit keys: each one is a
     422 that names PUT /api/v1/training/ai-toolkit/config, and nothing is stored.
-    This holds from the owner's own machine too (review F2, F6)."""
+    This holds from the owner's own machine too."""
     temp_dir, owner, server, read_token = _setup(checkout=False)
     try:
         for key in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
@@ -3059,7 +3057,7 @@ def test_ai_toolkit_check_refuses_paths_that_are_not_real(monkeypatch):
 
 
 def test_ai_toolkit_check_runs_one_at_a_time(monkeypatch):
-    """#2295: a check can hold a worker thread for minutes, so a second one while
+    """A check can hold a worker thread for minutes, so a second one while
     it runs is a 409 and starts nothing; once it ends, the next one runs."""
     from pixlstash.training import ai_toolkit_install
 
