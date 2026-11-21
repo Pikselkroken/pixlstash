@@ -58,7 +58,11 @@ export function usePromptAssist(assist, context) {
   const state = reactive({ on: undefined, choices: {} });
   // Each category's typed entries, as `recentValues` holds them.
   const recent = ref({});
-  const family = computed(() => unref(assist)?.family || "");
+  // Keyed by the presets in use: the family's, or `_default` for a graph of
+  // no single known family (`family: null`).
+  const family = computed(
+    () => unref(assist)?.family || unref(assist)?.presets || "",
+  );
   const categories = computed(() => unref(assist)?.categories || []);
 
   function load() {

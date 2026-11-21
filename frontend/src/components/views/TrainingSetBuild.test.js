@@ -1042,6 +1042,11 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("look_added_by_run");
     // The group is #2776's switch here: off is `photo_look: false`.
     expect(gen.buildSheetPrompt.mock.lastCall[0].photo_look).toBe(false);
+    // Off, the catalogue is still asked for, explicitly applying nothing.
+    const asked = gen.preflightWorkflowRun.mock.calls
+      .map(([body]) => body.prompt_assist)
+      .filter(Boolean);
+    expect(asked.at(-1)).toEqual({ context: "sheet", on: false, choices: {} });
     expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("prompt_assist");
     wrapper.unmount();
   });

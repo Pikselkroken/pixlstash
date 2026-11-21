@@ -78,6 +78,7 @@
             hint="Type your own, or pick a look."
             foot-action="Clear all your entries"
             placeholder="Nothing added"
+            maxlength="400"
             :disabled="disabled || !model.on.value"
             :aria-labelledby="`${bodyId}-${cat.id}`"
             :aria-describedby="

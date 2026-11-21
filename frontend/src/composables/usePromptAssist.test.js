@@ -182,6 +182,15 @@ describe("usePromptAssist", () => {
     expect(JSON.parse(localStorage.getItem(KEY)).qwen_image.photo).toEqual({});
   });
 
+  it("a graph of no single family keeps its choices under the generic presets", () => {
+    const generic = () => open({ ...assist(), family: null, presets: "_default" });
+    generic().commit("camera", "");
+    expect(generic().fieldText("camera")).toBe("");
+    expect(JSON.parse(localStorage.getItem(KEY))._default.photo).toEqual({
+      choices: { camera: "none" },
+    });
+  });
+
   it("survives storage that throws", () => {
     const broken = Storage.prototype.getItem;
     Storage.prototype.getItem = () => {

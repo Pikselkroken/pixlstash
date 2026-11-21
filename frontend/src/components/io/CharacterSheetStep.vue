@@ -1029,7 +1029,8 @@ async function askSheetAssist() {
     const answer = await preflightWorkflowRun({
       workflow_id: id,
       count: 1,
-      prompt_assist: sheetLook.request() || { context: "sheet", choices: {} },
+      // Off still names the context, so the sheet catalogue comes back.
+      prompt_assist: sheetLook.request() || { context: "sheet", on: false, choices: {} },
     });
     if (alive && ask === sheetAssistAsk) {
       sheetAssist.value = answer?.groups?.[0]?.prompt?.assist || null;
