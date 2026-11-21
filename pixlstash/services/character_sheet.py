@@ -322,6 +322,16 @@ _PROPORTION_WORDS = {
 }
 
 NEGATIVE_PROMPT = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+# The prose sheet as ordinary unedited photographs rather than renders: a model
+# agency's "digitals". MiniMax H3 Image draws a glossy beauty-filter look
+# without it, and exaggerates every skin detail named, so the skin is said
+# once and gently. ponytail: read off the 2026-11-21 probes (MiniMax H3 Image,
+# Qwen-Image); re-probe before adding to it.
+PHOTO_LOOK = (
+    "The photos look like a model agency's digitals: plain unedited camera "
+    "photos, natural colour, true-to-life skin with faint pores, little or no "
+    "makeup, soft focus falloff, nothing retouched or sharpened."
+)
 
 
 def _phrase(text: str) -> str:
@@ -405,6 +415,7 @@ def sheet_prompt(
     size: Size = "large",
     reference: bool = False,
     layout: Layout = "moss",
+    photo_look: bool = True,
 ) -> str:
     """The prompt for one grid sheet of the character described.
 
@@ -430,6 +441,10 @@ def sheet_prompt(
     and reshapes the body photos' boxes to that figure; the words alone lose
     to boxes laid out for a seven-heads-tall adult.
     The boxes are laid out on the large canvas and scaled to *size*'s.
+    *photo_look* adds :data:`PHOTO_LOOK` to a prose prompt and drops
+    "photorealistic", render vocabulary. A prose prompt also names the eye
+    colour among what every photo shares. The MOSS and regions layouts are
+    the probed ones and stay as they are.
     """
     scale = SIZES[size][0] / SHEET_WIDTH
     p, cap_p = _PRONOUN[subject]
@@ -509,17 +524,20 @@ def sheet_prompt(
         if backdrop
         else "on a plain light-grey studio background, soft even studio lighting"
     )
+    prose = layout == "prose"
+    look = prose and photo_look
     summary = (
         f"Character reference sheet of one and the same {subject} {setting}, "
-        "photorealistic photographs. On the left half, four passport-style "
-        "head-and-shoulders "
+        f"{'' if look else 'photorealistic '}photographs. On the left half, "
+        "four passport-style head-and-shoulders "
         f"photos in two rows of two: {views}. On the right half, two tall "
         f"{_FRAMING_SUMMARY[framing]}: (5) standing, front view at eye level, "
         f"(6) standing, three-quarter view. The {subject} is {character}. "
-        "Identical face, hair, body shape and clothing in every photo."
+        f"Identical face, {'eye colour, ' if prose else ''}hair, body shape and "
+        "clothing in every photo."
     )
-    if layout == "prose":
-        return summary
+    if prose:
+        return f"{summary} {PHOTO_LOOK}" if look else summary
     document = {
         "summary": {"caption": summary},
         "items": items,
