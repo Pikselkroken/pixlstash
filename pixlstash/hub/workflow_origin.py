@@ -110,6 +110,21 @@ def stored_at(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
     return row["workflow_name"] if row else None
 
 
+def stored_with_hash(
+    hub: HubDatabase, origin: str, remote_path: str
+) -> Optional[tuple[str, Optional[str]]]:
+    """``(workflow id, content hash)`` of the live workflow one origin's path
+    is stored as, or ``None``: :func:`stored_at` with the hash it was filed with.
+    """
+    row = hub.fetchone(
+        "SELECT o.workflow_name, o.content_hash FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.origin = ? AND o.remote_path = ?",
+        (origin, remote_path),
+    )
+    return (row["workflow_name"], row["content_hash"]) if row else None
+
+
 def ever_stored(hub: HubDatabase, origin: str, remote_path: str) -> bool:
     """Whether one origin's path was ever stored, its workflow live or not.
 

@@ -6209,6 +6209,79 @@ def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     assert card.status_code == 409, card.text
 
 
+def _shipped_builtin(tmp_path, monkeypatch, name: str):
+    """A built-in folder holding a copy of the shipped *name*, for a release
+    to change. Returns the copy's path."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    return builtin / name
+
+
+def _ship_steps(path, steps: int) -> None:
+    """Release a new graph of the built-in edit workflow at *path*."""
+    graph = json.loads(path.read_text(encoding="utf-8"))
+    graph["75:62"]["inputs"]["steps"] = steps
+    path.write_text(json.dumps(graph), encoding="utf-8")
+
+
+def test_a_built_in_a_release_changed_is_updated_as_a_new_version(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a copy the owner never edited keeps the old graph after a
+    release changed the file, or gets it as a new workflow rather than a
+    version, or the graph it replaced cannot be gone back to."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    filed_steps = manual_document(hub, key)["75:62"]["inputs"]["steps"]
+
+    _ship_steps(path, filed_steps + 7)
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == filed_steps + 7
+    versions = workflow_versions.list_versions(hub, key)
+    assert [(v["version"], v["source"]) for v in versions] == [
+        (2, workflow_versions.FROM_RELEASE),
+        (1, "builtin"),
+    ]
+    assert versions[0]["reason"] == "updated with PixlStash"
+    earlier = workflow_versions.document_of(hub, key, 1)
+    assert earlier["75:62"]["inputs"]["steps"] == filed_steps
+    assert _by_key(_cards(workflow_env.owner))[key]["name"] == "Flux2-Klein-Image-Edit"
+
+    # Idempotent: the next start finds the copy holding the file.
+    comfyui_module.list_builtin_workflows(hub)
+    assert len(workflow_versions.list_versions(hub, key)) == 2
+
+
+def test_a_built_in_the_owner_edited_keeps_their_graph_after_a_release(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a release's file is stored over a copy the owner saved over:
+    their graph must stay the one that runs."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    edited = manual_document(hub, key)
+    edited["75:62"]["inputs"]["steps"] = 41
+    comfyui_module.store_over_workflow(hub, key, edited, "mcp", expected_version=1)
+
+    _ship_steps(path, 42)
+    comfyui_module.list_builtin_workflows(hub)
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == 41
+    assert [v["source"] for v in workflow_versions.list_versions(hub, key)] == [
+        "mcp",
+        "builtin",
+    ]
+
+
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(

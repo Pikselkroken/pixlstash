@@ -827,6 +827,84 @@ def _keep_builtin_thumbnail(hub, path: str, workflow_id: str) -> None:
         )
 
 
+def refresh_builtin_workflow(hub, name: str, path: str) -> Optional[int]:
+    """Store the shipped built-in at *path* over its stored copy, if untouched.
+
+    The origin row's hash is the file as last filed. A file that still hashes
+    so is the copy already stored: nothing is read beyond it. One a release
+    changed is stored as the workflow's next version (``release``), so the
+    graph it replaces stays restorable and name, defaults, pins, recipes and
+    pictures stay where they are, **only when the current version is still
+    the one filed**. A copy the owner saved over is theirs: it is left alone
+    and logged at every start until they take the new file (remove the
+    workflow and add the built-in back) or go back to the version filed. A
+    copy that already holds the new file just records it. Callers hold
+    ``workflow_inbox.INBOX_LOCK``.
+
+    Returns:
+        The version written, or ``None`` when none was.
+
+    Raises:
+        NotAWorkflowError: The file is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        ValueError: It will not read as JSON, or is past the size cap.
+    """
+    stored = workflow_origin.stored_with_hash(hub, workflow_origin.BUILTIN_ORIGIN, name)
+    if stored is None:
+        return None  # removed by the owner
+    workflow_id, filed = stored
+    shipped = _load_workflow_json(path)
+    shipped_hash = workflow_inbox.content_hash(shipped)
+    if shipped_hash == filed:
+        return None
+
+    def record(conn, _version=None):
+        workflow_origin.upsert(
+            conn,
+            workflow_origin.BUILTIN_ORIGIN,
+            name,
+            workflow_id,
+            None,
+            shipped_hash,
+        )
+
+    # The version first: a save between these reads fails the store's check.
+    version = workflow_versions.current_version(hub, workflow_id)
+    current = workflow_versions.current_content_hash(hub, workflow_id)
+    if current == shipped_hash:
+        with hub.transaction() as conn:
+            record(conn)
+        return None
+    if filed is None or current != filed:
+        logger.info(
+            "Built-in workflow %s changed in this release, but its copy %s was "
+            "edited since it was filed, so it keeps the owner's graph.",
+            name,
+            workflow_id,
+        )
+        return None
+    try:
+        written = store_over_workflow(
+            hub,
+            workflow_id,
+            shipped,
+            workflow_versions.FROM_RELEASE,
+            expected_version=version,
+            also=record,
+        )
+    except WorkflowChanged as exc:
+        logger.info("Built-in workflow %s is not updated: %s", name, exc)
+        return None
+    logger.info(
+        "Updated built-in workflow %s (%s) to the graph this release ships, "
+        "as version %d.",
+        name,
+        workflow_id,
+        written,
+    )
+    return written
+
+
 def list_builtin_workflows(hub) -> list[str]:
     """Put every built-in never listed before on the Workflows page; return the ids.
 
@@ -834,7 +912,9 @@ def list_builtin_workflows(hub) -> list[str]:
     with any ``builtin`` origin row was listed already: it is live, hidden, or
     removed (deleting keeps the row, dismissed, as the record that the owner
     took it off), and none of those is filed again. So this lists what a
-    release adds, once. A file that will not store is logged and skipped.
+    release adds, once, and brings a live one a release changed up to date
+    (:func:`refresh_builtin_workflow`). A file that will not store is logged
+    and skipped.
     """
     if not os.path.isdir(WORKFLOW_BUILTIN_DIR):
         return []
@@ -842,9 +922,18 @@ def list_builtin_workflows(hub) -> list[str]:
     with workflow_inbox.INBOX_LOCK:
         for entry in sorted(os.listdir(WORKFLOW_BUILTIN_DIR)):
             path = _builtin_path(entry) if entry.lower().endswith(".json") else None
-            if path is None or workflow_origin.ever_stored(
-                hub, workflow_origin.BUILTIN_ORIGIN, entry
-            ):
+            if path is None:
+                continue
+            if workflow_origin.ever_stored(hub, workflow_origin.BUILTIN_ORIGIN, entry):
+                try:
+                    refresh_builtin_workflow(hub, entry, path)
+                except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
+                    logger.warning(
+                        "Built-in workflow %s will not read, so its stored "
+                        "copy is not updated: %s",
+                        entry,
+                        exc,
+                    )
                 continue
             try:
                 filed.append(store_builtin_workflow(hub, entry, path))
