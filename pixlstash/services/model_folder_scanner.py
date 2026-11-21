@@ -177,7 +177,7 @@ _LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
 
 @dataclass
 class FolderScanResult:
-    """What one folder's scan did, for logs and for the B5 API to report."""
+    """What one folder's scan did, for logs and for the API to report."""
 
     folder_id: int
     path: str
@@ -461,8 +461,8 @@ class ModelFolderScanner:
     ) -> list[tuple[int, str, str]]:
         """Files in *folders* named one of *names* that the shelf has no row for.
 
-        The quick half of picking up a model that landed after the last scan
-        (#1985): a walk and a lookup, nothing opened and nothing hashed, so a
+        The quick half of picking up a model that landed after the last scan:
+        a walk and a lookup, nothing opened and nothing hashed, so a
         workflow naming a file the shelf does not know can ask for it on every
         look. :meth:`register_file` is the slow half, for what this finds.
 
@@ -1061,8 +1061,8 @@ class ModelFolderScanner:
         in the column Civitai lookup and the public ``{sha256}/file`` route both
         resolve on. It is also the only thing the schema permits when the stored
         row is an ``adapter``: ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT
-        NULL)`` rejects the clear outright, which rolled back the entire write
-        batch and aborted the scan before its sweeps ever ran.
+        NULL)`` rejects the clear outright, which would roll back the entire write
+        batch and abort the scan before its sweeps ever ran.
         """
         existing = conn.execute(
             "SELECT mf.model_id AS model_id, m.file_kind AS file_kind, "
@@ -1210,7 +1210,7 @@ class ModelFolderScanner:
         Strictly **older than** this scan's stamp, not merely different from it.
         With ``!=`` two scans running at once each sweep away the rows the other
         just stamped, and a shelf whose files are all on disk reads as entirely
-        missing - measured at 4 of 5 unsynchronised runs flipping every file.
+        missing.
         ``<`` makes a concurrent scan's newer stamp survive, which is correct in
         both directions and across processes: a row is only demoted by the scan
         that walked the folder and did not find it. The residual case, a file

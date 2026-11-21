@@ -1,6 +1,6 @@
 """The folder-structure read: propose what each level of a folder tree is.
 
-v1.11 Phase 2 (``docs/plans/v1.11.0-existing-library.md`` §4). Eight signals,
+Eight signals,
 all deterministic and local - a folder name is a string, so no LLM and no
 language reading of names:
 
@@ -683,7 +683,7 @@ class FolderStructureRead:
 
         Called from ``_build_result`` and **not** from the end of ``_walk``: a
         cancel or a deadline raises ``ReadCancelled`` from inside the walk loop,
-        so a version that summed here left every row at ``picture_count: 0``
+        so summing in the walk would leave every row at ``picture_count: 0``
         while still reporting a real ``direct_picture_count`` - a partial result
         that says the library is empty, on the one path whose whole
         justification is that the partial result is showable.
@@ -1045,13 +1045,13 @@ class FolderStructureRead:
 
         Each appends its evidence to the caller's list. With ``may_propose`` it
         appends its kind too, and kinds that disagree become ``candidates`` in
-        the caller, exactly as the older signals do; without it - the name
+        the caller, exactly as the other signals do; without it - the name
         matched exactly one entity - the evidence stands and the match holds.
 
         ``faces`` outranks all four as well: it is evidence about the pictures,
         these are priors about the folder, and a person's folder is a leaf by
-        construction. Letting a leaf contest a one-face folder turned every
-        Person the read used to find into "Person or Set".
+        construction. Letting a leaf contest a one-face folder would turn every
+        Person the read finds into "Person or Set".
         """
         faces_spoke = "person" in kinds
 
@@ -1483,10 +1483,10 @@ def _dominant_identity_count(embeddings: list[np.ndarray]) -> int:
     Each face proposes a group: the faces within ``SAME_IDENTITY_COSINE`` of it
     (itself included). A member counts only if it matches at least
     ``_GROUP_COHERENCE_PCT`` of that group, not just the face that proposed it,
-    and the best-scoring group wins. Matching the proposer alone is how one
-    average-looking face near sixteen strangers read as "one face, 17 of 20"
-    (#1988); matching just over half is how one face bridging two look-alike
-    groups of nine read as 19 of 20 (review on #1994). O(n³) over at most
+    and the best-scoring group wins. Matching the proposer alone would let one
+    average-looking face near sixteen strangers read as "one face, 17 of 20";
+    matching just over half would let one face bridging two look-alike
+    groups of nine read as 19 of 20. O(n³) over at most
     ``SAMPLED_PER_FOLDER`` vectors, which is 8,000 comparisons per folder.
     """
     if not embeddings:

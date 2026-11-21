@@ -1,4 +1,4 @@
-"""Rewrite an img2img or image-edit API graph to inpaint with Crop & Stitch (#2446).
+"""Rewrite an img2img or image-edit API graph to inpaint with Crop & Stitch.
 
 A pure, deterministic transform: API graph in, a new API graph out, read from
 node classes and edges alone. The picture is cropped to the selection plus

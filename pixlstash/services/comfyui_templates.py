@@ -1,4 +1,4 @@
-"""The workflow templates the owner's ComfyUI serves (#2000).
+"""The workflow templates the owner's ComfyUI serves.
 
 ComfyUI ships its templates as static files from the
 ``comfyui-workflow-templates`` package, and lists the templates installed

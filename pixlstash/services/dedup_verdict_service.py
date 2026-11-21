@@ -1,6 +1,6 @@
 """Applying and remembering duplicate verdicts.
 
-There are exactly two verdicts in v1.9 and neither of them deletes anything:
+There are exactly two verdicts and neither of them deletes anything:
 
 * **stack** - the chosen members become one stack led by the chosen cover, with
   the metadata union applied; excluded members stay exactly where they were;
@@ -11,7 +11,7 @@ Both are recorded against the group *signature*, not against picture or group
 ids, which is what makes the memory survive a re-import (see
 :func:`pixlstash.services.dedup_tier_service.group_signature`). "Keep separate"
 stands until :func:`reopen_verdict_in_session` is called from the Decided page's
-"Clear decision" - or, since 2026-07-30, until its own operation is undone (see
+"Clear decision" - or until its own operation is undone (see
 below).
 
 Metadata union (design delta 5)
@@ -36,7 +36,7 @@ module calls it and adds the three the design requires on top:
   an embedding that belong to one specific picture), and inventing detection data
   is worse than not unioning. Instead, when the group's members between them
   reference exactly **one** character, every member that does not already carry
-  it gets ``Picture.pending_character_id`` set - the shipped deferred-assignment
+  it gets ``Picture.pending_character_id`` set - the deferred-assignment
   mechanism that the face-extraction task consumes. A group spanning several
   characters is left alone and logged; the members keep their own faces, which is
   the non-lossy outcome.
@@ -51,17 +51,15 @@ single ``batch_id`` across every group in the run, so
 step. Keep-separate changes no picture facet, so its row carries empty
 before/after payloads and the whole restore is done by its post-restore hook
 (undo reopens the verdict and returns the group to the queue; redo re-resolves
-it). Keep-separate was originally *not* op-logged (CSO ruling around #644: no
-reversible picture facet); the owner explicitly reversed that ruling on
-2026-07-30 and keep-separate is now a first-class, undoable operation,
-symmetric with the stack verdict.
+it). Keep-separate is a first-class, undoable operation, symmetric with the
+stack verdict.
 
 Clearing a decision ("Clear decision" on the Decided page) goes through
-:func:`reopen_verdict_in_session`. Since 2026-07-30 a clear of a still-standing
+:func:`reopen_verdict_in_session`. A clear of a still-standing
 ``stacked`` verdict **dissolves the verdict's stack** by restoring the recorded
 pre-verdict stack state from the verdict's own operation row - without that,
-the reopened group failed the queue's two-stack-units rule and never returned
-to review. That unstack is itself one undoable ``dedup.reopen`` operation; see
+the reopened group would fail the queue's two-stack-units rule and never
+return to review. That unstack is itself one undoable ``dedup.reopen`` operation; see
 the function's docstring for the full contract.
 
 Two details this module owns rather than inherits:
@@ -597,7 +595,7 @@ def _dry_run_summary_in_session(
         ``pictures`` counts the **distinct stack-expanded** set the run would
         move (B4): a group that folds an existing stack in reparents that
         stack's whole membership, so counting the group's own members
-        under-reported the dialog, and two groups can name members of the same
+        would under-report the dialog, and two groups can name members of the same
         stack, so summing per group would then over-report it. The per-cover
         figures deliberately stay on the group's own
         members, because the tag and score union runs over exactly those,
@@ -955,8 +953,7 @@ def apply_keep_separate_in_session(
     """Remember that this group is *not* duplicates. Changes no picture row.
 
     Records **one** operation (:data:`OP_TYPE_KEEP_SEPARATE`), exactly like the
-    stack verdict does - the owner's 2026-07-30 reversal of the #644-era CSO
-    ruling that kept this verdict out of the log. The verdict changes no picture
+    stack verdict does. The verdict changes no picture
     facet, so the operation's before/after payloads are empty and the whole
     restore is the post-restore hook's: undo reopens the verdict and returns the
     group to the queue; redo re-resolves it. :func:`reopen_verdict_in_session`
@@ -1040,8 +1037,7 @@ def _verdict_stack_still_standing(session: Session, row: DedupVerdict) -> bool:
     live-groups filter requires a group's live members to span two or more
     stack units (``COALESCE(stack_id, -id)``), so a group whose members all
     share the verdict's stack is invisible to the queue and clearing only the
-    memory would strand it - gone from Decided, never back in review (the
-    owner-reported 2026-07-30 bug).
+    memory would strand it - gone from Decided, never back in review.
 
     The check is deliberately narrow: it must be the **verdict's own** stack.
     If the user already dissolved it by hand the members span their own units
@@ -1186,13 +1182,13 @@ def reopen_verdict_in_session(
     **Clearing a still-standing stacked verdict also dissolves its stack.**
     The open queue only offers groups whose live members span two or more
     stack units, so a cleared-but-still-stacked group would vanish from the
-    Decided page yet never return to review (the owner-reported 2026-07-30
-    bug). The stack is dissolved by restoring the **recorded pre-verdict stack
-    state** from the verdict's own operation-log row - so a pre-existing stack
-    the verdict folded in comes back instead of being flattened - scoped to
-    that one operation's targets, so clearing one group of a bulk batch never
-    touches its batch siblings. Stack rows the restore empties are deleted
-    (`operation_log_service.delete_emptied_stacks`, the #643 hygiene). The
+    Decided page yet never return to review. The stack is dissolved by
+    restoring the **recorded pre-verdict stack state** from the verdict's own
+    operation-log row - so a pre-existing stack the verdict folded in comes
+    back instead of being flattened - scoped to that one operation's targets,
+    so clearing one group of a bulk batch never touches its batch siblings.
+    Stack rows the restore empties are deleted
+    (`operation_log_service.delete_emptied_stacks`). The
     metadata union is deliberately **not** reverted: a clear means "review
     this again", not "undo the verdict" - that full inverse remains the
     operation log's.
@@ -1201,11 +1197,10 @@ def reopen_verdict_in_session(
     recorded under its own batch id (returned as ``batch_id``); undoing it
     restacks the pictures AND re-marks the verdict decided via the
     :func:`restore_reopens_in_session` post-restore hook, so the pictures and
-    the queue can never disagree. The old rule was "reopen records nothing,
-    or undo-of-reopen becomes a second, confusing way to re-decide a group";
-    that rule survives exactly where its rationale still holds - a clear that
+    the queue can never disagree. A clear that
     touches **no picture** (keep-separate, or a stack the user already
-    dissolved by hand) records nothing and returns ``batch_id: None``. Once a
+    dissolved by hand) records nothing and returns ``batch_id: None``, so
+    undo-of-reopen is not a second way to re-decide a group. Once a
     clear moves pictures, *not* re-deciding on undo would leave the pictures
     restacked while the group sat open - the same half-restore class the
     verdict hooks exist to prevent - so the operation is recorded and its
@@ -1358,9 +1353,10 @@ def restore_verdicts_in_session(
     Why this is needed at all: the operation log restores the reversible *picture*
     facets, and a verdict changes two more things that are not picture facets -
     the ``DedupVerdict`` row (decided) and the ``DedupGroup`` row (resolved).
-    Without this hook an undo left the group decided, so it never returned to
-    the queue, survived a rescan (the signature still carried a live verdict)
-    and was recoverable only through ``POST /dedup/verdicts/reopen``. For
+    Without this hook an undo would leave the group decided, so it would never
+    return to the queue, would survive a rescan (the signature still carries a
+    live verdict) and would be recoverable only through
+    ``POST /dedup/verdicts/reopen``. For
     keep-separate this hook is the *entire* restore: the operation's recorded
     diff is empty because the verdict changed no picture facet.
 
@@ -1546,8 +1542,8 @@ def bulk_auto_stack_in_session(
     **The candidate query uses the queue's own filter**
     (:func:`~pixlstash.services.dedup_tier_service.live_groups_filter`), so the
     run acts on exactly the groups the list shows and the badge counts. See the
-    comment on the query for the already-collapsed groups the old, weaker filter
-    let through.
+    comment on the query for the already-collapsed groups a weaker filter
+    would let through.
 
     Args:
         session: Pre-opened session.
@@ -1910,11 +1906,9 @@ def bulk_auto_stack(
     """Write-path vault wrapper around :func:`bulk_auto_stack_in_session`.
 
     A dry run returns before minting a batch id and writes nothing, so it goes to
-    ``run_immediate_read_task`` instead of the serialised writer queue. On the
-    queue it held the single writer thread for as long as the aggregate took, and
-    every stack verdict behind it (also a write task) waited: the consent dialog
-    timed out and the queue then refused each group with "Could not stack that
-    group" until the preview finished (#751). The preview is read-only, so
+    ``run_immediate_read_task`` instead of the serialised writer queue, where it
+    would hold the single writer thread and stall every stack verdict behind it
+    for as long as the aggregate takes. The preview is read-only, so
     it has no business blocking writes even when it is slow.
     """
     runner = vault.db.run_immediate_read_task if dry_run else vault.db.run_task

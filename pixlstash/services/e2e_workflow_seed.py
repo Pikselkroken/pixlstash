@@ -1,4 +1,4 @@
-"""The e2e backend's workflow seed (#2314): workflows, pictures and recipes.
+"""The e2e backend's workflow seed: workflows, pictures and recipes.
 
 The Workflows specs run against the real API, so the e2e library needs
 workflow data. ``frontend/e2e/serve_e2e_backend.py`` writes the seed under its

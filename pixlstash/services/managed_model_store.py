@@ -7,9 +7,8 @@ would be a lie - a ``user`` folder is an association the owner made, and one the
 owner cannot dissolve is not an association. A zero-folder error state is worse:
 it makes a normal condition (nothing catalogued in place yet) look broken.
 
-**The answer is the ``managed`` kind**, which has been in the enum since B2 and
-was created by nothing. It means storage PixlStash owns, the way the vault owns
-picture files:
+**The answer is the ``managed`` kind.** It means storage PixlStash owns, the
+way the vault owns picture files:
 
 * **exactly one row always exists**, created at first run and never deleted;
 * it is the default destination for a drop or an import;
@@ -19,8 +18,8 @@ picture files:
   error and gets no message.
 
 **Where it goes: beside the hub, not at a fixed platform path.** The hub already
-sits next to ``server-config.json`` rather than at ``user_data_dir`` (issue
-#168) precisely so a test or an alternate deployment gets its own instead of
+sits next to ``server-config.json`` rather than at ``user_data_dir``
+precisely so a test or an alternate deployment gets its own instead of
 reaching into the user's real one. That reasoning is *stronger* here, not
 weaker: this is a directory files are copied into and unlinked from, so a fixed
 path would have every test suite writing into the owner's real store. In the
@@ -99,7 +98,7 @@ def deletes_unclaimed_files(folder_kind: str, folder_path: str) -> bool:
     owner's outright. The third is the folder PixlStash downloads its engines
     into: the ENGINES there are ours and refused by their own gate wherever they
     live, but a file we merely *found* beside them is not, and it is declared
-    (#927) exactly so a 339 MB ``best.pt`` is visible rather than invisible.
+    exactly so a 339 MB ``best.pt`` is visible rather than invisible.
     Visible and unremovable is the wrong half of that - Forget wants every copy
     gone before it will act, so there would be nothing left but a file manager.
 
@@ -124,9 +123,9 @@ def relocatable_identity(folder) -> Optional[tuple[str, str, str]]:
     ``GET /model-folders`` reports it, from here, rather than each deciding.
 
     Three do. The managed store, which is storage PixlStash owns outright; the
-    folder PixlStash downloads its own engines into, whose location became a
-    recorded setting in #905 (closing the long-open #112); and the InsightFace
-    packs, whose root became one in #906 - recorded the same way and for the same
+    folder PixlStash downloads its own engines into, whose location is a
+    recorded setting; and the InsightFace
+    packs, whose root is recorded the same way and for the same
     reason, because it is machine-global too. The fourth declared root does not:
     the HuggingFace cache is ``fixed`` - its location is read from the
     environment at import by a library shared with every other tool on the
@@ -185,8 +184,8 @@ def find_default_folder(hub: HubDatabase) -> Optional[dict]:
 
     The one the owner marked (``is_default = 1``, at most one by the partial
     unique index ``ux_model_folder_single_default``), else the managed store.
-    Marking is a preference, never a requirement, so an unmarked hub - every hub
-    before this column existed - keeps the managed store as its destination.
+    Marking is a preference, never a requirement, so an unmarked hub keeps the
+    managed store as its destination.
     """
     row = hub.fetchone(
         "SELECT id, path, kind, owner, movable, created_at FROM model_folder "

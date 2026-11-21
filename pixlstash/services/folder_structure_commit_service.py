@@ -1,15 +1,14 @@
-"""Commit an accepted folder-structure mapping. v1.11 Phase 3.
+"""Commit an accepted folder-structure mapping.
 
-``docs/plans/v1.11.0-existing-library.md`` §4 Phase 3; wire contract
-``docs/integration_architecture.md`` §20.2. The read (Phase 2,
-``folder_structure_service.py``) only ever proposes; this module is the one
+Wire contract ``docs/integration_architecture.md`` §20.2. The read
+(``folder_structure_service.py``) only ever proposes; this module is the one
 place anything from the mapping screen is written.
 
 **No file is moved, renamed or copied, at any stage, in either commit mode.**
 
 - ``mode="reference"`` (the default): the scanned root is registered as an
   ordinary :class:`~pixlstash.db_models.reference_folder.ReferenceFolder` -
-  indexed in place by the existing, already-shipped
+  indexed in place by the existing
   :class:`~pixlstash.tasks.reference_folder_scan_task.ReferenceFolderScanTask`,
   which is the only filesystem-reading step here and writes nothing but the
   vault database and its own thumbnail cache. Right for a folder *external* to
@@ -27,7 +26,7 @@ place anything from the mapping screen is written.
   ``image_root`` - which is the proof the two need to stay two commit modes,
   not one.
   ``local_import_pictures`` does the read this mode's own filesystem step
-  (there is no already-shipped scan task for "index my own image_root in
+  (there is no scan task for "index my own image_root in
   place"); ``apply_local_mapping`` then reuses the same entity-resolution code
   ``apply_mapping`` uses, via the shared ``_link_pictures`` helper, so the two
   modes cannot answer "who does this folder belong to" differently.
@@ -430,16 +429,15 @@ def root_import_answered(session: Session) -> bool:
 
     An empty library over a folder that holds pictures is one whose owner has
     not been asked what those pictures are: the app asks when it loads (the
-    first-run import offer). The boot-time root scan used to answer first, so
-    a small library was indexed, tags and all, before the screen came up and
-    the questions never appeared. The scan waits for the answer.
+    first-run import offer). The scan waits for the answer, so a small
+    library is not indexed, tags and all, before the screen comes up and asks.
 
     The newest ``local_import`` record decides. ``done`` or ``deferred``
     ("organise later": index everything, map nothing) is an answer.
     ``pending`` is the commit still running and holds the scan off so the
     two do not build rows for the same files. ``abandoned`` and
     ``superseded`` are no answer, so the empty library keeps waiting for the
-    offer; a library that already holds pictures is scanned as before, or an
+    offer; a library that already holds pictures is scanned all the same, or an
     aborted import would switch its rescan off for good.
 
     Both facts come from one statement so they describe one snapshot: this
@@ -815,7 +813,7 @@ def local_import_pictures(
     """Import every supported file under *root_path* as a managed Picture.
 
     The `local_import` counterpart to `register_reference_folder` +
-    `ReferenceFolderScanTask`'s scan pass: there is no already-shipped task
+    `ReferenceFolderScanTask`'s scan pass: there is no task
     for "index my own `image_root` in place", so this module does that one
     filesystem read itself.
 

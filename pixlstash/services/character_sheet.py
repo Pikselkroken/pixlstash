@@ -11,8 +11,8 @@ so each sheet is a slightly different person; within one sheet the six faces
 agree, which is why the person picks one sheet and its six panels become the
 character's pictures.
 
-A sheet can also be drawn from a reference picture plus the words (#2679):
-an edit workflow (Qwen-Image-Edit, FLUX.2 Klein, #2700, or MiniMax H3's
+A sheet can also be drawn from a reference picture plus the words:
+an edit workflow (Qwen-Image-Edit, FLUX.2 Klein, or MiniMax H3's
 reference model) reads the picture
 for the face and draws on an empty canvas of the sheet's size. No probe has
 measured that route yet.
@@ -437,7 +437,7 @@ def sheet_prompt(
     Trousers are always named (left out, MOSS improvises bare legs); shoes only
     at full body, where they belong, since naming them pulls a cropped framing
     to full length. *trigger* is a character LoRA's trigger word, put first.
-    *proportions* other than ``typical`` (#1079) is said with the character
+    *proportions* other than ``typical`` is said with the character
     and reshapes the body photos' boxes to that figure; the words alone lose
     to boxes laid out for a seven-heads-tall adult.
     The boxes are laid out on the large canvas and scaled to *size*'s.

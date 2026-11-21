@@ -1,18 +1,12 @@
 """Content-hash matching for the import paths: Scrapheap included.
 
-**Why this module exists.** Import de-duplication used to ask only "is there a
-LIVE picture with this ``pixel_sha``?". ``Picture.find`` defaults
-``include_deleted=False``, and the one-shot import called it that way
-(``routes/pictures/_helpers.py``), so **a scrapheaped picture was invisible to
-import dedup**: re-importing a file whose picture sits in the Scrapheap created a
-brand-new second row while the original was still there, doubling the bytes on
-disk and refilling the duplicate queue.
-
-That was a rare annoyance while the Scrapheap held a handful of pictures. It
-stops being rare the moment a bulk cleanup ("Keep cover only") puts hundreds of
-pictures there in one gesture: those are *by definition* copies of files that
-still exist wherever the user imports from, so the next import silently undoes
-the cleanup.
+**Why this module exists.** ``Picture.find`` defaults ``include_deleted=False``,
+so a live-only check leaves **a scrapheaped picture invisible to import dedup**:
+re-importing a file whose picture sits in the Scrapheap would create a brand-new
+second row while the original is still there, doubling the bytes on disk and
+refilling the duplicate queue. A bulk cleanup ("Keep cover only") puts hundreds
+of pictures there in one gesture, copies of files that still exist wherever the
+user imports from, so the next import would silently undo the cleanup.
 
 **The rule this module encodes.** ``pixel_sha`` is a sampled candidate key, not
 proof of identity. Candidates must also have the same byte size and pass a
@@ -20,14 +14,14 @@ full-file SHA-256 comparison. A confirmed match is one of exactly two things,
 and the import must be able to tell them apart:
 
 * a **live** match; the file is already in the library. Nothing to do; it is a
-  duplicate, exactly as before.
+  duplicate.
 * a **scrapheaped** match, the row exists but is soft-deleted. The file is NOT
-  imported again (that is the doubling bug). Re-importing it means the user
+  imported again (that would double it). Re-importing it means the user
   wants it back, so the import paths restore the picture and report it as a
   third, distinct outcome rather than an ordinary duplicate.
 
-**Live wins over scrapheaped for the same hash.** Both can exist today,
-precisely because the bug above already created second rows and a live row
+**Live wins over scrapheaped for the same hash.** Both can exist (older
+imports created second rows), and a live row
 means the content IS in the library, so "duplicate" is the honest answer.
 
 **A permanently purged file is not a match, by construction.** Delete-forever

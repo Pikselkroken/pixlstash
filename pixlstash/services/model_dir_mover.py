@@ -1,4 +1,4 @@
-"""Move or rename a directory inside a registered model folder (#2206).
+"""Move or rename a directory inside a registered model folder.
 
 The folder-shaped counterpart of :mod:`pixlstash.services.model_mover`, with the
 same two phases: :func:`plan_directory_move` refuses before anything is touched,

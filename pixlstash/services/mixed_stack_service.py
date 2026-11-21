@@ -8,7 +8,7 @@ the *same one tier 2 already makes*: the 64-bit dHash in
 :func:`~pixlstash.services.dedup_tier_service._popcount64` computes, the
 ``max_hamming = int((1 - threshold) * 64)`` cut
 :func:`~pixlstash.services.dedup_tier_service.near_pairs_in_bucket` uses, and
-the shipped union-find behind
+the union-find behind
 :func:`~pixlstash.services.dedup_tier_service.groups_from_pairs`. A second
 notion of "similar" on the same surface would be a bug generator.
 
@@ -34,9 +34,7 @@ which is a connected-components question. Three numbers fall out of it:
   *nearest_edge* is the real distance, always. Both are folded out of the same
   edge pass, so they cost no extra query on a page of rows.
 
-Measured on the owner's library at the time this shipped: **26** of the live
-stacks are not one cluster at the 0.90 default and **9** at the 0.65 floor,
-which is the spectrum the threshold slider drives. Nothing here is bound to a
+Nothing here is bound to a
 constant: the same stack is mixed at 0.90 and fine at 0.65, and that is the
 point.
 
@@ -217,8 +215,8 @@ class MemberEdge:
     and that ``None`` is what the stranded decision is made on. *nearest_edge*
     is unconditional: the real distance to the real closest sibling, whatever it
     is. One decides membership of the list; the other is always the truth. Using
-    the thresholded value for both is what made the page print an en dash and
-    claim a picture matched nothing, about members whose closest sibling was 89%
+    the thresholded value for both would make the page print an en dash and
+    claim a picture matched nothing, about members whose closest sibling is 89%
     similar.
 
     Attributes:
@@ -408,7 +406,7 @@ def _percent(similarity: float) -> int:
 def _stranger_pill_text(count: int, percents: list[int]) -> str:
     """``"1 picture is only 89% like the rest"``: the strangers, by number.
 
-    The pill this replaced said *matches nothing else*, which is a false
+    Saying *matches nothing else* would be a false
     statement about a member whose closest sibling is 7 bits away out of 64. It
     matches nothing **at this threshold**, and the number is the fact the user
     actually needs in order to disagree with the cut.
@@ -526,17 +524,17 @@ def _component_structure_pill(
 
 
 def build_mixed_stack_evidence(report: "CohesionReport") -> list[dict[str, Any]]:
-    """The row-level why-pills for one mixed stack, in the shipped pill shape.
+    """The row-level why-pills for one mixed stack, in the why-pill shape.
 
     Deliberately the **same** ``[{text, against}]`` contract
     :func:`~pixlstash.services.dedup_tier_service.build_group_evidence` produces
-    and ``WhyPillModel`` serialises, so the queue row's shipped pill component
+    and ``WhyPillModel`` serialises, so the queue row's pill component
     renders this list with no second code path. Only the content differs, because
     the question differs: a duplicate group's pills argue about whether these
     pictures are the same picture, and a mixed stack's argue about how little
     holds an existing stack together.
 
-    ``against`` keeps its shipped meaning, *this argues against these pictures
+    ``against`` keeps its meaning, *this argues against these pictures
     belonging in one stack*: the structure and the strangers are red, the thread
     that does hold is olive.
 
@@ -666,7 +664,7 @@ def _fold_components(
 ]:
     """Fold *edges* into connected components over *member_ids*.
 
-    Reuses the shipped union-find (``dedup_sweep_service._LikenessForest``, the
+    Reuses the union-find (``dedup_sweep_service._LikenessForest``, the
     same one :func:`~pixlstash.services.dedup_tier_service.groups_from_pairs`
     folds near pairs with) rather than growing a second components implementation
     on the same data. The forest only knows nodes an edge named, so members with
@@ -1202,7 +1200,7 @@ def list_mixed_stacks_in_session(
     stack: ``stackable`` is false when **any** member is frozen by a locked
     picture set, because a locked set refuses the whole stack rather than the
     member (:func:`~pixlstash.services.set_lock_service.enforce_stack_detach_not_locked`).
-    Without it the row's primary button offered an action the server answers
+    Without it the row's primary button would offer an action the server answers
     ``423`` to, with nothing on the row explaining why.
 
     Returns:
@@ -1434,10 +1432,8 @@ def split_stranded_in_session(
 ) -> dict[str, Any]:
     """Split the marked member(s) off *stack_id*, as one undoable operation.
 
-    The name is historical: the *default* selection is the stranded set, and
-    that is all this did until the Mixed stacks page grew per-member marking.
-    An explicit list is now bounded by the stack's live membership rather than
-    by cohesion; see the reversal note on the ``picture_ids`` branch below.
+    The *default* selection is the stranded set. An explicit list is bounded
+    by the stack's live membership rather than by cohesion.
 
     Args:
         session: Pre-opened session; this commits once.

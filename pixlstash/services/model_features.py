@@ -169,7 +169,7 @@ def _snapshot_dirs(repo) -> list[str]:
     *frozenset*, so "the first directory" is whatever order the set iterated in
     that run - and a repo can hold a complete revision beside a half-downloaded
     one that has the tokenizer but no ``config.json``. Picking one at random
-    made ``Salesforce/blip-image-captioning-base`` classify as ``other`` on one
+    could classify ``Salesforce/blip-image-captioning-base`` as ``other`` on one
     run and ``captioner`` on the next, off the same disk.
     """
     paths = []

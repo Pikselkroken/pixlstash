@@ -1,6 +1,6 @@
 """Read-only findings about a library that was organised before PixlStash saw it.
 
-The "About your library" screen (v1.11 Phase 6). Every finding here is computed
+The "About your library" screen. Every finding here is computed
 from data that already ships - the exact-duplicate key the duplicate queue's
 tier 1 groups on, the description sentinel the captioner's finder tests, face
 rows and their character assignment, and the app's own definition of an
@@ -28,14 +28,14 @@ Two properties the screen depends on and this module owns:
   ``folder_pictures`` / ``folders`` so the screen can say how much of the library
   that was.
 
-  **Since v1.11 Phase 4b a vault-managed picture can have one too.** A library
+  **A vault-managed picture can have one too.** A library
   whose owner has chosen a layout stores ``<Project>/<Person>/<uuid>.png``, so
-  the directory-component test now admits folders PixlStash wrote from the
+  the directory-component test admits folders PixlStash wrote from the
   layout as well as folders the owner made by hand. That is deliberate and not a
   hole in the rule above: under a layout those folders *are* the organisation -
   they are named after the projects, people and sets these findings are about -
   so a check that skipped them would be blind to exactly the libraries this
-  release is for. What it does mean is that a folder-shaped finding in a
+  screen is for. What it does mean is that a folder-shaped finding in a
   laid-out library may be restating a membership the owner can already see, and
   the wording of those findings is worth a look once both are on a real
   library.
@@ -392,7 +392,7 @@ def _duplicate_scope(facts: "_LibraryFacts", left: str, right: str) -> Optional[
     predicate applied *inside* the aggregate
     (:func:`~pixlstash.services.dedup_tier_service.find_exact_groups_in_session`),
     so a scope holding one copy of each shared file sees count 1 and finds
-    nothing. Scoping to `left` - which this did first - sent the owner to an
+    nothing. Scoping to `left` would send the owner to an
     empty queue for a finding that had just told them 90 of 100 pictures were
     duplicated, on exactly the un-swept library the finding is designed for.
 
@@ -409,8 +409,7 @@ def _duplicate_scope(facts: "_LibraryFacts", left: str, right: str) -> Optional[
     * **An ancestor that narrows nothing.** Two unrelated trees under one home
       directory (``~/Pictures`` and ``~/Downloads``) are *siblings*, structurally
       identical to ``library/selects`` and ``library/final``, so no rule about
-      path shape can tell them apart - the first version of this tried, and
-      admitted ``/home/<user>`` behind a scope pill reading the login name.
+      path shape can tell them apart.
 
       What does tell them apart is measurable: how much of the library the
       ancestor's sub-tree actually holds. Above
@@ -724,7 +723,7 @@ def build_insights(vault: "Vault") -> dict:
     **This is a full pass over the library, not a handful of indexed lookups** -
     every live picture's id, path, digest, size and stack, plus four more
     whole-table selects - and it holds the engine read lock for its duration.
-    That is affordable at the scale this release is sized for (a 12k-picture
+    That is affordable at the scale this screen is sized for (a 12k-picture
     library measures well under a second) and it is why the screen has one
     button that repeats it rather than a poll. If a library ever makes this the
     slow part, the shape to reach for is a cached row per check invalidated by

@@ -1,6 +1,6 @@
-"""Moving an existing library onto its layout (v1.11 Phase 4c).
+"""Moving an existing library onto its layout.
 
-The one operation in this release that deliberately moves everything. It is
+The one operation that deliberately moves everything. It is
 offered when a layout is set or changed and never taken automatically, and it is
 **not the move-when-false rule**: under that rule a flat path parses against
 nothing, can never be false, and never moves, which is exactly why old libraries
@@ -9,7 +9,7 @@ match, now* - so it asks :func:`~pixlstash.utils.library_layout.migrate_destinat
 where the layout would put each picture rather than whether its folder has
 stopped being true.
 
-Everything that touches a file is Phase 4b's: the same planner refusals, the
+Everything that touches a file is the move engine's: the same planner refusals, the
 same :func:`~pixlstash.services.layout_move_service.apply_moves`, the same
 ``PictureMove`` journal that stops the reference-folder scan reading our own
 writes as owner intent, and the same ``FACET_LOCATION`` undo. What is added here
@@ -117,7 +117,7 @@ def plan_migration(
             unfiled folder. See :func:`migrate_destination`.
 
     Returns:
-        ``(plan, skipped, examined, last_id)``. *skipped* carries Phase 4b's own
+        ``(plan, skipped, examined, last_id)``. *skipped* carries the move engine's own
         refusal vocabulary; a picture the layout simply leaves alone is not a
         refusal and is not in it.
     """
@@ -211,7 +211,7 @@ def _same_volume(move: PlannedMove, devices: dict) -> bool:
     "detect the copy and warn about its cost" - it is detect the move that
     cannot happen, and say so before the run rather than one log line per file
     during it. Copying across the boundary would be a new capability with its
-    own verification, and is deliberately not in this phase.
+    own verification, and is deliberately not done here.
 
     ``same_device`` is ``model_mover``'s, which is where the ``st_dev``
     reasoning (bind mounts, symlinked folders, and the seam a test needs to
@@ -245,8 +245,8 @@ def preview_in_session(
 
     Planned in the same windows the run uses rather than in one pass over the
     library. That is not tidiness: ``picture_facets`` and ``_sizes_for`` pass
-    their ids to a raw ``IN``, which Phase 4b never had to think about because
-    it only ever handed them a 200-id batch, and a whole-library ``IN`` is the
+    their ids to a raw ``IN``, which the move engine only ever hands a
+    200-id batch, and a whole-library ``IN`` is the
     SQLite bound-parameter ceiling. Windowing keeps every clause the size the
     engine was written for and keeps the ORM identity map from holding the
     library.
@@ -393,16 +393,15 @@ def _folder_tree(
     """The library as this layout would draw it, every folder of it.
 
     A folder is in it when anything about it is non-zero, **and the library root
-    is one of them** (#1161). It has no name of its own, which is why it was
-    left out originally, but leaving it out made the pictures the layout cannot
+    is one of them**. It has no name of its own, but leaving it out would make
+    the pictures the layout cannot
     place invisible: with the unfiled sweep off they stay in the root, and a
     tree that draws every folder except the one they are in reads as "nothing
     stayed behind". It is not synthetic - it is a row only when pictures are
-    actually in it, the same rule as every other row. Uncapped on purpose: an earlier
-    version kept the sixty busiest and counted the rest, and on a library filed
-    by date that was "...and 299 more folders" over the rows the owner needed
-    to check. A few thousand rows is a list; a count of the rows withheld is
-    not.
+    actually in it, the same rule as every other row. Uncapped on purpose: a capped
+    tree on a library filed by date reads "...and 299 more folders" over the
+    rows the owner needs to check. A few thousand rows is a list; a count of
+    the rows withheld is not.
 
     Sorted by path, so a parent that is in the list always comes immediately
     before its children. A parent can still be absent - a layout whose first
@@ -412,7 +411,7 @@ def _folder_tree(
     ``depth`` is the folder's true depth and not an indent: the screen reads
     the structure off ``path``, indenting under the nearest ancestor that is
     actually present. ``docs/frontend_architecture.md`` ("The tree is the
-    argument") has the measurement that settled it.
+    argument") explains why.
     """
     paths = set(have) | set(arriving) | set(leaving)
     return [
@@ -462,14 +461,14 @@ def run_migration_pass(
     One pass, one operation row - and the caller repeats until ``done``,
     carrying ``next_after_id`` and the same ``batch_id`` each time. A pass that
     raises rolls its own files back and leaves every earlier pass standing,
-    which is the half-moved-but-consistent tree Phase 4c asks for.
+    which is the half-moved-but-consistent tree a migration needs.
 
     **Three phases, and the middle one is not on the writer thread.** The plan
     and its journal commit first, then the renames run here, then the rows are
     repointed in a second short transaction. A whole-library migration moves
     real files by the thousand; doing that inside the serialised writer's open
-    transaction meant a shutdown or a library switch could dispose the engine
-    part way through a batch, and the best-effort rollback that followed is the
+    transaction would let a shutdown or a library switch dispose the engine
+    part way through a batch, and the best-effort rollback that follows is the
     one path that can lose a picture's metadata for good.
     """
     from pixlstash.services.operation_log_service import (

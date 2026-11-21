@@ -1,8 +1,7 @@
 """The move engine: place a new picture, and move an existing one when it must.
 
-v1.11 Phase 4b (``docs/plans/v1.11.0-existing-library.md`` §4). The layout model
-in ``utils/library_layout.py`` decides *where*; this decides *whether*, and then
-does it.
+The layout model in ``utils/library_layout.py`` decides *where*; this decides
+*whether*, and then does it.
 
 **Two jobs, one primitive.** ``render`` says where a picture with no folder yet
 belongs, and ``relocate`` says where one with a folder has to go - and returns
@@ -18,7 +17,7 @@ moment they are written.
 
 **Every move is recorded** in ``picture_move`` before anything walks the tree
 again, so the reference-folder scan can tell PixlStash's own write from the
-owner's. Without that record Phase 5 reads our move back as intent, unfiles the
+owner's. Without that record the scan reads our move back as intent, unfiles the
 picture, and the two flip each other forever over real files.
 
 **An emptied folder is kept.** Nothing here calls ``rmdir``. A folder the owner
@@ -457,14 +456,13 @@ def _destination_stays_inside(root_path: str, destination_path: str) -> bool:
     Resolved, not lexical, and applied to the **deepest ancestor that exists**:
     that is the only part a link can be hiding in, and everything below it is
     created here as a plain directory. ``resolve_path_within`` is the same
-    strict primitive the rotate sink uses (#1024).
+    strict primitive the rotate sink uses.
 
     **The price is deliberate and it is small.** A picture whose destination
     folder is a symlinked subfolder is declined and stays exactly where it is -
     which is this engine's default answer to almost everything anyway, not a
-    feature the owner loses. That is why the strict form is affordable here and
-    was contentious for rotate, where refusing meant a photo that could not be
-    turned at all.
+    feature the owner loses. That is why the strict form is affordable here;
+    for rotate, refusing means a photo that cannot be turned at all.
     """
     ancestor = os.path.dirname(destination_path)
     while ancestor and not os.path.exists(ancestor):
@@ -499,7 +497,7 @@ def _sidecar_plan(
 
     A layout move normally changes the folder and never the file name, so the
     sidecar keeps its own name too and only its folder changes. **The one
-    exception is Phase 4c's collision suffix**, which does change the picture's
+    exception is the migration's collision suffix**, which does change the picture's
     name - and a sidecar pairs with its picture by *stem*, so it has to carry
     the same suffix or it lands beside a picture it no longer names (and
     collides with the sidecar of whatever file was already there). Only a
@@ -599,12 +597,12 @@ def move_planned_files(
     destination, in the order they landed.
 
     Separating this from the row writes is the point. Up to ``BATCH_SIZE``
-    renames used to run inside the serialised writer's own open transaction, so
-    a shutdown or a library switch could dispose the engine part way through:
-    the writer finished its remaining renames, its ``commit()`` then raised, and
-    the rollback meant to save it is best-effort by construction. Doing the I/O
-    on the calling thread leaves the writer two short bursts either side of it,
-    neither of which outlives a shutdown join.
+    renames inside the serialised writer's own open transaction would let a
+    shutdown or a library switch dispose the engine part way through: the
+    writer would finish its remaining renames, its ``commit()`` would then
+    raise, and the rollback meant to save it is best-effort by construction.
+    Doing the I/O on the calling thread leaves the writer two short bursts
+    either side of it, neither of which outlives a shutdown join.
 
     Args:
         applied: Appended to, in order, with every move that reached the disk,
@@ -821,7 +819,7 @@ def _carry_thumbnail(
     the other form looks for a name nobody wrote, finds nothing, and strands a
     bitmap at the old name that nothing ever collects - the sweep only ever
     looks where a row's *current* path says. ``find_thumbnail`` also brings a
-    pre-#1164 sibling bitmap home before the rename.
+    legacy-named sibling bitmap home before the rename.
     """
     old_thumb = ImageUtils.find_thumbnail(image_root, old_stored)
     new_thumb = ImageUtils.get_thumbnail_path(image_root, new_stored)
@@ -939,7 +937,7 @@ def plan_match_moves(
 def _free_name(destination_path: str, claimed: set) -> Optional[str]:
     """The first unused spelling of *destination_path*, suffixing ``-2``, ``-3``...
 
-    **The suffix rule, decided once** (v1.11 Phase 4c). Two pictures of the same
+    **The suffix rule, decided once.** Two pictures of the same
     name from two different folders render into one path when a library is
     migrated onto a layout, and the migration is the owner asking for every file
     to move - declining the second one would leave the tree half-arranged for a
@@ -978,7 +976,7 @@ def _prepare_move(
 
     Args:
         uniquify: Apply :func:`_free_name` to a taken destination instead of
-            declining the picture. Phase 4c's whole-library migration only - see
+            declining the picture. The whole-library migration only - see
             that function for why the two callers differ.
 
     Returns:
@@ -1107,7 +1105,7 @@ def picture_exists(vault, picture_id: int) -> bool:
 
 
 def library_folder_tree(session: Session, image_root: Optional[str]) -> list:
-    """The folders of the library root that pictures are filed in (#2458).
+    """The folders of the library root that pictures are filed in.
 
     Backs the Media sidebar's Folders tree, which draws where files are rather
     than where assignments say they should be: a set whose pictures were all
@@ -1337,8 +1335,8 @@ def rename_entity_folders(
     Raises:
         ValueError: If ``entity_id`` is ``None``. Without it there is no way to
             tell this entity's own row from a second entity of the same name,
-            and the function would silently fall back to the name comparison
-            this replaced - which either renames the other entity's folder or
+            and the function would silently fall back to a bare name comparison
+            - which either renames the other entity's folder or
             refuses a rename that was fine, depending on flush state. A caller
             that cannot name the row it is renaming has a bug, and a loud one is
             worth more than a rename that quietly goes to the wrong folder.

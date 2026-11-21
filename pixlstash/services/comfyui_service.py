@@ -1,10 +1,10 @@
 """Service layer for ComfyUI workflow execution and output import.
 
-Extracted from ``pixlstash/routes/comfyui.py`` to keep the route handlers thin
-(backend refactor Phase 2 §4.5). Owns the orchestration that talks to a ComfyUI
-host: uploading source images, submitting prompts, polling history, downloading
-the produced images, and importing them back into PixlStash (stack placement,
-face/set/project propagation, view-context assignment, abort).
+Keeps the route handlers in ``pixlstash/routes/comfyui.py`` thin. Owns the
+orchestration that talks to a ComfyUI host: uploading source images, submitting
+prompts, polling history, downloading the produced images, and importing them
+back into PixlStash (stack placement, face/set/project propagation,
+view-context assignment, abort).
 
 The single-event import path ``_process_comfyui_outputs`` is a deliberate
 exception to the origin-aware event envelope; its contract is documented on the
@@ -839,7 +839,7 @@ def _upload_image_to_comfyui(
 
     The only code that POSTs to ComfyUI's ``/upload/image``, so the only way a
     picture reaches a run: ``POST /workflows/run`` calls it to fill a card's
-    picture inputs (#1457), once per distinct picture and only after every
+    picture inputs, once per distinct picture and only after every
     refusal has been decided.
     """
     mime_type, _ = mimetypes.guess_type(file_path)
@@ -1536,7 +1536,7 @@ def _emit_comfyui_progress(
 
     ``pixlstash_run_id`` is PixlStash's id for the run (``run-<hex>``), which
     is all a reader knew of a run held for the GPU when ``/workflows/run``
-    answered. ``run_id`` keeps its old ``comfyui-<prompt_id>`` meaning."""
+    answered. ``run_id`` is ``comfyui-<prompt_id>``."""
     recorded = run_outcome(prompt_id) or {}
     try:
         server.vault.notify(

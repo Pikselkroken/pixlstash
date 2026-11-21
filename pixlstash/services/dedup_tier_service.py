@@ -1,7 +1,6 @@
 """Tiered duplicate detection: exact, bucketed near, and embedding.
 
-The v1.9 Dedup -> Stacks design replaces the "Similarity to ..." sort order with
-a **Duplicates** destination whose queue is filled by three tiers of increasing
+The **Duplicates** destination's queue is filled by three tiers of increasing
 cost and decreasing certainty. This module owns detection, the tier policy, the
 cover preselection and the evidence pills; :mod:`pixlstash.services.dedup_verdict_service`
 owns what happens when the user decides.
@@ -25,7 +24,7 @@ design routes exact matches through a bulk auto-stack **dialog** with a dry-run
 count rather than stacking them at import without consent, and why no tier ever
 deletes anything.
 
-A new full-file hash column was considered and rejected: it would mean re-reading
+A full-file hash column is not used: it would mean re-reading
 every byte of every file in the library on upgrade to buy a guarantee the feature
 does not need (the failure mode of a false exact match is two genuinely different
 pictures ending up in one *stack*, which is reversible with one keystroke).
@@ -46,7 +45,7 @@ The buckets reuse what the library already precomputes:
 * import batch / folder - ``import_source_folder``, and the containing directory
   of ``file_path`` for reference-folder pictures.
 
-``LikenessParameter.PHASH_PREFIX`` was investigated and is deliberately **not**
+``LikenessParameter.PHASH_PREFIX`` is deliberately **not**
 used as a bucket key. Despite the name it stores the *entire* 64-bit dHash
 linearly normalised into ``[0, 1]`` (``int(phash[:16], 16) / (2**64 - 1)``), so
 numeric proximity in that slot is dominated by the top bit and says nothing about
@@ -60,20 +59,20 @@ they finish rather than the queue waiting for a full pass.
 Tier 3 - embedding
 ------------------
 The existing :class:`~pixlstash.db_models.picture_likeness.PictureLikeness` edge
-table, folded into components by the shipped
+table, folded into components by the
 :mod:`pixlstash.services.dedup_sweep_service` planner. Opt-in, appended to the
 same queue. Nothing is recomputed: this tier is a different reading of data the
 image-embedding worker already produced.
 
 Policy
 ------
-:class:`TierPolicy` replaces the shipped :class:`~pixlstash.services.dedup_sweep_service.SweepPolicy`
-auto/review split *for the queue*. Tier 1 is always on and cannot be switched
+:class:`TierPolicy` takes the place of the
+:class:`~pixlstash.services.dedup_sweep_service.SweepPolicy` auto/review
+split *for the queue*. Tier 1 is always on and cannot be switched
 off; each looser tier is a separate opt-in that requires the tier above it; the
 similarity threshold defaults to 0.90 and **nothing below 0.65 is ever
-suggested**. The dry-run planner and its report stay exactly as shipped - they
-are the non-destructive foundation this builds on, and ``SweepPolicy`` remains
-the parameter object for that surface.
+suggested**. The dry-run planner and its report are the non-destructive foundation
+this builds on, and ``SweepPolicy`` is the parameter object for that surface.
 """
 
 from __future__ import annotations
@@ -326,7 +325,7 @@ class DedupVerdictKind(str, Enum):
     """The two verdicts a decided group can carry.
 
     The closed vocabulary the decided page is filtered by. There is no deletion
-    verdict in 1.9, and there is deliberately no "reopened" member: reopening
+    verdict, and there is deliberately no "reopened" member: reopening
     stamps :attr:`~pixlstash.db_models.dedup.DedupVerdict.reopened_at` and
     returns the group to the open queue, so it stops being a decided row at all.
     """
@@ -633,13 +632,10 @@ class CandidateMember:
         ``pixel_sha:size_bytes`` when the hash exists. **The size is a co-key
         here for the same reason it is one in tier-1 detection** (§22.1):
         ``pixel_sha`` is a *sampled* digest above 128 KiB, so the digest alone
-        does not identify a file. Detection has always grouped on
-        ``(pixel_sha, size_bytes)``; identity omitting the size made
-        :func:`group_signature` non-injective over groups, which meant two
-        distinct exact groups differing only in size collapsed onto one
-        signature - the upsert dropped one from the queue, a ``keep_separate``
-        silenced both file sets, and a stack verdict's write target depended on
-        scan order rather than on what the user saw.
+        does not identify a file. Detection groups on
+        ``(pixel_sha, size_bytes)``; identity omitting the size would make
+        :func:`group_signature` non-injective over groups, collapsing two
+        distinct exact groups that differ only in size onto one signature.
 
         A picture whose hash has not been computed yet falls back to ``id:<n>``,
         which is stable but *not* stable across a re-import of the same file - so
@@ -698,8 +694,8 @@ class CandidateMember:
     def cover_score(self) -> float:
         """DEPRECATED legacy composite: ``px*4 + tags*3 + userScore*2 + RAW``.
 
-        No longer the selection rule (see :func:`cover_order_key`, 2026-07-30).
-        Kept only because the wire field of the same name shipped; scheduled for
+        Not the selection rule (see :func:`cover_order_key`).
+        Kept only for the wire field of the same name; scheduled for
         removal once the frontend reads ``smart_score`` + the why-pills instead.
         """
         return (
@@ -806,12 +802,10 @@ def group_signature(content_keys: Iterable[str]) -> str:
 
 
 def cover_order_key(member: CandidateMember) -> tuple:
-    """Sort key implementing the cover ranking (reworked 2026-07-30).
+    """Sort key implementing the cover ranking.
 
     Lexicographic tiers, strongest first - a lower tier can never outvote a
-    higher one, which is what "prioritise smart score" means and what the old
-    weighted sum (``px*4 + tags*3 + score*2 + RAW``) could not express: there a
-    40 MP blurry scan outscored a sharp 12 MP original on pixels alone.
+    higher one, which is what "prioritise smart score" means.
 
     1. **Smart score**, in quarter-star buckets
        (:data:`COVER_SMART_SCORE_BUCKET`): the library's one composite quality
@@ -1158,8 +1152,8 @@ class StackFacts:
 
     The Duplicates queue renders an existing stack as a single **deck** whose
     depth is the stack's real member count, not the number of its members that
-    happen to be in the group (design D2). On a real 17k-picture library 36 of
-    116 stack-touching groups name only ONE member of a stack, so a client that
+    happen to be in the group (design D2). A group often names only ONE member
+    of a stack, so a client that
     counted the group's own members would draw a 4-deep stack as a single
     picture and then silently move all four.
 
@@ -1720,7 +1714,7 @@ def groups_from_pairs(
     """Fold near pairs into connected components and assemble them.
 
     Reuses :class:`~pixlstash.services.dedup_sweep_service._LikenessForest` - the
-    shipped union-find that already accumulates per-component min/max similarity,
+    union-find that already accumulates per-component min/max similarity,
     so the group's confidence is its **weakest link**, not its strongest.
     """
     if not pairs:
@@ -1799,7 +1793,7 @@ def find_embedding_groups_in_session(
     """Tier 3. Fold the existing likeness edge table into groups.
 
     Nothing is recomputed: this reads the ``PictureLikeness`` rows the image
-    embedding worker already produced, through the shipped keyset-paginated
+    embedding worker already produced, through the keyset-paginated
     edge stream, so the tier costs one table scan and no GPU time. Opt-in
     because that table is only complete once the embedding worker has caught up.
     """
@@ -2198,14 +2192,14 @@ def live_groups_filter():
       unstacked picture is its own unit, stacked pictures share one). Members
       already stacked TOGETHER are a decision the user has made, whether or
       not it was made through this queue: the grid's own stack actions never
-      touch ``dedupgroup``, so an exact pair the user stacked by hand stayed
-      "unresolved" here and was re-offered forever. Re-offering the answered
+      touch ``dedupgroup``, so an exact pair the user stacked by hand would
+      stay "unresolved" here and be re-offered forever. Re-offering the answered
       is how the count stops being trusted. A group where a stack would still
       FOLD something in (two stacks, or a stack plus a loner) keeps counting.
     * **Two or more stack units among the members a locked set does NOT
       freeze.** A frozen picture can join neither the stack nor the metadata
       union, so a group left with fewer than two stackable members poses no
-      stackable decision at all and is withheld (owner call, 2026-07-30).
+      stackable decision at all and is withheld.
 
     The third condition strictly implies the first two; all three are kept
     because they state three different rules and a future edit to one should not
@@ -2387,8 +2381,8 @@ def page_queue_in_session(
     a verdict on a delivered row removes it from ``resolved=False``, and a tier-2
     scan commits new groups after every bucket. Both shift every later row's
     offset, so ``offset=limit`` on the second request skips exactly as many
-    groups as the first page's decisions removed - a deterministic, silent skip
-    reproduced with a single verdict between two pages. The keyset cursor encodes
+    groups as the first page's decisions removed - a deterministic, silent skip.
+    The keyset cursor encodes
     *where the last row was in the ordering* rather than *how many rows to
     discard*, so a row that never moved is never skipped.
 

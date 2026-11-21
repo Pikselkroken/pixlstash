@@ -1,9 +1,7 @@
 """Restore a backup archive into a new library, and make it the one that opens.
 
-The counterpart to :mod:`pixlstash.services.library_backup_service`. Reading a
-backup back used to be documented as "unpack the tar yourself", which is fine
-advice about the tar and wrong about everything else - unpacking is not the hard
-part:
+The counterpart to :mod:`pixlstash.services.library_backup_service`. Unpacking
+the tar by hand is not enough - unpacking is not the hard part:
 
 **The library files are archived under ``images/``, but a library wants them
 beside ``vault.db``.** A hand-unpacked archive therefore produces a folder shape
@@ -322,7 +320,7 @@ def _require_extracted_members(scratch: str, archive: str) -> None:
 
     Separate from :func:`_read_manifest` because the plan reads the manifest out
     of a *partial* extraction - the peek deliberately stops before ``vault.db``
-    - and folding the two together made planning demand a file it had chosen not
+    - and folding the two together would make planning demand a file it had chosen not
     to unpack.
     """
     for required in (VAULT_FILENAME, _HUB_NAME):
@@ -425,7 +423,7 @@ def _peek(archive: str) -> tuple[dict, str, str]:
     few members needed to describe a restore - its name, its picture count, the
     other registrations its hub carries - are at the front of the stream and
     reading them costs nothing on a 60 GB archive. Extracting the whole thing
-    first and asking afterwards, which is what this used to do, made the user
+    first and asking afterwards would make the user
     wait through the entire restore to be asked whether they wanted it.
 
     Returns:

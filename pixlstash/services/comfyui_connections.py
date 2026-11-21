@@ -1,4 +1,4 @@
-"""The ComfyUI instances the owner can run workflows on (#2167).
+"""The ComfyUI instances the owner can run workflows on.
 
 ``user.comfyui_connections`` is a JSON list of ``{"id", "name", "url",
 "status", "gpu", "vram_mb", "nodes"}``, the last four what the newest probe of

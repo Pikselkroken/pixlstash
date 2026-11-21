@@ -1,4 +1,4 @@
-"""Seed the Playwright e2e backend's reference folder (#2320).
+"""Seed the Playwright e2e backend's reference folder.
 
 Called by ``Server`` at start-up, and only when ``enable_test_hooks`` is on;
 nothing else imports it. Lives here rather than in ``routes/test_hooks.py``

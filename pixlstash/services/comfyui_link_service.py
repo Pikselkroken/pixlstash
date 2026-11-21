@@ -6,16 +6,16 @@ certificate choice they read from ComfyUI's own persisted settings
 ``POST /settings`` merges a JSON object into that file, so linking is three
 settings written over ComfyUI's HTTP API; the pack needs no route of its own.
 
-Owner decisions (2026-10-06), which this module implements and nothing more:
+Owner decisions, which this module implements and nothing more:
 
-* The token carries the ComfyUI scope (#1811, ``auth.COMFYUI_SCOPE``): the
+* The token carries the ComfyUI scope (``auth.COMFYUI_SCOPE``): the
   routes the ComfyUI-PixlStash nodes call and nothing else, so it cannot
   delete, change settings or make tokens.
 * It covers the library that is open when ComfyUI is linked. The owner can
   set it to cover every library afterwards
   (``AuthService.set_token_libraries``); the owner's own session linking the
   same ComfyUI again keeps that.
-* The token works only from ComfyUI's own address (#1810). ComfyUI serves its
+* The token works only from ComfyUI's own address. ComfyUI serves its
   settings, token included, to anyone who can reach it, so the token is bound
   to the source address PixlStash sees on the link's round-trip check, and
   refused from anywhere else (see ``auth.TOKEN_BIND_PENDING``).
@@ -26,7 +26,7 @@ Owner decisions (2026-10-06), which this module implements and nothing more:
   verifies against it). Anything else is a manual exercise.
 
 Each ComfyUI connection (``services/comfyui_connections.py``) is linked with
-its own key and stays linked when the owner switches between them (#2194).
+its own key and stays linked when the owner switches between them.
 The record of each live link (which token, which URL) is kept in the server
 config under :data:`LINKS_CONFIG_KEY`, keyed by connection id, so removing a
 connection can revoke exactly its token, and each session re-sends the URL
@@ -796,9 +796,9 @@ def _clear_comfyui_key(pinned: str, comfyui_url: str) -> None:
 
 
 def adopt_single_record(server) -> None:
-    """Give every link record a connection, once at start-up (#2194).
+    """Give every link record a connection, once at start-up.
 
-    Builds before #2194 kept one record under :data:`LINK_CONFIG_KEY`. It moves
+    Older builds kept one record under :data:`LINK_CONFIG_KEY`. It moves
     onto the connection with its address, or onto one added for it, so a live
     key never loses its owner. Then any record whose connection is gone has its
     key revoked: nothing could ever reach it to revoke it otherwise.
@@ -912,11 +912,11 @@ def _delete_key(server, public_id: str) -> None:
 
 
 def narrow_recorded_key(server) -> None:
-    """Hold every recorded link's key to the ComfyUI scope (#1811).
+    """Hold every recorded link's key to the ComfyUI scope.
 
-    A link made before the scope has an ``ALL`` key. The hub narrows the ones
+    A link made by an older build has an ``ALL`` key. The hub narrows the ones
     bound to an address when it opens; this narrows the recorded ones whatever
-    their binding, which is the only way to tell a key from before #1810 (no
+    their binding, which is the only way to tell an unbound link key (no
     ``bound_address``) from the owner's own tokens. Run once at start-up.
     """
     for record in _records(server).values():

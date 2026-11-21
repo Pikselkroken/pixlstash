@@ -5,16 +5,14 @@ Owner of the one destructive action on the stack surface
 every other live member is **soft-deleted to the Scrapheap**, as one operation
 with one ``batch_id``, so a single ``Ctrl+Z`` puts the stack back.
 
-Five properties this module exists to guarantee, each of which was a real hazard
-in the design review:
+Five properties this module exists to guarantee:
 
 1. **The metadata union is mandatory and unconditional.**
    :func:`~pixlstash.services.dedup_verdict_service.apply_metadata_union_in_session`
    is called from exactly one other place, the dedup stack verdict, so stacks
-   made by hand in the grid have **never** been unioned. Measured on the owner's
-   library: **110 of 160 stacks** have a copy carrying tags the cover lacks.
-   Collapsing without unioning first is therefore silent metadata loss on two
-   thirds of a real library. The union runs on every eligible stack, before any
+   made by hand in the grid are **not** unioned, and a copy often carries tags the
+   cover lacks. Collapsing without unioning first is therefore silent metadata
+   loss. The union runs on every eligible stack, before any
    soft delete, and it is idempotent where it already ran. Do not optimise it
    away on the grounds that the queue does it: the queue is not the only way
    stacks get made.
@@ -30,7 +28,7 @@ in the design review:
    (:mod:`~pixlstash.services.stack_membership`), so removing one member is
    exactly the mutation a locked set forbids, and a partial collapse is the
    worst outcome available: some copies gone, the stack still there, no visible
-   reason. Siblings in the same request still proceed, matching the shipped bulk
+   reason. Siblings in the same request still proceed, matching the bulk
    soft-delete's skip-and-report behaviour.
 
 4. **The stack is not dissolved and no member is detached.** A soft-deleted
@@ -51,9 +49,8 @@ The dry run
 one read over the same selection the mutation acts on and through the same
 :func:`plan_in_session`. Its stack buckets are **disjoint and sum to
 ``stacks_selected``**, and every one of them is counted by appending to its own
-list: **never derived by subtraction**. The neighbouring auto-stack dialog once
-reported "62 stacks to create" for work that would create 3, precisely because
-its headline came from a different query than its rows.
+list: **never derived by subtraction**, so the headline cannot come from a different
+query than its rows.
 
 The preview also reports the bytes the copies **hold**, deliberately named
 :attr:`bytes_held_by_copies` and never ``bytes_freed``: a soft delete frees
@@ -66,7 +63,7 @@ render "never" instead of hardcoding "30 days".
 Keep recipes only
 -----------------
 The same action with one more condition on every copy: it moves only when it
-could be **made again** after the Scrapheap is emptied (issue #1315). That needs
+could be **made again** after the Scrapheap is emptied. That needs
 four things, checked in this order so each copy that stays has exactly one
 reason (:data:`STAYING_REASONS`): an instance row in the hub (the parameters
 and, filed with it, the recipe), every model the recipe loads still on the shelf,
@@ -203,7 +200,7 @@ class KeepCoverOnlyError(Exception):
 class KeepCoverOnlyPlanGrew(KeepCoverOnlyError):
     """The plan now moves a picture the caller's preview did not report.
 
-    Keep recipes only is the first mode whose inputs move on their own while
+    Keep recipes only has inputs that move on their own while
     the dialog is open: ``MissingThumbnailFinder`` writes thumbnails, an import
     can cover a previously-uncovered instance hash, and a model can reach the
     shelf. The button's figure has to be the figure acted on
@@ -342,7 +339,7 @@ def coerce_selection_ids(raw_ids, label: str) -> list[int]:
     **The length is checked on the raw list, before de-duplication.** Checking
     the de-duplicated set instead bounds the *outcome* of the work rather than
     the request: a body of two million repeats of one id de-duplicates to a
-    single id and was accepted outright. What this cannot un-do is Pydantic
+    single id and would be accepted outright. What this cannot un-do is Pydantic
     having already materialised that list while binding the request model, which
     is inherent to any modelled body and is bounded by the transport, not here;
     what it does stop is the request being *honoured*, and the set build and DB
@@ -381,7 +378,7 @@ def enforce_selection_budget(stack_ids, picture_ids) -> None:
     """Raise when the two id lists together exceed :data:`MAX_SELECTION_IDS`.
 
     The cap is documented and reasoned about as a **per-request** bound, so it
-    has to be applied to the request. Capping each list on its own let one call
+    has to be applied to the request. Capping each list on its own would let one call
     carry ``MAX_SELECTION_IDS`` stacks *and* ``MAX_SELECTION_IDS`` pictures, i.e.
     twice the work the number was chosen to permit, and the two are unioned into
     one selection anyway (:func:`resolve_selection_in_session`).
@@ -590,7 +587,7 @@ def _has_thumbnail(image_root: Optional[str], file_path: Optional[str]) -> bool:
 
     The same places ``ImageUtils.find_thumbnail`` looks, which is what the purge
     reads (``workflow_ghost_service._thumbnail_bytes``), but **without its side
-    effect**: that helper brings a pre-#1164 bitmap home with ``os.replace``,
+    effect**: that helper brings a legacy-named bitmap home with ``os.replace``,
     and a preview is not allowed to write to disk. The column is not asked:
     ``thumbnail_width`` says a thumbnail was once made, the file is what the
     purge needs.

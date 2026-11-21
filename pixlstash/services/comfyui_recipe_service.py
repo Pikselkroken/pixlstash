@@ -1,4 +1,4 @@
-"""Recipe replay: pre-flighting an embedded ComfyUI prompt graph (Remix v1.9).
+"""Recipe replay: pre-flighting an embedded ComfyUI prompt graph.
 
 "Recipe mode" replays the API-format ``prompt`` chunk a generated image carries -
 the graph the ComfyUI server actually executed - against the user's *current*
@@ -721,7 +721,7 @@ def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
 
     The detect half of the detect-then-patch pair
     :func:`detect_seed_targets`/:func:`apply_seeds` and
-    :func:`detect_lora_targets`/:func:`apply_adapter` already are (#1439); the
+    :func:`detect_lora_targets`/:func:`apply_adapter` already are; the
     patch half is :func:`apply_model_swap`.
 
     It is :func:`preflight_prompt`'s ``missing_models`` and nothing else, which
@@ -1305,8 +1305,7 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
     **The known reach is a stacker that does not name its slots that way**:
     rgthree's Power Lora Loader holds them as dicts under ``lora_1``, so this
     finds nothing there and the caller reports the workflow as having no LoRA
-    loader. Reading a widget whose shape is one pack's own is what #1376 has to
-    decide, along with inserting a loader where there is none.
+    loader. A widget whose shape is one pack's own is not read here.
 
     Two kinds of slot, and a graph can hold both:
 
@@ -1440,8 +1439,8 @@ def apply_adapter(
 ) -> int:
     """Put one shelf adapter into every LoRA slot of *prompt_graph*.
 
-    Each slot is written the way its own loader reads it (the decision on
-    #1310): a core loader gets a filename this ComfyUI lists, a
+    Each slot is written the way its own loader reads it: a core
+    loader gets a filename this ComfyUI lists, a
     ComfyUI-PixlStash loader gets the digest. No node is substituted and none is
     added, so this works on any ComfyUI and leaves a graph it cannot serve
     alone - see the refusal below.
@@ -1792,7 +1791,7 @@ def _same_loader(graph: dict, roots: list[tuple]) -> bool:
 
 
 def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
-    """Where a LoRA loader would go in a graph that has none (#1376).
+    """Where a LoRA loader would go in a graph that has none.
 
     The loader is spliced in **right after the model source**: every input that
     reads the loaded model's MODEL output reads the loader's instead, and the
@@ -2378,7 +2377,7 @@ def swap_in_pack_nodes(
 
     The two loaders that name a row by its id are swapped in only with the
     widget that says whose the id is, since an id without it is not trusted
-    in a graph read back out of a picture (#1521), and a picture queued from
+    in a graph read back out of a picture, and a picture queued from
     the opened graph is one the workflow may run from next:
 
     * ``LoadImage`` becomes ``PixlStashPictureLoader`` on the picture
@@ -2620,7 +2619,7 @@ def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
 
 
 def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict]:
-    """Switch one optional stage (an upscale, a FaceDetailer pass) off (#1621).
+    """Switch one optional stage (an upscale, a FaceDetailer pass) off.
 
     The intermediate-save stage is the exception to the next paragraph: its
     nodes are :func:`~pixlstash.services.workflow_identity.intermediate_saves`'.
@@ -3548,7 +3547,7 @@ def read_lora_chain_untyped(
     :func:`read_lora_chain` exists not to make - so this is only ever shown
     read-only, beside the sentence saying why it could not be edited. Every
     LoRA slot is listed, a stacker's numbered ones included: a list that left
-    one out would be the silent drop #1478 is about.
+    one out would drop it silently.
 
     With *object_info* (ComfyUI answered, and the chain was refused for its
     shape) the two ends are read typed as well, best effort: the model source

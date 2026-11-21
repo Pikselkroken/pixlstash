@@ -4,7 +4,7 @@ A workflow that names a model this machine does not have is refused with
 ``missing_models`` (``services/workflow_run_service.py``), and each missing
 file carries ``downloadable`` when :func:`download_source` knows where to get
 it: a file of the same name in the committed template list
-(``data/workflow_templates.json``, #1999), which gives its link and its
+(``data/workflow_templates.json``), which gives its link and its
 ComfyUI folder. **The link is the server's, never the caller's**: a request
 names a file, so no client can point the server at an address of its choosing.
 Where the committed list has no such file, the templates the owner's ComfyUI

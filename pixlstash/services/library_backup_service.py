@@ -18,7 +18,7 @@ thing from putting credentials *inside a library folder*, which stays forbidden:
 this is a deliberate artifact the owner creates and stores, not something that
 travels with a library that gets copied or shared.
 
-**Open-core boundary (CEO ruling 2026-08-01).** This is one-shot, to a local
+**Open-core boundary.** This is one-shot, to a local
 path, a full archive, run by hand. It must never grow a scheduler, a remote
 destination, incremental sync, encryption at rest, or restore verification:
 those five are the commercial vault-protection tier
@@ -642,10 +642,10 @@ def create_backup(
 def _resolve_destination(library: Library, destination: str, compress: bool) -> str:
     """Expand a directory destination into a dated filename, and fix the suffix.
 
-    A directory has always produced a correctly suffixed, dated name. An
-    explicit filename did not: ``backup lib ~/backups/monday`` wrote a file
-    called ``monday`` with nothing to say what it was, and a year later neither
-    the user nor ``file`` can tell it from any other blob. The suffix is not
+    A directory produces a correctly suffixed, dated name, and so must an
+    explicit filename: ``backup lib ~/backups/monday`` would otherwise write a
+    file called ``monday`` with nothing to say what it was, and a year later
+    neither the user nor ``file`` could tell it from any other blob. The suffix is not
     decoration here - ``restore`` sniffs the magic bytes, but the *human*
     picking a file out of a folder has only the name.
 
