@@ -81,10 +81,13 @@ from pixlstash.services.workflow_parameters import is_picture_batch
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import (
     NEGATIVE_FIELDS,
+    PROMPT_ASSIST_META,
     PROMPT_FIELDS,
     collect_seed_inputs,
     iter_model_fields_api,
+    prompt_assist_tail,
     rewritten_prompt_input,
+    split_prompt_assist,
 )
 from pixlstash.pixl_logging import get_logger
 
@@ -322,37 +325,61 @@ def apply_prompts(
     prompt: Optional[str],
     negative: Optional[str],
     enhance: Optional[bool] = None,
+    assist: Optional[dict] = None,
 ) -> dict:
     """Put this run's prompts into the detected prompt nodes, and report on it.
+
+    The one writer of a run's prompt. *assist* is a prompt assist stamp
+    (:func:`~pixlstash.services.prompt_assist.assemble`): its parts are
+    written after *prompt*, and only where *prompt* has words, so a run that
+    leaves the graph's prompt alone (``None``) is left byte for byte. The
+    stamp then goes on the node holding each positive literal
+    (:data:`~pixlstash.utils.comfyui_utilities.PROMPT_ASSIST_META`), after
+    any enhancer cut, because the cut moves the literal onto the encoder.
+    Writing a literal drops the stamp a source graph carried there.
 
     With *enhance* ``False`` each prompt a ``TextGenerate`` rewrites
     (:func:`rewritten_prompt_input`) goes to its encoder as written, and the
     enhancer is cut out of the graph (:func:`_cut_prompt_enhancer`). ``None``
-    and ``True`` leave the graph as it is.
+    cuts it too where the assist was written, since the enhancer would
+    rewrite the very sentences the assist adds; ``True`` and ``None``
+    otherwise leave the graph as it is.
 
     Returns:
         ``positive_settable`` / ``negative_settable``: whether the graph has
-        anywhere to put that side's prompt. ``positive_text``: the positive
-        prompt the graph held before this call, ``None`` where it holds none
-        as a literal or its prompt nodes disagree. ``unplaced``: the sides a
-        prompt was given for and had nowhere to go - said, never dropped
-        (#1832). ``enhancer``: whether a prompt enhancer rewrote a prompt in
-        the graph as it came in, cut or not.
+        anywhere to put that side's prompt. ``positive_text``: the owner's
+        words in the positive prompt the graph held before this call (a
+        stamp's parts cut off), ``None`` where it holds none as a literal or
+        its prompt nodes disagree. ``recorded``: the stamp on that prompt,
+        if any. ``unplaced``: the sides a prompt was given for and had
+        nowhere to go - said, never dropped (#1832). ``enhancer``: whether a
+        prompt enhancer rewrote a prompt in the graph as it came in, cut or
+        not; ``enhancer_on``: whether it still does. ``assist_applied``:
+        whether *assist*'s parts were written.
     """
     report = {
         "positive_settable": False,
         "negative_settable": False,
         "positive_text": None,
+        "recorded": None,
         "unplaced": [],
         "enhancer": False,
+        "enhancer_on": False,
+        "assist_applied": False,
     }
+    tail = prompt_assist_tail(assist) if prompt and prompt.strip() else None
     enhanced: list[tuple[str, str]] = []
+    written: list[tuple[str, str]] = []
     try:
         detected = detect_workflow_io(graph)
     except WorkflowGraphError as exc:
         logger.info("Prompts not applied, the graph will not reduce: %s", exc)
         detected = WorkflowIO()
-    for side, text in (("positive", prompt), ("negative", negative)):
+    sides = (
+        ("positive", f"{prompt}{tail}" if tail else prompt),
+        ("negative", negative),
+    )
+    for side, text in sides:
         node_ids = getattr(detected, f"{side}_prompts")
         held = set()
         for node_id in node_ids:
@@ -365,12 +392,21 @@ def apply_prompts(
             if rewritten_prompt_input(graph, node_id, name) != (str(node_id), name):
                 enhanced.append((str(node_id), name))
             literal = _literal_prompt_target(graph, node_id, name)
-            held.add(graph[literal[0]]["inputs"][literal[1]] if literal else None)
+            words = graph[literal[0]]["inputs"][literal[1]] if literal else None
+            if side == "positive":
+                words, stamp = split_prompt_assist(words, graph)
+                report["recorded"] = report["recorded"] or stamp
+            held.add(words)
             if text is None:
                 continue
             target = prompt_text_target(graph, node_id, text, fields)
             if target is not None:
                 graph[target[0]]["inputs"][target[1]] = text
+                meta = graph[target[0]].get("_meta")
+                if isinstance(meta, dict):
+                    meta.pop(PROMPT_ASSIST_META, None)
+                if side == "positive":
+                    written.append((str(node_id), name))
         if side == "positive" and len(held) == 1:
             report["positive_text"] = held.pop()
         if text is not None and not report[f"{side}_settable"]:
@@ -382,10 +418,21 @@ def apply_prompts(
                 list(detected.ambiguities),
             )
             report["unplaced"].append(side)
+    report["assist_applied"] = bool(tail and written)
     report["enhancer"] = bool(enhanced)
-    if enhance is False:
+    cut = enhance is False or (enhance is None and report["assist_applied"])
+    if cut:
         for node_id, name in enhanced:
             _cut_prompt_enhancer(graph, node_id, name)
+    report["enhancer_on"] = bool(enhanced) and not cut
+    if report["assist_applied"]:
+        for node_id, name in written:
+            literal = _literal_prompt_target(graph, node_id, name)
+            if literal is not None:
+                node = graph[literal[0]]
+                if not isinstance(node.get("_meta"), dict):
+                    node["_meta"] = {}
+                node["_meta"][PROMPT_ASSIST_META] = deepcopy(assist)
     return report
 
 

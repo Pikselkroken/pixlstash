@@ -40,9 +40,12 @@ from pixlstash.services.workflow_inputs import (
     resolve_fills,
     resolve_input_modes,
 )
+from pixlstash.services.prompt_assist import assemble
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     reduce_ui_graph,
+    structural_hash,
+    topology_hash,
 )
 from pixlstash.services.workflow_bindings import run_targets
 from pixlstash.services.workflow_io import (
@@ -51,6 +54,7 @@ from pixlstash.services.workflow_io import (
     with_converted_graph,
 )
 from pixlstash.utils.comfyui_utilities import (
+    PROMPT_ASSIST_META,
     NotAWorkflowError,
     check_comfy_workflow,
     extract_generation_info,
@@ -883,6 +887,97 @@ def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, False)
     assert (report["enhancer"], json.dumps(graph)) == (False, before)
+
+
+# The prompt assist (backend §25): one writer, `apply_prompts`, one reader,
+# `split_prompt_assist` behind `extract_generation_info`.
+H3 = "minimax_h3_image"
+
+
+def _assisted(prompt: str, context: str = "photo") -> dict:
+    return assemble(H3, context, {}, prompt)
+
+
+def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    stamp = _assisted("A woman.")
+    report = run_service.apply_prompts(graph, "A woman.", None, None, stamp)
+    assert report["assist_applied"] is True
+    tail = " " + " ".join(part["text"] for part in stamp["parts"])
+    assert graph["6"]["inputs"]["prompt"] == "A woman." + tail
+    assert graph["6"]["_meta"][PROMPT_ASSIST_META] == stamp
+    info = extract_generation_info(graph)
+    assert (info["positive_prompt"], info["prompt_assist"]) == ("A woman.", stamp)
+    # A replay that leaves the prompt alone reads the words and the stamp back.
+    replay = json.loads(json.dumps(graph))
+    again = run_service.apply_prompts(replay, None, None)
+    assert (again["positive_text"], again["recorded"]) == ("A woman.", stamp)
+    assert replay == graph
+    # Writing a prompt without the assist drops the stamp with the old text.
+    run_service.apply_prompts(replay, "A man.", None)
+    assert replay["6"]["inputs"]["prompt"] == "A man."
+    assert PROMPT_ASSIST_META not in replay["6"].get("_meta", {})
+
+
+def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    stamp = _assisted("A woman.")
+    run_service.apply_prompts(graph, "A woman.", None, None, stamp)
+    graph["6"]["inputs"]["prompt"] += " Edited elsewhere."
+    info = extract_generation_info(graph)
+    assert info["positive_prompt"] == graph["6"]["inputs"]["prompt"]
+    assert info["prompt_assist"] is None
+    # Nor one that says it added the whole prompt: the owner said something.
+    graph["6"]["inputs"]["prompt"] = " " + " ".join(p["text"] for p in stamp["parts"])
+    assert extract_generation_info(graph)["prompt_assist"] is None
+
+
+@pytest.mark.parametrize("prompt", [None, "", "   "])
+def test_the_prompt_assist_adds_nothing_where_the_run_writes_no_words(prompt):
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    before = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    report = run_service.apply_prompts(graph, prompt, None, None, _assisted("x"))
+    assert report["assist_applied"] is False
+    if prompt is None:
+        assert json.dumps(graph) == json.dumps(before)
+    else:
+        assert graph["6"]["inputs"]["prompt"] == prompt
+        assert "_meta" not in graph["6"]
+
+
+def test_with_the_enhancer_cut_the_stamp_is_on_the_encoder():
+    """The assist turns a not-asked enhancer off, and the stamp goes where
+    the literal is after the cut; an explicit true keeps the enhancer, which
+    then rewrites the assisted words, stamped where it reads them."""
+    name = BUILT_IN / "MiniMax-H3-Image-Edit.json"
+    words = "Make the hat purple."
+    graph = _load(name)
+    report = run_service.apply_prompts(graph, words, None, None, _assisted(words))
+    assert (report["enhancer"], report["enhancer_on"]) == (True, False)
+    assert "21" not in graph
+    assert graph["6"]["_meta"][PROMPT_ASSIST_META]["parts"]
+    assert graph["6"]["inputs"]["prompt"].startswith(words + " Taken by")
+    assert extract_generation_info(graph)["positive_prompt"] == words
+    graph = _load(name)
+    report = run_service.apply_prompts(graph, words, None, True, _assisted(words))
+    assert (report["enhancer"], report["enhancer_on"]) == (True, True)
+    assert graph["6"]["inputs"]["prompt"] == ["23", 0]
+    assert PROMPT_ASSIST_META in graph["21"]["_meta"]
+    assert extract_generation_info(graph)["positive_prompt"] == words
+    # Not asked and no assist: the enhancer runs, as before.
+    graph = _load(name)
+    report = run_service.apply_prompts(graph, words, None)
+    assert (report["enhancer_on"], "21" in graph) == (True, True)
+
+
+def test_the_prompt_assist_moves_no_workflow_identity():
+    plain = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    assisted = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    run_service.apply_prompts(plain, "A woman.", None)
+    run_service.apply_prompts(assisted, "A woman.", None, None, _assisted("A woman."))
+    assert plain != assisted
+    assert structural_hash(plain) == structural_hash(assisted)
+    assert topology_hash(plain) == topology_hash(assisted)
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
