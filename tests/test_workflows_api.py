@@ -14120,6 +14120,8 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "enhancer": False,
         "enhancer_on": False,
         "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -15374,6 +15376,10 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "enhancer": False,
         "enhancer_on": False,
         "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
+        "sampler_choice": False,
+        "sampler": None,
         "recorded": None,
         "assist_applied": False,
     }
@@ -15409,6 +15415,8 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "enhancer": False,
         "enhancer_on": False,
         "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
         "recorded": None,
         "assist_applied": False,
     }

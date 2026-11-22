@@ -10620,6 +10620,24 @@ wherever a blank picture is found, cut or not, which is what the Run popup's
 switch is drawn on. Character sheets do not send it: their flow has no switch,
 so their graphs run with the blank picture as saved.
 
+#### A run that samples with Euler
+
+The MiniMax H3 Image sheet and edit graphs sample with LCM. Where the graph
+also takes a picture (a `LoadImage` or the PixlStash picture loader, the
+sheet-from-reference, edit and inpaint built-ins), a run may sample with Euler
+instead: `sampler: "euler"` on `RunRequest`. `comfyui_utilities.lcm_sampler_nodes`
+finds the LCM samplers by structure, a `SamplerLCM` and a `KSampler` or
+`KSamplerAdvanced` whose `sampler_name` is `lcm`; `SamplerLCMUpscale` is not one,
+since it upscales between steps. `apply_prompts(..., sampler="euler")` then
+rewrites the run's copy only (`_sample_with_euler`): a `SamplerLCM` becomes a
+`KSamplerSelect` on `euler` under the same node id, so its links hold, and a
+`KSampler` takes `euler` in place. Nothing else moves. The text-to-image
+built-ins have no picture input, so the choice is not offered and `"euler"`
+is a no-op on them. The pre-flight and the run report `prompt.sampler_choice`
+(offered) and `prompt.sampler` (the sampler the copy runs: `"lcm"` as saved, or
+`"euler"`; null where not offered). A recipe of a picture made with Euler reads
+`euler` through `extract_recipe_extras`, which names the `KSamplerSelect`.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that

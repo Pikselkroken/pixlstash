@@ -1197,6 +1197,7 @@ def test_a_euler_run_changes_only_the_sampler_of_an_lcm_graph_with_a_picture():
     assert graph == saved
     # Already Euler: not offered, and a request for Euler is a no-op.
     graph = _load(BUILT_IN / name)
+    graph["9"]["inputs"]["sampler_name"] = "euler"
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
     assert (report["sampler_choice"], report["sampler"]) == (False, None)

@@ -433,6 +433,22 @@
               without it.
             </p>
           </template>
+          <!-- The sampler of a graph that samples with LCM and takes a picture
+               (`prompt.sampler_choice`). Per run; LCM sends nothing. -->
+          <template v-if="graphPrompt?.sampler_choice">
+            <div class="rund-f">
+              <FieldLabel>Sampler</FieldLabel>
+              <Segmented
+                :model-value="sampler"
+                aria-label="Sampler"
+                :options="samplerOptions"
+                full
+                data-testid="rund-sampler"
+                @update:model-value="setSampler"
+              />
+            </div>
+            <p class="rund-note">{{ SAMPLER_HINT }}</p>
+          </template>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -1307,6 +1323,8 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
+import FieldLabel from "../widgets/FieldLabel.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 import { characterThumbnailUrl } from "../../api/characters";
 import { getPictureRecipe } from "../../api/comfyui";
@@ -1349,6 +1367,7 @@ import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { deriveModelName } from "../../utils/modelShelf";
 import { insertWords, namesWord, triggerWord, wordSpans } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { SAMPLER_CHOICES, SAMPLER_HINT } from "../../utils/samplerChoice";
 import { runTaskLabel } from "../../utils/runTaskLabel";
 import { pickerOption, UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import {
@@ -2312,6 +2331,7 @@ function clearStages() {
   // Per run like the stages: a tick on one workflow says nothing about another.
   enhanceChoice.value = null;
   blankPicture.value = true;
+  sampler.value = "lcm";
 }
 
 const upscale = useUpscaleStore();
@@ -2352,6 +2372,21 @@ const blankPicture = ref(true);
 
 async function setBlankPicture(on) {
   blankPicture.value = on;
+  await runPreflight();
+}
+
+/** The "Sampler" choice: LCM as saved, or Euler on the run's copy. */
+const sampler = ref("lcm");
+const samplerOptions = computed(() =>
+  SAMPLER_CHOICES.map((o) => ({
+    ...o,
+    testid: `rund-sampler-${o.id}`,
+    disabled: submitting.value,
+  })),
+);
+
+async function setSampler(id) {
+  sampler.value = id;
   await runPreflight();
 }
 
@@ -4333,6 +4368,8 @@ function runBody() {
   if (assist) body.prompt_assist = assist;
   // Only off is sent, and a graph with no blank picture ignores it.
   if (!blankPicture.value) body.blank_picture = false;
+  // Only Euler is sent; LCM is the graph as saved.
+  if (sampler.value === "euler") body.sampler = "euler";
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {

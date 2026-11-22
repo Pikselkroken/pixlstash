@@ -1022,6 +1022,11 @@ Seven rules the client must not re-derive:
    wherever one is found. `blank_picture: false` on the body takes its input
    links off the run's copy and leaves the `EmptyImage` unread; null or true
    runs the graph as it is. Per run only, like `enhance_prompt`.
+   `prompt.sampler_choice` says the sampler choice is offered: the graph samples
+   with LCM and takes a picture input. `prompt.sampler` is what the run's copy
+   samples with (`"lcm"` or `"euler"`; null where not offered). The body's
+   `sampler: "euler"` samples the copy with Euler in place of LCM; `"lcm"` or
+   null runs the graph as it is. Per run only, like `blank_picture`.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
