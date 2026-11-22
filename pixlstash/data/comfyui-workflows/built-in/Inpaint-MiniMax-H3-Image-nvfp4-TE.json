@@ -94,7 +94,7 @@
       "seed": 1,
       "steps": 6,
       "cfg": 1.0,
-      "sampler_name": "euler",
+      "sampler_name": "lcm",
       "scheduler": "simple",
       "denoise": 1.0
     },
