@@ -1811,7 +1811,26 @@ Escape and Enter do nothing here: cancelling deletes a set.
   halo, so the cut is seen before it is made; a sheet with
   `cuts_cleanly: false` draws them dashed in the warning colour, says *may not cut cleanly* last in its words, and sorts
   after the clean sheets (after `broken`). It is a warning, not a refusal:
-  *Keep* still cuts it. Kept sheets the ranking names in each other's `different_from`
+  *Keep* still cuts it. The cut is drawn from the moment the sheet exists, its
+  faces not yet read (the ranking's `cells` need none). **The cut can be moved
+  by hand** (`cutEdits`, `utils/sheetCuts.js`): a photo's box on the zoomed
+  sheet drags (its middle moves it, a corner or edge resizes it), held on the
+  sheet and at least 5 % of it a side. Each box is focusable (`role="group"`,
+  labelled *Passport photo 1* or *Body photo 2*): an arrow key moves the
+  focused box by 0.5 % of the sheet, Shift with an arrow pushes the edge on
+  that side out and Alt pulls it in, and an arrow never reaches the zoom, which
+  reads arrows to step sheets. An edited photo is a double line in
+  `--v-theme-primary` (not the dashed amber, not colour alone), its label says
+  *edited*, and the sheet's words say *cut edited* where a clean-cut warning
+  would be. `cutEdits` is per photo (picture id to six entries, `null` where
+  the cutter's still stands), so a re-rank or a later automatic cut never
+  overwrites an edit; *Reset to automatic*, in the zoom bar while the sheet
+  has an edit, removes the sheet's entries. The step's `snapshot` stores
+  `cut_edits` and `restoreState` puts them back; a cut that has started stores
+  none, as it stores no sheets. *Use* sends `boxes` for the kept sheets with an
+  edit, all six of each as shown, through `useSheets(characterId, pictureIds,
+  boxes)`; a sheet with no edit is cut by the server as before. Nothing moves
+  while the sheets are being cut (`cutLocked`). Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
   naming the pair; *Use* stays enabled, since with a LoRA several sheets can
   be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)

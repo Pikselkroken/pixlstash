@@ -5,6 +5,7 @@ import json
 import pathlib
 import tempfile
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1429,7 +1430,9 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
             raise OSError("disk full")
         return [], [], [10, 11]
 
-    monkeypatch.setattr(character_sheet, "_cut", lambda server, sheet, faces: [b""] * 2)
+    monkeypatch.setattr(
+        character_sheet, "_cut", lambda server, sheet, faces, boxes=None: [b""] * 2
+    )
     monkeypatch.setattr(character_sheet, "import_derived_outputs", import_panels)
     server = type("Server", (), {"vault": type("Vault", (), {"db": Db()})()})()
     with pytest.raises(OSError):
@@ -1586,6 +1589,146 @@ def test_using_a_sheet_refuses_unknown_ids(client, sheet_id):
         json={"picture_ids": [sheet_id, 999999]},
     )
     assert missing_picture.status_code == 404
+
+
+_HAND_BOXES = [
+    [0, 0, 0.25, 0.5],
+    [0.25, 0, 0.5, 0.5],
+    [0, 0.5, 0.25, 1],
+    [0.25, 0.5, 0.5, 1],
+    [0.5, 0, 0.8, 1],
+    [0.8, 0, 1, 1],
+]
+# The six photos a 2560x1536 sheet cut at _HAND_BOXES is, in pixels.
+_HAND_SIZES = [(640, 768)] * 4 + [(768, 1536), (512, 1536)]
+# The same sheet cut automatically: the 1900 divider trimmed, as the use test
+# above asserts for it.
+_AUTO_SIZES = [(600, 768)] * 4 + [(698, 1536), (654, 1536)]
+
+
+def _panel_sizes(client, panel_ids):
+    def read(session):
+        return {
+            p.id: p
+            for p in session.exec(select(Picture).where(Picture.id.in_(panel_ids)))
+        }
+
+    pictures = client.server.vault.db.run_task(read)
+    return [(pictures[i].width, pictures[i].height) for i in panel_ids]
+
+
+def test_a_sheet_is_cut_before_its_faces_are_read(tmp_path, monkeypatch):
+    """The cut needs no faces, so a sheet whose faces are unread already has
+    its six cells, the same as its cut once read."""
+    _sheet([("x", 1900, 0, 1536)]).save(tmp_path / "sheet.png", format="PNG")
+    picture = ("png", SHEET_WIDTH, SHEET_HEIGHT, "sheet.png")
+    monkeypatch.setattr(
+        character_sheet,
+        "sheet_faces_in_session",
+        lambda character_id, ids, refs=None: (
+            {pid: [] for pid in ids},
+            [],
+            {pid: picture for pid in ids},
+        ),
+    )
+    vault = SimpleNamespace(
+        image_root=str(tmp_path),
+        db=SimpleNamespace(run_immediate_read_task=lambda fn, *args: fn(*args)),
+    )
+    [unread], _ = character_sheet.rank_sheets(vault, 1, [5])
+    assert unread["faces_read"] is False
+    expected, _ = sheet_cells(_sheet([("x", 1900, 0, 1536)]))
+    assert len(unread["cells"]) == 6
+    for got, box in zip(unread["cells"], expected):
+        assert got == pytest.approx(
+            [
+                box[0] / SHEET_WIDTH,
+                box[1] / SHEET_HEIGHT,
+                box[2] / SHEET_WIDTH,
+                box[3] / SHEET_HEIGHT,
+            ]
+        )
+    assert unread["cuts_cleanly"] is False
+
+
+def test_a_sheet_cut_by_hand_is_cut_at_its_boxes_exactly(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet Hand")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(sheet): _HAND_BOXES}},
+    )
+    assert response.status_code == 200, response.text
+    assert _panel_sizes(client, response.json()["picture_ids"]) == _HAND_SIZES
+
+
+def test_a_sheet_without_boxes_is_still_cut_automatically(client, sheet_id):
+    # Identical uploads are one picture, so the hand-cut one differs in content.
+    edited = _upload_sheet(client, [("x", 1902, 0, 1536)])
+    automatic = sheet_id
+    character_id = _new_character(client, "Sheet Mixed")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={
+            "picture_ids": [edited, automatic],
+            "boxes": {str(edited): _HAND_BOXES},
+        },
+    )
+    assert response.status_code == 200, response.text
+    panel_ids = response.json()["picture_ids"]
+    assert len(panel_ids) == 12
+    assert _panel_sizes(client, panel_ids) == _HAND_SIZES + _AUTO_SIZES
+
+
+@pytest.mark.parametrize(
+    "boxes",
+    [
+        pytest.param(lambda b: b[:5], id="five-boxes"),
+        pytest.param(lambda b: [[0, 0, 1.2, 0.5]] + b[1:], id="past-the-sheet"),
+        pytest.param(lambda b: [[0.5, 0, 0.25, 0.5]] + b[1:], id="inverted"),
+        pytest.param(lambda b: [[0, 0, 0.005, 0.5]] + b[1:], id="under-32-px"),
+        pytest.param(lambda b: [[0, 0, 0.5]] + b[1:], id="three-numbers"),
+    ],
+)
+def test_hand_boxes_that_are_not_six_photos_on_the_sheet_are_refused(client, boxes):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet Refused")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(sheet): boxes(_HAND_BOXES)}},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_a_hand_box_that_is_not_a_number_is_refused(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet NaN")
+    # The test client cannot encode NaN, so the body is written out by hand.
+    rest = json.dumps(_HAND_BOXES[1:])[1:-1]
+    body = '{"picture_ids": [%d], "boxes": {"%d": [[0, 0, NaN, 0.5], %s]}}' % (
+        sheet,
+        sheet,
+        rest,
+    )
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_hand_boxes_for_a_picture_not_among_the_sheets_are_refused(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    other = _upload_sheet(client, [("x", 1904, 0, 1536)])
+    character_id = _new_character(client, "Sheet Foreign")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(other): _HAND_BOXES}},
+    )
+    assert response.status_code == 422, response.text
+    # Nothing was cut: the foreign key is refused before any panel is imported.
+    assert "not among" in response.json()["detail"]
 
 
 def _library_uuid(server):

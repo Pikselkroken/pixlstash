@@ -13085,12 +13085,14 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   faces, `agrees` at `SOME_AGREEMENT`) and `closeness` (to the same
   references, `close` at `CLOSE_TO_REFERENCES`). A panel with no face is left
   out; a picture with no stored size gets none.
-  Once a sheet's faces are read it also carries the cut using it would make:
-  `cells`, the six panels as `[left, top, right, bottom]` fractions, and
-  `cuts_cleanly` (below); both stay empty / null while faces are unread, so the
-  polling while sheets draw reads no files. The cut is cached per file path,
-  mtime and face boxes (`_cut_of_file`, an `lru_cache`): the step re-ranks
-  every few seconds, and a 2560 sheet costs ~85 ms to decode and cut, a
+  It also carries the cut using it would make from the moment the sheet
+  exists: `cells`, the six panels as `[left, top, right, bottom]` fractions,
+  and `cuts_cleanly` (below). The cut needs no faces, which only fence it, so
+  an unread sheet is cut without them (`_sheet_cut(..., [])`) and cut again
+  round its face boxes once they are read. `cells` is empty only when the
+  sheet has no readable file. The cut is cached per file path, mtime and face
+  boxes (`_cut_of_file`, an `lru_cache`), so the step's re-ranking every few
+  seconds decodes a sheet once: a 2560 sheet costs ~85 ms to decode and cut, a
   MiniMax 4k one ~350 ms.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
@@ -13167,6 +13169,19 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   sheet stays in the Scrapheap, and a picture naming it as source would fail
   its purge on the foreign key (a sheet's faces are nobody's, so source-face
   likeness has nothing to pass on).
+- **Cuts drawn by hand** (`boxes` on `POST /characters/{id}/sheets/use`, keyed
+  by sheet picture id, six `[left, top, right, bottom]` fractions each in panel
+  order). `use_sheets` checks every box before anything is imported: exactly
+  six per sheet, each four numbers inside 0..1 with left < right and top <
+  bottom, each at least `MIN_EDITED_PX` (32) px a side once scaled to the
+  sheet's own size, and every key a picture among `picture_ids`. A bad one
+  raises `SheetBoxesInvalid`, which the route answers 422 with its reason, and
+  every sheet is read before anything is filed. A sheet with boxes is cut by
+  `_hand_cut_panels`, which crops exactly those boxes: no frame trim, no face
+  fence. A sheet without an entry is cut by `split_sheet` as above. The authz
+  registry is unchanged: the route is `OWNER_ONLY` with no `body_ids`, so the
+  body names no object the gate reads, and the keys are held to the request's
+  own `picture_ids` all the same.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.

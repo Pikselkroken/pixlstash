@@ -172,14 +172,16 @@ class RankedSheet(BaseModel):
     cuts_cleanly: bool | None = Field(
         default=None,
         description="Every cut found a clear line between the photos, through "
-        "no face, and no panel holds two faces; null until the faces are read. "
-        "A sheet that does not is still cut when used.",
+        "no face, and no panel holds two faces; null only when the sheet's file "
+        "cannot be read. Before the faces are read the faces cannot fence the "
+        "cut, so it is judged on the lines alone. A sheet that does not cut "
+        "cleanly is still cut when used.",
     )
     cells: list[list[float]] = Field(
         default_factory=list,
         description="The six panels using it cuts, in panel order, as "
-        "`[left, top, right, bottom]` fractions of the sheet; empty until the "
-        "faces are read.",
+        "`[left, top, right, bottom]` fractions of the sheet. Drawn from the "
+        "moment the sheet exists; the faces, once read, only fence the cut.",
     )
 
 
@@ -190,6 +192,13 @@ class SheetRanking(BaseModel):
 
 class SheetIds(BaseModel):
     picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+    boxes: dict[int, list[list[float]]] | None = Field(
+        None,
+        description="Cuts drawn by hand, keyed by sheet picture id: six "
+        "`[left, top, right, bottom]` fractions of the sheet, in panel "
+        "order (passport photos 1-4, then body photos 5 and 6). A sheet with "
+        "no entry is cut automatically.",
+    )
 
 
 class UsedSheets(BaseModel):
@@ -251,18 +260,24 @@ def create_router(server) -> APIRouter:
         description=(
             "Cuts each sheet into its six panels (four passport photos, then two "
             "body photos), imports each as a picture made from its sheet, and "
-            "files them on the character. A held sheet counts. The sheets "
-            "themselves are left as they are."
+            "files them on the character. A sheet in `boxes` is cut at the six "
+            "boxes given for it, exactly; the others are cut automatically. A "
+            "held sheet counts. The sheets themselves are left as they are. "
+            "422 when a box is not inside the sheet, is inverted or too small, "
+            "or a sheet's boxes are not six, or name a picture not in "
+            "`picture_ids`."
         ),
         response_model=UsedSheets,
     )
     def use_sheets(request: Request, character_id: int, payload: SheetIds):
         try:
             panel_ids = character_sheet.use_sheets(
-                server, character_id, payload.picture_ids
+                server, character_id, payload.picture_ids, payload.boxes
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except character_sheet.SheetBoxesInvalid as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except character_sheet.SheetUnreadable as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         origin_client_id = getattr(request.state, "origin_client_id", None)

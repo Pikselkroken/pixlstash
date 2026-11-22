@@ -622,19 +622,70 @@
         </div>
       </template>
       <!-- The six photos using the sheet cuts, so the cut is seen before
-           it is made; dashed amber when it found no clean line somewhere. -->
-      <template v-if="zoomed?.cells?.length" #over>
-        <span
-          v-for="(cell, i) in zoomed.cells"
+           it is made; dashed amber when it found no clean line somewhere.
+           The person can drag them: a double line in the accent colour once
+           edited. -->
+      <template v-if="zoomedCut.length" #over>
+        <div
+          v-for="(cell, i) in zoomedCut"
           :key="i"
           class="cs-cell"
-          :class="{ 'cs-cell--unclean': zoomed.cuts_cleanly === false }"
+          :class="{
+            'cs-cell--unclean':
+              !boxEdited(zoomed, i) && zoomed.cuts_cleanly === false,
+            'cs-cell--edited': boxEdited(zoomed, i),
+            'cs-cell--editable': !cutLocked,
+          }"
           :style="cellStyle(cell)"
-          aria-hidden="true"
+          :tabindex="cutLocked ? undefined : 0"
+          :role="cutLocked ? undefined : 'group'"
+          :aria-label="
+            cutLocked
+              ? undefined
+              : `${panelName(i)}${boxEdited(zoomed, i) ? ', edited' : ''}`
+          "
+          :aria-hidden="cutLocked ? 'true' : undefined"
+          :aria-describedby="cutLocked ? undefined : 'cs-cut-hint'"
           data-testid="cs-cell"
-        />
+          @pointerdown="beginDrag($event, zoomed, i, null)"
+          @pointermove="moveDrag"
+          @pointerup="endDrag"
+          @pointercancel="endDrag"
+          @dblclick.stop
+          @keydown="onCellKey($event, zoomed, i)"
+        >
+          <span
+            v-for="name in HANDLE_NAMES"
+            v-show="!cutLocked"
+            :key="name"
+            class="cs-handle"
+            :class="`cs-handle--${name}`"
+            aria-hidden="true"
+            data-testid="cs-handle"
+            @pointerdown="beginDrag($event, zoomed, i, HANDLES[name])"
+          />
+        </div>
       </template>
       <template #actions>
+        <!-- How the boxes move, said once beside them rather than as a
+             hover tip on a box being dragged; each box points to it. -->
+        <span
+          v-if="zoomed && !cutLocked"
+          id="cs-cut-hint"
+          class="cs-cap"
+          data-testid="cs-cut-hint"
+          >{{ CUT_HINT }}</span
+        >
+        <button
+          v-if="zoomedEdited"
+          type="button"
+          class="cs-link"
+          data-testid="cs-cut-reset"
+          :disabled="cutLocked"
+          @click="resetCut(zoomed.picture_id)"
+        >
+          Reset to automatic
+        </button>
         <!-- Both choices always shown, so the control never changes size and
              says which one the sheet is on. -->
         <Segmented
@@ -733,6 +784,7 @@ import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import { usePromptAssist } from "../../composables/usePromptAssist";
 import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
+import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
 import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
@@ -953,6 +1005,11 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // until they tick or untick one themselves.
 const kept = ref([]);
 const keptTouched = ref(false);
+// The photo boxes the person drew, per sheet: picture id to six entries in
+// panel order, each `[left, top, right, bottom]` fractions of the sheet or null
+// where that photo is still the cutter's. A re-rank never touches an entry, so
+// an edited box is never overwritten; "Reset to automatic" removes the sheet's.
+const cutEdits = ref({});
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -1583,8 +1640,10 @@ function sheetWords(sheet) {
     if (drawnFrom.value) words.unshift(`${sheet.closeness.toFixed(2)} ${near}`);
     else words.push(near);
   }
-  // A warning, not a refusal: the zoom shows where it cuts.
-  if (sheet.cuts_cleanly === false) words.push("may not cut cleanly");
+  // A warning, not a refusal: the zoom shows where it cuts. A cut the person
+  // drew is theirs, so it is no longer the cutter's to doubt.
+  if (sheetEdited(sheet)) words.push("cut edited");
+  else if (sheet.cuts_cleanly === false) words.push("may not cut cleanly");
   return words.join(" · ");
 }
 
@@ -1596,6 +1655,37 @@ function cellStyle([left, top, right, bottom]) {
     width: `${(right - left) * 100}%`,
     height: `${(bottom - top) * 100}%`,
   };
+}
+
+/** The photos a sheet is cut into now: each the person's box where they drew
+ * one, else the cutter's latest. */
+function cellsOf(sheet) {
+  const edits = cutEdits.value[sheet.picture_id] || [];
+  return (sheet.cells ?? []).map((cell, i) => edits[i] ?? cell);
+}
+
+function boxEdited(sheet, index) {
+  return !!cutEdits.value[sheet.picture_id]?.[index];
+}
+
+function sheetEdited(sheet) {
+  return (cutEdits.value[sheet.picture_id] || []).some(Boolean);
+}
+
+/** Write one photo's box. A new object each time, so the change is reactive. */
+function setBox(sheet, index, box) {
+  const edits = [
+    ...(cutEdits.value[sheet.picture_id] || Array(PANEL_COUNT).fill(null)),
+  ];
+  edits[index] = box;
+  cutEdits.value = { ...cutEdits.value, [sheet.picture_id]: edits };
+}
+
+/** Back to the cutter's latest boxes for a sheet. */
+function resetCut(id) {
+  const rest = { ...cutEdits.value };
+  delete rest[id];
+  cutEdits.value = rest;
 }
 
 /** Closeness in words: to the picture drawn from, else to the character. */
@@ -1619,6 +1709,76 @@ function sheetLocked(sheet) {
 const zoomed = computed(() =>
   phase.value === "describe" ? null : numbered(zoomedId.value),
 );
+const zoomedCut = computed(() => (zoomed.value ? cellsOf(zoomed.value) : []));
+const zoomedEdited = computed(() => !!zoomed.value && sheetEdited(zoomed.value));
+// Boxes are drawn but not moved while the sheets are being cut.
+const cutLocked = computed(() => working.value || phase.value === "filing");
+const HANDLE_NAMES = Object.keys(HANDLES);
+const PANEL_COUNT = 6;
+const CUT_HINT =
+  "Drag a box's edge or corner to resize it, or its middle to move it. " +
+  "Arrows move it; Shift or Alt with an arrow pushes or pulls that edge.";
+
+/** The photo a box is, for its label: the passports 1-4, then the bodies. */
+function panelName(index) {
+  return index < 4 ? `Passport photo ${index + 1}` : `Body photo ${index - 3}`;
+}
+
+// The box a pointer is dragging: its sheet, the photo's index, the edges it
+// moves (null for the whole box), where the drag began and the sheet's size on
+// screen. Only one at a time.
+let drag = null;
+
+/** A drag on a photo's box (`edges` null) or one of its handles. The zoom's
+ * pan must not take it, so the event stops here. */
+function beginDrag(event, sheet, index, edges) {
+  // A second finger on a touch screen is not a new drag: only the first moves.
+  if (cutLocked.value || event.button !== 0 || event.isPrimary === false) return;
+  event.stopPropagation();
+  const box = event.currentTarget.closest(".cs-cell");
+  const overlay = box?.closest(".zp-over");
+  if (!overlay) return;
+  box.setPointerCapture?.(event.pointerId);
+  drag = {
+    sheet,
+    index,
+    edges,
+    start: cellsOf(sheet)[index],
+    x: event.clientX,
+    y: event.clientY,
+    rect: overlay.getBoundingClientRect(),
+  };
+}
+
+function moveDrag(event) {
+  if (!drag) return;
+  const dx = (event.clientX - drag.x) / drag.rect.width;
+  const dy = (event.clientY - drag.y) / drag.rect.height;
+  const box = drag.edges
+    ? resizeBox(drag.start, drag.edges, dx, dy)
+    : moveBox(drag.start, dx, dy);
+  setBox(drag.sheet, drag.index, box);
+}
+
+function endDrag() {
+  drag = null;
+}
+
+/** An arrow moves the focused photo's box, or with Shift or Alt one of its
+ * edges. Only an arrow is taken: the zoom reads the arrows too, to step to the
+ * next sheet. */
+function onCellKey(event, sheet, index) {
+  if (cutLocked.value) return;
+  const box = cellsOf(sheet)[index];
+  const next = nudgeBox(box, event.key, {
+    shift: event.shiftKey,
+    alt: event.altKey,
+  });
+  if (!next) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setBox(sheet, index, next);
+}
 
 /** The sheet's own file, full size; the thumbnail until its format is known. */
 function sheetUrl(sheet) {
@@ -2106,6 +2266,7 @@ function startOver() {
   runs.value = [];
   order.value = [];
   ranking.value = {};
+  cutEdits.value = {};
   kept.value = [];
   keptTouched.value = false;
   runsEndedAt = 0;
@@ -2168,9 +2329,16 @@ async function use() {
   working.value = true;
   error.value = "";
   phase.value = "filing";
+  // The boxes of each kept sheet that has one drawn by hand, all six as they
+  // are on screen; a sheet with none is cut as the cutter finds it.
+  const boxes = Object.fromEntries(
+    keptSheets.value
+      .filter((sheet) => sheetEdited(sheet))
+      .map((sheet) => [sheet.picture_id, cellsOf(sheet)]),
+  );
   let ids;
   try {
-    ({ picture_ids: ids } = await useSheets(props.character.id, keep));
+    ({ picture_ids: ids } = await useSheets(props.character.id, keep, boxes));
   } catch (e) {
     phase.value = "pick";
     error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
@@ -2469,6 +2637,7 @@ function restoreState(saved) {
   ranking.value = { ...(saved.ranking || {}) };
   kept.value = [...(saved.kept || [])];
   keptTouched.value = !!saved.kept_touched;
+  cutEdits.value = { ...(saved.cut_edits || {}) };
   drawnWith.value = saved.drawn_with || "";
   drawnFrom.value = saved.drawn_from ?? null;
   compareTo.value = saved.compare_to === "cluster" ? "cluster" : "picture";
@@ -2649,6 +2818,8 @@ const snapshot = computed(() => {
     ranking: cut ? {} : ranking.value,
     kept: cut ? [] : kept.value,
     kept_touched: cut ? false : keptTouched.value,
+    // The photo boxes drawn by hand, kept with the sheets they belong to.
+    cut_edits: cut ? {} : cutEdits.value,
     drawn_with: cut ? "" : drawnWith.value,
     drawn_from: cut ? null : drawnFrom.value,
     compare_to: compareTo.value,
@@ -3043,6 +3214,83 @@ defineExpose({
 .cs-cell--unclean {
   border-style: dashed;
   border-color: rgb(var(--v-theme-dark-surface-warning));
+}
+
+/* A photo the person drew: a double line in the accent colour, so it reads
+   as edited by its line as well as its colour. The zoom's overlay lets no
+   pointer through except to an editable photo. */
+.cs-cell--edited {
+  border: 4px double rgb(var(--v-theme-primary));
+}
+
+.cs-cell--editable {
+  pointer-events: auto;
+  cursor: move;
+}
+
+/* The grips on an editable photo: its corners and edge midpoints. */
+.cs-handle {
+  position: absolute;
+  width: var(--space-2);
+  height: var(--space-2);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--scrim-photo-strong);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-on-dark-surface));
+}
+
+.cs-handle--nw,
+.cs-handle--se {
+  cursor: nwse-resize;
+}
+
+.cs-handle--ne,
+.cs-handle--sw {
+  cursor: nesw-resize;
+}
+
+.cs-handle--n,
+.cs-handle--s {
+  cursor: ns-resize;
+}
+
+.cs-handle--e,
+.cs-handle--w {
+  cursor: ew-resize;
+}
+
+.cs-handle--nw,
+.cs-handle--w,
+.cs-handle--sw {
+  left: 0;
+}
+
+.cs-handle--n,
+.cs-handle--s {
+  left: 50%;
+}
+
+.cs-handle--ne,
+.cs-handle--e,
+.cs-handle--se {
+  left: 100%;
+}
+
+.cs-handle--nw,
+.cs-handle--n,
+.cs-handle--ne {
+  top: 0;
+}
+
+.cs-handle--w,
+.cs-handle--e {
+  top: 50%;
+}
+
+.cs-handle--sw,
+.cs-handle--s,
+.cs-handle--se {
+  top: 100%;
 }
 
 .cs-cap {
