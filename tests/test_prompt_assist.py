@@ -70,7 +70,7 @@ def _camera(document: dict) -> dict:
     "break_it, complaint",
     [
         (
-            lambda d: _camera(d).update(default="mirrorless"),
+            lambda d: _camera(d).update(default="webcam"),
             "neither none nor a tested",
         ),
         (

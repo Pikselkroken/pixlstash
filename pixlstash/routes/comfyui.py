@@ -217,6 +217,9 @@ BUILTIN_RETIRED: frozenset[str] = frozenset(
         "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
         "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
         "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+        # 30 steps on the MiniMax H3 video model: the MiniMax H3 Image
+        # reference sheet draws the same sheet at 6.
+        "Sheet-MiniMax-H3-Reference.json",
     }
 )
 # Prefix on a retired built-in's origin row once it has been handled, so the
