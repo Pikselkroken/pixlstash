@@ -99,11 +99,14 @@ SIZES = {
     "small": (1280, 768),
     "medium": (1840, 1104),
     "large": (2560, 1536),
-    "4k": (5280, 3168),
+    # MiniMax H3 Image's sizes: its reference sheets draw waxy faces at
+    # large and keep a face close only from 4K up (the 2026-11-22 probe).
+    "4k": (3840, 2304),
+    "5k": (5280, 3168),
 }
 # MiniMax H3's own size joins the three every model has (a nested ``Literal``
 # flattens to all four).
-Size = Literal[Size, "4k"]
+Size = Literal[Size, "4k", "5k"]
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.

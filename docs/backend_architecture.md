@@ -12966,11 +12966,15 @@ character with none or with too few. A **character sheet** is one MOSS-Image
 (or Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
-mid-thigh, knees-up or full body). The canvas is one of four sizes
+mid-thigh, knees-up or full body). The canvas is one of five sizes
 (`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
-range MOSS draws well, every side a multiple of 16, and `4k`, 5280×3168,
-about 17 megapixels, MiniMax's own "4K", for MiniMax H3, which wants a large
-canvas; the step offers each model only its own); the layout is drawn on
+range MOSS draws well, every side a multiple of 16; `4k`, 3840×2304, about
+9 megapixels, the least MiniMax H3 Image draws a sheet's faces well at (on a
+2026-11-22 probe of six seeds from one reference, its worst face kept 0.39
+of the reference's likeness at 4K against 0.35 at 2560×1536, and its
+weakest pair within a sheet 0.36 against 0.28); and `5k`, 5280×3168, about
+17 megapixels, for MiniMax H3 and H3 Image; the step offers each model only
+its own, and the MiniMax H3 Image sheet built-ins draw at 4K); the layout is drawn on
 2560×1536 and scaled. Text pins down a type, not a person, so each sheet is a slightly
 different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet

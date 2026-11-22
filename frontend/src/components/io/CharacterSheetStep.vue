@@ -753,7 +753,8 @@ const SIZES = [
   { id: "small", label: "Small", passport: "300×384" },
   { id: "medium", label: "Medium", passport: "431×552" },
   { id: "large", label: "Large", passport: "600×768" },
-  { id: "4k", label: "4K", passport: "1237×1584" },
+  { id: "4k", label: "4K", passport: "900×1152" },
+  { id: "5k", label: "5K", passport: "1237×1584" },
 ];
 // The sizes a model draws well, and the one it starts at; the rest are greyed
 // out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
@@ -808,16 +809,17 @@ const ENGINES = {
     family: "minimax_h3",
     name: "MiniMax H3",
     fits: (lora) => lora.base_model_family === "minimax_h3",
-    sizes: ["large", "4k"],
-    size: "4k",
+    sizes: ["large", "5k"],
+    size: "5k",
   },
   // MiniMax's still-image model, another architecture than H3 video: an H3
-  // video LoRA is no LoRA for it. Best at ~16 MP, weak much under 4 MP.
+  // video LoRA is no LoRA for it. A reference sheet at Large draws waxy
+  // faces that drift from the picture; from 4K up they hold (2026-11-22).
   minimaxImage: {
     family: "minimax_h3_image",
     name: "MiniMax H3 Image",
     fits: (lora) => lora.base_model_family === "minimax_h3_image",
-    sizes: ["large", "4k"],
+    sizes: ["4k", "5k"],
     size: "4k",
   },
 };
@@ -1268,10 +1270,12 @@ const framingHint = computed(() => {
 
 const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
-  const why =
-    engine.value.sizes
-      ? ` ${engine.value.name} needs Large or 4K.`
-      : " 4K is for MiniMax H3 and H3 Image.";
+  const own = engine.value.sizes;
+  const why = own
+    ? ` ${engine.value.name} needs ${own
+        .map((id) => SIZES.find((s) => s.id === id).label)
+        .join(" or ")}.`
+    : " 4K and 5K are for MiniMax H3 and H3 Image.";
   return `Passport photos come out ${size.passport}. Larger is slower to draw.${why}`;
 });
 

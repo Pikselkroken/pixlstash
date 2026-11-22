@@ -85,7 +85,7 @@ def test_every_box_lands_inside_its_own_panel(framing, proportions):
     assert all("an adult woman" in i["caption"] for i in characters)
 
 
-@pytest.mark.parametrize("size", ["small", "medium", "4k"])
+@pytest.mark.parametrize("size", ["small", "medium", "4k", "5k"])
 def test_another_sheet_size_scales_the_layout_with_its_canvas(size):
     width, height = character_sheet.SIZES[size]
     assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
@@ -487,20 +487,21 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
 
 
 @pytest.mark.parametrize(
-    ("name", "references"),
+    ("name", "references", "size"),
     [
-        ("FLUX.2 Klein 9B Sheet.json", 0),
-        ("FLUX.2 Klein 9B Sheet from Reference.json", 1),
-        ("MiniMax H3 Image Sheet (PixlStash).json", 0),
-        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1),
-        ("Sheet-MiniMax-H3-Reference.json", 1),
-        ("Qwen-Image 2.1 Sheet.json", 0),
-        ("Qwen-Image 2.1 Sheet from Reference.json", 1),
+        ("FLUX.2 Klein 9B Sheet.json", 0, "large"),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", 1, "large"),
+        ("MiniMax H3 Image Sheet (PixlStash).json", 0, "4k"),
+        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1, "4k"),
+        ("Sheet-MiniMax-H3-Reference.json", 1, "large"),
+        ("Qwen-Image 2.1 Sheet.json", 0, "large"),
+        ("Qwen-Image 2.1 Sheet from Reference.json", 1, "large"),
     ],
 )
-def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
+def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references, size):
     """The step lists a workflow from a reference only with a reference input,
-    and draws only one with a size to set: every size is the sheet's (#2700)."""
+    and draws only one with a size to set: every size is one of the sheet's
+    (#2700), and MiniMax H3 Image's is 4K, the least it draws faces well at."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     assert reference_input_count(reduce_api_graph(graph)) == references
     sizes = {
@@ -508,7 +509,7 @@ def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
         for node in graph.values()
         if "width" in node["inputs"] and node["class_type"] not in BLANK_PICTURE_CLASSES
     }
-    assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
+    assert sizes == {character_sheet.SIZES[size]}
 
 
 # The outputs of every class the H3 Image sheets use, as ComfyUI declares them:
@@ -1342,13 +1343,14 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "size": "small"},
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
-    # MiniMax H3's size: the route takes it like any other.
-    four_k = client.post(
-        f"{API_PREFIX}/character-sheets/prompt",
-        json={"description": "x", "size": "4k", "layout": "prose"},
-    )
-    assert four_k.status_code == 200, four_k.text
-    assert (four_k.json()["width"], four_k.json()["height"]) == (5280, 3168)
+    # MiniMax H3's sizes: the route takes them like any other.
+    for size, canvas in (("4k", (3840, 2304)), ("5k", (5280, 3168))):
+        drawn = client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"description": "x", "size": size, "layout": "prose"},
+        )
+        assert drawn.status_code == 200, drawn.text
+        assert (drawn.json()["width"], drawn.json()["height"]) == canvas
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},
