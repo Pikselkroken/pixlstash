@@ -1138,6 +1138,81 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  describe("picked by hand while the step is still restoring", () => {
+    const H3_CARD = {
+      id: "manual:h3",
+      name: "MiniMax H3 sheet",
+      type: "txt2img",
+      last_used: "2026-11-12T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    const CACHE_KEY = "pixlstash:sheetWorkflowCards:v1";
+    /** Open once to fill the card cache, then open again with every workflow
+     * check held until the returned `release` is called. */
+    async function secondOpen({ keepChoices, firstOpen = async () => {} }) {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman, copper bob" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3_CARD] });
+      let wrapper = mountDialog();
+      await flushPromises();
+      await firstOpen(wrapper);
+      wrapper.unmount();
+      if (!keepChoices) {
+        const cache = localStorage.getItem(CACHE_KEY);
+        localStorage.clear();
+        localStorage.setItem(CACHE_KEY, cache);
+      }
+      let release;
+      const held = new Promise((r) => (release = r));
+      gen.preflightWorkflowRun.mockImplementation(() =>
+        held.then(() => ({ ok: true, groups: [{ reasons: [] }] })),
+      );
+      wrapper = mountDialog();
+      await flushPromises();
+      return { wrapper, release };
+    }
+
+    it("a size picked before the checks land is still the size after", async () => {
+      const { wrapper, release } = await secondOpen({ keepChoices: false });
+      const size = (label) =>
+        wrapper.findAll('[data-testid="cs-size"] button').find((b) => b.text() === label);
+      await size("Large").trigger("click");
+      release();
+      await flushPromises();
+      // H3 starts at 4K, but not over the owner's Large.
+      expect(size("Large").attributes("aria-checked")).toBe("true");
+      expect(size("4K").attributes("aria-checked")).toBe("false");
+      wrapper.unmount();
+    });
+
+    it("a workflow picked in the toolbar survives the restore of the remembered one", async () => {
+      const workflowSelect = (wrapper) =>
+        wrapper
+          .findAllComponents({ name: "AppSelect" })
+          .find((c) => c.props("label") === "Sheet workflow");
+      const { wrapper, release } = await secondOpen({
+        keepChoices: true,
+        // The first open picks MOSS, then H3: H3 is remembered.
+        firstOpen: async (first) => {
+          for (const id of [MOSS_CARD.id, H3_CARD.id]) {
+            workflowSelect(first).vm.$emit("update:modelValue", id);
+            await flushPromises();
+          }
+        },
+      });
+      const select = () => workflowSelect(wrapper);
+      expect(select().props("modelValue")).toBe(H3_CARD.id);
+      select().vm.$emit("update:modelValue", MOSS_CARD.id);
+      await flushPromises();
+      release();
+      await flushPromises();
+      expect(select().props("modelValue")).toBe(MOSS_CARD.id);
+      wrapper.unmount();
+    });
+  });
+
   it("the Photo look on a sheet says what it adds after the sheet prompt", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

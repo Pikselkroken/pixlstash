@@ -61,6 +61,7 @@
           <AppSelect
             v-model="loraSha"
             label="Character LoRA · optional"
+            @update:model-value="picked.add('lora')"
             :options="loraOptions"
             data-testid="cs-lora"
           />
@@ -74,6 +75,7 @@
               max="1.5"
               step="0.05"
               aria-label="LoRA strength"
+              @input="picked.add('strength')"
             />
             <span class="cs-sl__val">{{ strength.toFixed(2) }}</span>
           </div>
@@ -180,11 +182,14 @@
             </div>
             <div class="cs-opt">
               <FieldLabel>Sheet size</FieldLabel>
+              <!-- A pick: a click, even on the size shown, or the arrows. -->
               <Segmented
                 v-model="form.size"
                 aria-label="Sheet size"
                 :options="sizeOptions"
                 data-testid="cs-size"
+                @pick="picked.add('size')"
+                @update:model-value="picked.add('size')"
               />
             </div>
             <div class="cs-opt">
@@ -401,6 +406,8 @@
             :options="MODES"
             full
             data-testid="cs-mode"
+            @pick="picked.add('mode')"
+            @update:model-value="picked.add('mode')"
           />
         </div>
         <template v-if="fromReference">
@@ -984,6 +991,10 @@ const drawnWith = ref("");
 // The step has read its choices and restored `saved`: until then its
 // snapshot would store the defaults over what was saved.
 const restored = ref(false);
+// What the owner picked by hand before then ("mode", "workflow", "lora",
+// "strength", "reference", "size"): the step is usable from its card cache at
+// once, and restoring, or a size defaulting, must not take a pick back.
+const picked = new Set();
 // The kept sheets were cut and their pictures filed; their faces are still
 // being read.
 const cutDone = ref(false);
@@ -1232,7 +1243,8 @@ watch([engine, restored], ([now, done], [, wasDone]) => {
   if (!done) return;
   const saved =
     !wasDone &&
-    !!(props.saved?.form?.size || remembered?.size_family === now.family);
+    (picked.has("size") ||
+      !!(props.saved?.form?.size || remembered?.size_family === now.family));
   const keep =
     sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
   if (!keep) form.size = now.size || "large";
@@ -1261,7 +1273,10 @@ function closePicker() {
 
 function onPicked(picture) {
   closePicker();
-  if (picture?.id) referenceId.value = picture.id;
+  if (picture?.id) {
+    picked.add("reference");
+    referenceId.value = picture.id;
+  }
 }
 
 const suggestedFraming = computed(() =>
@@ -2393,12 +2408,15 @@ async function load() {
     sortCards(cards.value.cards);
     // A character with a face is drawn from it where a workflow can; one
     // with no pictures, from words.
-    // Both ways: a mode the last open left (restoreCardCache) is re-read here.
-    mode.value =
-      referenceCards.value.length &&
-      (referenceIds.value.length || !workflows.value.length)
-        ? "reference"
-        : "text";
+    // Both ways: a mode the last open left (restoreCardCache) is re-read here,
+    // unless the owner has picked a mode or a workflow of it since.
+    if (!picked.has("mode") && !picked.has("workflow")) {
+      mode.value =
+        referenceCards.value.length &&
+        (referenceIds.value.length || !workflows.value.length)
+          ? "reference"
+          : "text";
+    }
     await checkCards();
   }
   workflowsLoaded.value = true;
@@ -2456,26 +2474,35 @@ function restoreState(saved) {
 }
 
 /** Put back the choices that name what `load` read (the mode, workflow,
- * LoRA and reference picture) over the defaults it picked. */
+ * LoRA and reference picture) over the defaults it picked, never over one
+ * the owner picked while `load` was reading. */
 async function restore(saved) {
   if (saved && alive) {
-    if (saved.mode && saved.mode !== mode.value) {
+    const kept = (key) => !picked.has(key);
+    // A workflow is picked from its mode's list: the mode stays with it.
+    if (kept("mode") && kept("workflow") && saved.mode && saved.mode !== mode.value) {
       mode.value = saved.mode;
       // The mode's own watcher picks its first workflow and a fitting LoRA;
       // the saved ones go over those.
       await nextTick();
     }
-    if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
+    if (
+      kept("workflow") &&
+      usableCards.value.some((card) => card.id === saved.workflow_id)
+    ) {
       workflowId.value = saved.workflow_id;
     }
     if (
-      saved.lora_sha === "" ||
-      loras.value.some((lora) => lora.sha256 === saved.lora_sha)
+      kept("lora") &&
+      (saved.lora_sha === "" ||
+        loras.value.some((lora) => lora.sha256 === saved.lora_sha))
     ) {
       loraSha.value = saved.lora_sha;
     }
-    if (saved.strength != null) strength.value = saved.strength;
-    if (saved.reference_id != null) referenceId.value = saved.reference_id;
+    if (kept("strength") && saved.strength != null) strength.value = saved.strength;
+    if (kept("reference") && saved.reference_id != null) {
+      referenceId.value = saved.reference_id;
+    }
   }
   restored.value = true;
 }
@@ -2635,7 +2662,7 @@ const snapshot = computed(() => {
 
 function showReferences(body) {
   referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
-  referenceId.value = referenceIds.value[0] ?? null;
+  if (!picked.has("reference")) referenceId.value = referenceIds.value[0] ?? null;
 }
 
 /** The reference faces again, after the reference cluster changed. */
@@ -2664,7 +2691,14 @@ onBeforeUnmount(() => {
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({
-  workflowId,
+  // The parents' toolbar select is the owner picking a workflow.
+  workflowId: computed({
+    get: () => workflowId.value,
+    set: (id) => {
+      picked.add("workflow");
+      workflowId.value = id;
+    },
+  }),
   workflowOptions,
   workflowsPending,
   footer,
