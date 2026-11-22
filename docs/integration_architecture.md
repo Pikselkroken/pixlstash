@@ -1017,6 +1017,16 @@ Seven rules the client must not re-derive:
    that prose would break; `no_prompt`; `not_settable`; `no_presets`, a
    context no file has) and `prompt_assist_render_words` with `category` and
    `words` for typed text holding render vocabulary.
+   `prompt.blank_picture` is the same kind of cue for a blank picture a
+   conditioning encoder reads (MiniMax H3 Image's `images.image_1`): true
+   wherever one is found. `blank_picture: false` on the body takes its input
+   links off the run's copy and leaves the `EmptyImage` unread; null or true
+   runs the graph as it is. Per run only, like `enhance_prompt`.
+   `prompt.sampler_choice` says the sampler choice is offered: the graph samples
+   with LCM and takes a picture input. `prompt.sampler` is what the run's copy
+   samples with (`"lcm"` or `"euler"`; null where not offered). The body's
+   `sampler: "euler"` samples the copy with Euler in place of LCM; `"lcm"` or
+   null runs the graph as it is. Per run only, like `blank_picture`.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.

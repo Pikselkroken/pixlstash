@@ -6564,6 +6564,133 @@ describe("Photo look", () => {
   });
 });
 
+// "Blank picture": shown only where the graph feeds a blank picture to its
+// encoder, on by default, and off is `blank_picture: false` on every request.
+describe("the blank picture", () => {
+  const box = (wrapper) => wrapper.find('[data-testid="rund-blank"]');
+  const answer = (blank_picture) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, blank_picture } }],
+  });
+
+  it("is not offered where the graph has no blank picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).exists()).toBe(false);
+  });
+
+  it("is offered, on, and sends what it always did", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Blank picture");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("blank_picture");
+    }
+  });
+
+  it("off, sends blank_picture: false on the pre-flight it asks and the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].blank_picture).toBe(false);
+    // Still drawn: the server reports the blank picture whether or not it was cut.
+    expect(box(wrapper).element.checked).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].blank_picture).toBe(false);
+  });
+
+  it("off on one workflow is on again on the next, and is not sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(false);
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("blank_picture");
+  });
+});
+
+// "Sampler": shown only where the graph samples with LCM and takes a picture,
+// LCM by default, and Euler is the one value sent. Per run, never remembered.
+describe("the sampler choice", () => {
+  const control = (wrapper) => wrapper.find('[data-testid="rund-sampler"]');
+  const option = (wrapper, id) =>
+    wrapper.find(`[data-testid="rund-sampler-${id}"]`);
+  const answer = (sampler_choice) => ({
+    ok: true,
+    runs: 1,
+    groups: [
+      { prompt: { positive_settable: true, sampler_choice, sampler: sampler_choice ? "lcm" : null } },
+    ],
+  });
+
+  it("is not offered where the graph does not sample with LCM over a picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Euler keeps");
+  });
+
+  it("is offered on LCM, and sends nothing for LCM", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(true);
+    expect(wrapper.text()).toContain("LCM keeps the person closest");
+    expect(control(wrapper).attributes("aria-label")).toBe("Sampler");
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("sampler");
+    }
+  });
+
+  it("Euler is asked on the pre-flight and sent with the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].sampler).toBe("euler");
+    expect(option(wrapper, "euler").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0].sampler).toBe("euler");
+  });
+
+  it("back on LCM after Euler, and back to LCM on the next workflow", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("sampler");
+  });
+});
+
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
 // makes a NEW workflow. What can silently go wrong: the workflow opens without
 // the form's changes (the body is not the run's), or the tab is opened after

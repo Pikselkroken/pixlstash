@@ -72,6 +72,9 @@ NEGATIVE_FIELDS = ("negative_prompt", "negative")
 # negative side stops there and finds none. Shared with workflow_io and
 # workflow_identity, which detect the same thing.
 ZEROED_CONDITIONING_CLASSES = frozenset({"ConditioningZeroOut"})
+# Nodes that join two conditionings into one. A recipe reads the prompt only
+# where every branch carries the same one (:func:`_agreed_prompt`).
+CONDITIONING_COMBINE_CLASSES = frozenset({"ConditioningCombine"})
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -104,6 +107,26 @@ _SETTING_FIELDS = {
     # settings written as one value.
     "width": int,
     "height": int,
+}
+# ComfyUI's custom-sampler nodes that are one sampler each. They have no
+# `sampler_name` input: the class is the sampler, so a SamplerCustomAdvanced
+# graph (MiniMax H3 Image's, with SamplerLCM) reported no sampler at all. Named
+# as KSampler spells the same sampler.
+_SAMPLER_NODE_NAMES = {
+    "SamplerLCM": "lcm",
+    "SamplerLCMUpscale": "lcm",
+    "SamplerEulerAncestral": "euler_ancestral",
+    "SamplerEulerAncestralCFGPP": "euler_ancestral_cfg_pp",
+    "SamplerEulerCFGpp": "euler_cfg_pp",
+    "SamplerLMS": "lms",
+    "SamplerDPMAdaptative": "dpm_adaptive",
+    "SamplerDPMPP_2M_SDE": "dpmpp_2m_sde",
+    "SamplerDPMPP_2S_Ancestral": "dpmpp_2s_ancestral",
+    "SamplerDPMPP_3M_SDE": "dpmpp_3m_sde",
+    "SamplerDPMPP_SDE": "dpmpp_sde",
+    "SamplerER_SDE": "er_sde",
+    "SamplerSASolver": "sa_solver",
+    "SamplerSEEDS2": "seeds_2",
 }
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into
 # subgraphs). Public because `services/workflow_export.py` needs the same list:
@@ -305,6 +328,18 @@ def _follow_positive_ui(
         # text sits in widgets_values[0] without being declared in inputs[]
         return _extract_text_from_node_ui(node)
     # Follow any CONDITIONING-type input upstream (skips non-conditioning inputs)
+    if node.get("type") in CONDITIONING_COMBINE_CLASSES:
+        branches = []
+        for inp in node.get("inputs") or []:
+            if inp.get("type") != "CONDITIONING":
+                continue
+            upstream_id = link_map.get(str(inp.get("link")))
+            branches.append(
+                _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
+                if upstream_id
+                else None
+            )
+        return _agreed_prompt(branches)
     for inp in node.get("inputs") or []:
         if inp.get("type") == "CONDITIONING" and inp.get("link") is not None:
             upstream_id = link_map.get(str(inp["link"]))
@@ -312,6 +347,18 @@ def _follow_positive_ui(
                 result = _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
                 if result is not None:
                     return result
+    return None
+
+
+def _agreed_prompt(prompts: list[str | None]) -> str | None:
+    """The prompt every branch of a combine carries, or ``None``.
+
+    A combine of two prompts that disagree is no single prompt, and a branch
+    that resolves to nothing leaves the whole unknown. Never one branch's
+    text picked over another's.
+    """
+    if prompts and all(p is not None for p in prompts) and len(set(prompts)) == 1:
+        return prompts[0]
     return None
 
 
@@ -512,6 +559,67 @@ def rewritten_prompt_input(workflow: dict, node_id: str, field: str) -> tuple[st
     return at if rewritten else (str(node_id), field)
 
 
+def _is_image_input(name: Any) -> bool:
+    """An image input by name: ``image``, ``image_1``, ``images.image_1``."""
+    return str(name).split(".")[0].split("_")[0] in ("image", "images")
+
+
+def blank_picture_inputs(workflow: dict) -> list[tuple[str, str]]:
+    """The inputs a blank picture feeds, as ``(node_id, input)``.
+
+    A blank picture is an ``EmptyImage`` whose every reader takes it on an
+    image input of a conditioning encoder: a node with a ``clip`` and no
+    conditioning input of its own, the one :func:`_follow_prompt_api` reads as
+    making the conditioning itself (MiniMax H3 Image's ``images.image_1``). An
+    ``EmptyImage`` that feeds anything else, such as a VAE encode, is content
+    and is not one. Empty when the graph has none.
+    """
+    readers: dict[str, list[tuple[str, str]]] = {}
+    for node_id, node in workflow.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        for name, value in (inputs or {}).items():
+            if _is_api_ref(value):
+                readers.setdefault(str(value[0]), []).append((str(node_id), name))
+    found: list[tuple[str, str]] = []
+    for empty_id, node in workflow.items():
+        if not isinstance(node, dict) or node.get("class_type") != "EmptyImage":
+            continue
+        links = readers.get(str(empty_id), [])
+        if links and all(
+            _is_image_input(name) and _is_encoder_inputs(workflow.get(reader))
+            for reader, name in links
+        ):
+            found.extend(links)
+    return found
+
+
+def _is_encoder_inputs(node: Any) -> bool:
+    """Whether *node* makes conditioning from a ``clip``, as the walk reads it."""
+    inputs = (node or {}).get("inputs") or {}
+    return "clip" in inputs and not any(map(_is_conditioning_input, inputs))
+
+
+def lcm_sampler_nodes(workflow: dict) -> list[str]:
+    """The nodes that sample with LCM, as node ids.
+
+    A ``SamplerLCM``, and a ``KSampler`` or ``KSamplerAdvanced`` whose
+    ``sampler_name`` is ``lcm``. ``SamplerLCMUpscale`` is not one: it upscales
+    between steps, which a sampler select would not do.
+    """
+    found: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs") or {}
+        if class_type == "SamplerLCM" or (
+            class_type in ("KSampler", "KSamplerAdvanced")
+            and inputs.get("sampler_name") == "lcm"
+        ):
+            found.append(str(node_id))
+    return found
+
+
 def _follow_prompt_api(
     node_id: str,
     workflow: dict,
@@ -539,6 +647,17 @@ def _follow_prompt_api(
     # side is read as it always was.
     if side == "negative" and class_type in ZEROED_CONDITIONING_CLASSES:
         return None
+
+    # A combine carries the prompt only where both branches carry the same one.
+    if class_type in CONDITIONING_COMBINE_CLASSES:
+        return _agreed_prompt(
+            [
+                _follow_prompt_api(str(inputs[name][0]), workflow, depth + 1, side)
+                if _is_api_ref(inputs.get(name))
+                else None
+                for name in ("conditioning_1", "conditioning_2")
+            ]
+        )
 
     # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
     # `TextEncode` class, or a node that takes `clip` and no conditioning, so
@@ -1075,6 +1194,7 @@ def extract_recipe_extras(workflow: dict) -> dict:
     negative_prompt: str | None = None
     settings: dict[str, Any] = {}
     latent_size: dict[str, int] = {}
+    node_named: str | None = None
     try:
         sized = size_inputs(workflow)
         for node_id, node in workflow.items():
@@ -1104,9 +1224,16 @@ def extract_recipe_extras(workflow: dict) -> dict:
                 value = _typed_setting(value, kind)
                 if value is not None:
                     settings[field] = value
+            # Only a fallback: a `sampler_name` some node names wins, wherever
+            # it comes in the graph.
+            node_named = node_named or _SAMPLER_NODE_NAMES.get(
+                node.get("class_type", "")
+            )
     except Exception:
         logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
         return {"negative_prompt": None, "settings": {}}
+    if node_named is not None:
+        settings.setdefault("sampler_name", node_named)
     settings.update(latent_size)
     return {"negative_prompt": negative_prompt, "settings": settings}
 

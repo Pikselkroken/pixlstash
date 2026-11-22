@@ -600,34 +600,39 @@ def _text_to_sheet(out: dict, nodes: dict, inputs: dict) -> dict:
     size["width"], size["height"] = SIZES["large"]
     try:
         detected = detect_workflow_io(out)
-        positive, negative = detected.positive_prompts, detected.negative_prompts
+        positive, negative = detected.positive_prompt_nodes, detected.negative_prompts
     except WorkflowGraphError as exc:
         logger.warning("A text sheet copy's prompts could not be read: %s", exc)
         positive, negative = (), ()
-    if len(positive) != 1:
+    if not positive:
         raise SheetConversionRefused(
-            f"PixlStash finds {len(positive)} prompts in this workflow. Only "
-            "a workflow with one prompt can be made into a sheet workflow."
+            "PixlStash does not find one prompt in this workflow. Only a "
+            "workflow with one prompt can be made into a sheet workflow."
         )
-    if positive[0] in negative:
-        raise SheetConversionRefused(
-            "Its prompt and negative prompt are one node, so the negative "
-            "would be drawn as the sheet's layout too."
-        )
-    encoder = out[positive[0]]
-    if encoder["class_type"] == SHEET_LAYOUT_ENCODER:
-        raise SheetConversionRefused("This workflow already draws sheets.")
-    # ponytail: CLIPTextEncode only, the encoder of nearly every text-to-image
-    # template. One with fields of its own (SDXL's text_g / text_l, Flux 1's
-    # clip_l / t5xxl) needs a layout encoder that takes them.
-    if encoder["class_type"] != "CLIPTextEncode":
-        raise SheetConversionRefused(
-            f"Its prompt is encoded by {encoder['class_type']}. Only a "
-            "workflow whose prompt goes through CLIP Text Encode can be made "
-            "into a sheet workflow."
-        )
-    encoder["class_type"] = SHEET_LAYOUT_ENCODER
-    encoder.setdefault("inputs", {})["region_strength"] = 1.0
+    # Every encoder of the one prompt takes the layout, so none of them draws
+    # a sheet the others do not.
+    for node_id in positive:
+        if node_id in negative:
+            raise SheetConversionRefused(
+                "Its prompt and negative prompt are one node, so the negative "
+                "would be drawn as the sheet's layout too."
+            )
+        encoder = out[node_id]
+        if encoder["class_type"] == SHEET_LAYOUT_ENCODER:
+            raise SheetConversionRefused("This workflow already draws sheets.")
+        # ponytail: CLIPTextEncode only, the encoder of nearly every text-to-image
+        # template. One with fields of its own (SDXL's text_g / text_l, Flux 1's
+        # clip_l / t5xxl) needs a layout encoder that takes them.
+        if encoder["class_type"] != "CLIPTextEncode":
+            raise SheetConversionRefused(
+                f"Its prompt is encoded by {encoder['class_type']}. Only a "
+                "workflow whose prompt goes through CLIP Text Encode can be made "
+                "into a sheet workflow."
+            )
+    for node_id in positive:
+        encoder = out[node_id]
+        encoder["class_type"] = SHEET_LAYOUT_ENCODER
+        encoder.setdefault("inputs", {})["region_strength"] = 1.0
     # As the edit path's copy: a sheet PixlStash cannot collect is lost.
     _save_with_save_image(nodes)
     return out
@@ -923,8 +928,11 @@ def sheet_cells(
     cells 680×1536 at 2560×1536, scaled to the picture) and searches halfway to
     the next line on either side, so no model's drift is a constant here: see
     :func:`_find_cut` for where in that window it lands. The passport row is
-    cut once per passport column, each over its own span. Whatever is left of
-    the white frame round each photo is then trimmed.
+    cut once per passport column, each over its own span, and the passport
+    column then once per row, over that row: a model that draws the two rows
+    with their gutters apart (MiniMax H3 Image does) would otherwise leave a
+    strip of the next photo on one row's cut. Whatever is left of the white
+    frame round each photo is then trimmed.
 
     *faces* are the sheet's stored face boxes. A cut never runs through a
     face's centre, and the cut is clean only when every cut found a clear line
@@ -947,9 +955,11 @@ def sheet_cells(
     across_y = [(y, x, reach) for x, y, reach in centres]
     grid = [round(x * sx) for x in (0, 600, 1200, 1880)] + [width]
 
-    def column_cut(i: int) -> tuple[int, int, bool]:
+    def column_cut(
+        i: int, span: tuple[int, int] = (0, height)
+    ) -> tuple[int, int, bool]:
         window = ((grid[i - 1] + grid[i]) // 2, (grid[i] + grid[i + 1]) // 2)
-        return _find_cut(gray, grid[i], window, (0, height), True, across_x, sx)
+        return _find_cut(gray, grid[i], window, span, True, across_x, sx)
 
     column, half, bodies = column_cut(1), column_cut(2), column_cut(3)
     row = round(768 * sy)
@@ -958,17 +968,21 @@ def sheet_cells(
         _find_cut(gray, row, window, span, False, across_y, sy)
         for span in ((0, column[0]), (column[1], half[0]))
     ]
+    # The passport column again, per row, over the part of the row both its
+    # photos cover.
+    top = column_cut(1, (0, min(rows[0][0], rows[1][0])))
+    bottom = column_cut(1, (max(rows[0][1], rows[1][1]), height))
     cells = [
-        (0, 0, column[0], rows[0][0]),
-        (column[1], 0, half[0], rows[1][0]),
-        (0, rows[0][1], column[0], height),
-        (column[1], rows[1][1], half[0], height),
+        (0, 0, top[0], rows[0][0]),
+        (top[1], 0, half[0], rows[1][0]),
+        (0, rows[0][1], bottom[0], height),
+        (bottom[1], rows[1][1], half[0], height),
         (half[1], 0, bodies[0], height),
         (bodies[1], 0, width, height),
     ]
     limit, bleed = round(64 * sx), max(1, round(2 * sx))
     cells = [_inside_frame(gray, cell, limit, bleed) for cell in cells]
-    clean = all(cut[2] for cut in (column, half, bodies, *rows)) and all(
+    clean = all(cut[2] for cut in (top, bottom, half, bodies, *rows)) and all(
         sum(left <= x < right and top <= y < bottom for x, y, _ in centres) <= 1
         for left, top, right, bottom in cells
     )

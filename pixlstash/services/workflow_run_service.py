@@ -75,6 +75,7 @@ from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
     detect_workflow_io,
+    is_picture_loader,
     prompt_field,
 )
 from pixlstash.services.workflow_parameters import is_picture_batch
@@ -83,8 +84,10 @@ from pixlstash.utils.comfyui_utilities import (
     NEGATIVE_FIELDS,
     PROMPT_ASSIST_META,
     PROMPT_FIELDS,
+    blank_picture_inputs,
     collect_seed_inputs,
     iter_model_fields_api,
+    lcm_sampler_nodes,
     prompt_assist_tail,
     rewritten_prompt_input,
     split_prompt_assist,
@@ -217,7 +220,7 @@ def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
 
 
 def _literal_prompt_target(
-    graph: dict, node_id: str, field: Optional[str]
+    graph: dict, node_id: str, field: Optional[str], shared: bool = False
 ) -> Optional[tuple[str, str]]:
     """Where a prompt node's text is a literal string, as ``(node, field)``.
 
@@ -225,6 +228,9 @@ def _literal_prompt_target(
     unoverridden :data:`TEXT_NODE_CLASSES` node wired into it. Behind a prompt
     enhancer, the words it rewrites (:func:`rewritten_prompt_input`): writing
     the encoder's field would cut the enhancer out of the run.
+
+    *shared* reads the words wherever they are: a text node several encoders
+    read is still where their prompt lives. Only a writer needs it unshared.
     """
     if field is not None:
         node_id, field = rewritten_prompt_input(graph, node_id, field)
@@ -245,7 +251,7 @@ def _literal_prompt_target(
         source_inputs = (source or {}).get("inputs") or {}
         if (
             field
-            and readers == 1
+            and (readers == 1 or shared)
             and isinstance(source_inputs.get(field), str)
             and not overriding_text_inputs(source["class_type"], source_inputs)
         ):
@@ -326,6 +332,8 @@ def apply_prompts(
     negative: Optional[str],
     enhance: Optional[bool] = None,
     assist: Optional[dict] = None,
+    blank_picture: Optional[bool] = None,
+    sampler: Optional[str] = None,
 ) -> dict:
     """Put this run's prompts into the detected prompt nodes, and report on it.
 
@@ -343,7 +351,12 @@ def apply_prompts(
     enhancer is cut out of the graph (:func:`_cut_prompt_enhancer`). ``None``
     cuts it too where the assist was written, since the enhancer would
     rewrite the very sentences the assist adds; ``True`` and ``None``
-    otherwise leave the graph as it is.
+    otherwise leave the graph as it is. With *blank_picture* ``False`` the
+    blank picture is cut out of the conditioning it feeds
+    (:func:`blank_picture_inputs`); ``None`` and ``True`` leave it. With
+    *sampler* ``"euler"`` a graph that samples with LCM and takes a picture
+    input samples with Euler instead (:func:`_sample_with_euler`); ``"lcm"``,
+    ``None`` and a graph without that pair leave it.
 
     Returns:
         ``positive_settable`` / ``negative_settable``: whether the graph has
@@ -355,7 +368,11 @@ def apply_prompts(
         nowhere to go - said, never dropped (#1832). ``enhancer``: whether a
         prompt enhancer rewrote a prompt in the graph as it came in, cut or
         not; ``enhancer_on``: whether it still does. ``assist_applied``:
-        whether *assist*'s parts were written.
+        whether *assist*'s parts were written. ``blank_picture``: whether
+        the graph feeds a blank picture to a conditioning encoder, cut or not.
+        ``sampler_choice``: whether the sampler choice applies to this graph;
+        ``sampler``: the sampler the run's copy samples with, ``None`` where
+        the choice does not apply.
     """
     report = {
         "positive_settable": False,
@@ -366,6 +383,9 @@ def apply_prompts(
         "enhancer": False,
         "enhancer_on": False,
         "assist_applied": False,
+        "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
     }
     tail = prompt_assist_tail(assist) if prompt and prompt.strip() else None
     enhanced: list[tuple[str, str, str]] = []
@@ -382,6 +402,19 @@ def apply_prompts(
     for side, text in sides:
         node_ids = getattr(detected, f"{side}_prompts")
         held = set()
+        # Where each encoder's text goes, decided before any of this side is
+        # written: an encoder that cuts its link to a text node another encoder
+        # of the same prompt still reads must not change that decision for it.
+        targets = (
+            {
+                node_id: prompt_text_target(
+                    graph, node_id, text, _side_fields(detected, side, node_id)
+                )
+                for node_id in node_ids
+            }
+            if text is not None
+            else {}
+        )
         for node_id in node_ids:
             fields = _side_fields(detected, side, node_id)
             inputs = (graph.get(node_id) or {}).get("inputs") or {}
@@ -391,7 +424,9 @@ def apply_prompts(
             report[f"{side}_settable"] = True
             if rewritten_prompt_input(graph, node_id, name) != (str(node_id), name):
                 enhanced.append((side, str(node_id), name))
-            literal = _literal_prompt_target(graph, node_id, name)
+            # Read the words wherever they are: encoders sharing one text node
+            # carry one prompt, and that node is where it is held.
+            literal = _literal_prompt_target(graph, node_id, name, shared=True)
             words = graph[literal[0]]["inputs"][literal[1]] if literal else None
             if side == "positive":
                 words, stamp = split_prompt_assist(
@@ -405,7 +440,7 @@ def apply_prompts(
             held.add(words)
             if text is None:
                 continue
-            target = prompt_text_target(graph, node_id, text, fields)
+            target = targets[node_id]
             if target is not None:
                 graph[target[0]]["inputs"][target[1]] = text
                 if side == "positive":
@@ -457,7 +492,57 @@ def apply_prompts(
                 if not isinstance(node.get("_meta"), dict):
                     node["_meta"] = {}
                 node["_meta"][PROMPT_ASSIST_META] = deepcopy(assist)
+    blank = blank_picture_inputs(graph)
+    report["blank_picture"] = bool(blank)
+    if blank_picture is False and blank:
+        _cut_blank_picture(graph, blank)
+    lcm = lcm_sampler_nodes(graph)
+    # Offered only where the graph also takes a picture: a text-to-image graph
+    # keeps LCM, since Euler brings the crunch back there.
+    report["sampler_choice"] = bool(lcm) and any(
+        isinstance(node, dict) and is_picture_loader(str(node.get("class_type", "")))
+        for node in graph.values()
+    )
+    if report["sampler_choice"]:
+        report["sampler"] = "lcm"
+        if sampler == "euler":
+            _sample_with_euler(graph, lcm)
+            report["sampler"] = "euler"
     return report
+
+
+def _sample_with_euler(graph: dict, node_ids: list[str]) -> None:
+    """Sample with Euler wherever *node_ids* sample with LCM.
+
+    A ``SamplerLCM`` becomes a ``KSamplerSelect`` on ``euler`` under the same
+    node id, so every link to it still holds; a ``KSampler`` or
+    ``KSamplerAdvanced`` on ``lcm`` takes ``euler`` in place. Nothing else in
+    the graph changes.
+    """
+    for node_id in node_ids:
+        node = graph[node_id]
+        if node.get("class_type") == "SamplerLCM":
+            node["class_type"] = "KSamplerSelect"
+            node["inputs"] = {"sampler_name": "euler"}
+        else:
+            node["inputs"]["sampler_name"] = "euler"
+    logger.info("Sampler for this run: euler, in place of lcm at %s.", node_ids)
+
+
+def _cut_blank_picture(graph: dict, links: list[tuple[str, str]]) -> None:
+    """Take the blank picture off each conditioning input it feeds.
+
+    Only the input link goes: the ``EmptyImage`` is left in place, since
+    nothing reads it now and ComfyUI runs nothing no output reaches, so the
+    rest of the graph stays as it was saved.
+    """
+    for node_id, name in links:
+        del graph[node_id]["inputs"][name]
+    logger.info(
+        "Blank picture cut for this run: %s no longer take it on %s.",
+        [node_id for node_id, _ in links],
+        [name for _, name in links],
+    )
 
 
 def _cut_prompt_enhancer(graph: dict, node_id: str, field: str) -> None:

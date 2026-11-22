@@ -522,6 +522,9 @@ _H3_IMAGE_OUTPUTS = {
     "ConditioningZeroOut": ["CONDITIONING"],
     "EmptyLatentImage": ["LATENT"],
     "EmptyImage": ["IMAGE"],
+    "PrimitiveStringMultiline": ["STRING"],
+    "ConditioningSetTimestepRange": ["CONDITIONING"],
+    "ConditioningCombine": ["CONDITIONING"],
     "RandomNoise": ["NOISE"],
     "CFGGuider": ["GUIDER"],
     "SamplerLCM": ["SAMPLER"],
@@ -586,7 +589,7 @@ def test_the_h3_image_text_workflows_condition_on_a_blank_picture_never_drawn_fr
     conditioning = graph["6"]["inputs"]
     blank = graph[conditioning["images.image_1"][0]]
     assert blank == {
-        "inputs": {"width": 512, "height": 512, "batch_size": 1, "color": 0},
+        "inputs": {"width": 32, "height": 32, "batch_size": 1, "color": 0},
         "class_type": "EmptyImage",
     }
     assert "vae" not in conditioning
@@ -726,7 +729,7 @@ def test_a_text_to_image_copy_saves_with_save_image():
                 class_type="ConditioningCombine",
                 inputs={"conditioning_1": ["2", 0], "conditioning_2": ["4", 0]},
             ),
-            "finds 2 prompts",
+            "does not find one prompt",
         ),
     ],
 )
@@ -802,6 +805,25 @@ def test_cuts_follow_dividers_drawn_off_the_grid():
     assert (cells[4][2], cells[5][0]) == (1900 - 2, 1904 + 2)
     assert clean
     # No panel keeps a sliver of a divider.
+    for left, top, right, bottom in cells:
+        assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
+
+
+def test_each_passport_row_is_cut_on_its_own_column_gutter():
+    """MiniMax H3 Image draws the two passport rows with their gutters apart
+    (measured: 1232 against 1197 on a 5280 wide sheet). One cut down the whole
+    height left a strip of the next photo on one row."""
+    image = _sheet(
+        [
+            ("x", 630, 0, 768),  # top row's gutter, 30 px right
+            ("x", 560, 772, 1536),  # bottom row's, 40 px left
+            ("y", 768, 0, 1200),  # passport row
+        ]
+    )
+    cells, clean = sheet_cells(image)
+    assert (cells[0][2], cells[1][0]) == (630 - 2, 634 + 2)
+    assert (cells[2][2], cells[3][0]) == (560 - 2, 564 + 2)
+    assert clean
     for left, top, right, bottom in cells:
         assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
 

@@ -56,6 +56,7 @@ from pixlstash.services.workflow_io import (
 from pixlstash.utils.comfyui_utilities import (
     PROMPT_ASSIST_META,
     NotAWorkflowError,
+    blank_picture_inputs,
     check_comfy_workflow,
     extract_generation_info,
     is_api_format,
@@ -105,11 +106,11 @@ def _t2i_graph() -> dict:
         ("MiniMax H3 Image Inpaint (PixlStash).json", (("11",), ("1",), ("6",), ())),
         ("Qwen-Image 2.1 Inpaint.json", (("16",), ("1",), ("9",), ())),
         ("Qwen-Image-Edit 2511 Inpaint.json", (("16",), ("1",), ("9",), ())),
-        ("MiniMax H3 Image T2I (PixlStash).json", (("11",), (), ("6",), ())),
+        ("MiniMax H3 Image T2I (PixlStash).json", (("11",), (), ("22", "6"), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
         ("FLUX.2 Klein 9B Sheet.json", (("18",), (), ("6",), ())),
         ("FLUX.2 Klein 9B Sheet from Reference.json", (("18",), ("1",), ("6",), ())),
-        ("MiniMax H3 Image Sheet (PixlStash).json", (("11",), (), ("6",), ())),
+        ("MiniMax H3 Image Sheet (PixlStash).json", (("11",), (), ("22", "6"), ())),
         (
             "MiniMax H3 Image Sheet from Reference (PixlStash).json",
             (("11",), ("1",), ("6",), ()),
@@ -761,8 +762,9 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
         ),
-        ("MiniMax H3 Image T2I (PixlStash).json", [], [["6", "inputs", "prompt"]]),
-        ("MiniMax H3 Image Sheet (PixlStash).json", [], [["6", "inputs", "prompt"]]),
+        # Both encoders read the one prompt node.
+        ("MiniMax H3 Image T2I (PixlStash).json", [], [["21", "inputs", "value"]]),
+        ("MiniMax H3 Image Sheet (PixlStash).json", [], [["21", "inputs", "value"]]),
         (
             "MiniMax H3 Image Sheet from Reference (PixlStash).json",
             [["1", "inputs", "image"]],
@@ -924,16 +926,22 @@ def test_a_stale_stamp_on_the_encoder_goes_when_the_enhancer_takes_the_words():
     assert PROMPT_ASSIST_META not in graph["6"].get("_meta", {})
 
 
+def _set_prompt(graph: dict, text: str) -> None:
+    """Give both encoders of the t2i prompt *text*, as a run does."""
+    for node_id in ("6", "22"):
+        graph[node_id]["inputs"]["prompt"] = text
+
+
 def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
     graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     stamp = _assisted("A woman.")
     run_service.apply_prompts(graph, "A woman.", None, None, stamp)
-    graph["6"]["inputs"]["prompt"] += " Edited elsewhere."
+    _set_prompt(graph, graph["6"]["inputs"]["prompt"] + " Edited elsewhere.")
     info = extract_generation_info(graph)
     assert info["positive_prompt"] == graph["6"]["inputs"]["prompt"]
     assert info["prompt_assist"] is None
     # Nor one that says it added the whole prompt: the owner said something.
-    graph["6"]["inputs"]["prompt"] = " " + " ".join(p["text"] for p in stamp["parts"])
+    _set_prompt(graph, " " + " ".join(p["text"] for p in stamp["parts"]))
     assert extract_generation_info(graph)["prompt_assist"] is None
 
 
@@ -947,7 +955,7 @@ def test_the_prompt_assist_adds_nothing_where_the_run_writes_no_words(prompt):
         assert json.dumps(graph) == json.dumps(before)
     else:
         assert graph["6"]["inputs"]["prompt"] == prompt
-        assert "_meta" not in graph["6"]
+        assert PROMPT_ASSIST_META not in graph["6"].get("_meta", {})
 
 
 def test_with_the_enhancer_cut_the_stamp_is_on_the_encoder():
@@ -1012,7 +1020,7 @@ def test_a_stamp_on_another_node_is_not_this_prompts():
     graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     stamp = _assisted("A woman.")
     tail = " " + " ".join(part["text"] for part in stamp["parts"])
-    graph["6"]["inputs"]["prompt"] = "A woman." + tail
+    graph["21"]["inputs"]["value"] = "A woman." + tail
     graph["3"].setdefault("_meta", {})[PROMPT_ASSIST_META] = stamp
     report = run_service.apply_prompts(graph, None, None)
     assert report["recorded"] is None
@@ -1027,6 +1035,152 @@ def test_the_prompt_assist_moves_no_workflow_identity():
     assert plain != assisted
     assert structural_hash(plain) == structural_hash(assisted)
     assert topology_hash(plain) == topology_hash(assisted)
+
+
+def test_every_built_in_with_an_empty_image_has_a_blank_picture_found():
+    """Wrong if a built-in feeds an EmptyImage to a conditioning encoder and the
+    Run popup's switch is not offered for it, or the detection reads a picture
+    the owner loaded as blank."""
+    with_empty = [
+        path.name
+        for path in sorted(BUILT_IN.glob("*.json"))
+        if '"EmptyImage"' in path.read_text(encoding="utf-8")
+    ]
+    found = [
+        path.name
+        for path in sorted(BUILT_IN.glob("*.json"))
+        if blank_picture_inputs(_load(path))
+    ]
+    assert found == with_empty
+    assert found, "no built-in has a blank picture to test with"
+
+
+def test_an_empty_image_is_a_blank_picture_only_when_the_encoder_is_all_it_feeds():
+    """Wrong if a VAE encode's or a sampler's picture is cut as a blank one, or
+    a mixed EmptyImage is cut from the encoder alone and left reading the rest."""
+    empty = _node("EmptyImage", width=512, height=512, batch_size=1, color=0)
+    checkpoint = _node("CheckpointLoaderSimple", ckpt_name="a.safetensors")
+
+    def encoder() -> dict:
+        return _node(
+            "MiniMaxH3ImageConditioning",
+            clip=["3", 1],
+            prompt="x",
+            **{"images.image_1": ["1", 0]},
+        )
+
+    vae = {
+        "1": empty,
+        "2": _node("VAEEncode", pixels=["1", 0], vae=["3", 0]),
+        "3": checkpoint,
+    }
+    assert blank_picture_inputs(vae) == []
+    alone = {"1": empty, "3": checkpoint, "4": encoder()}
+    assert blank_picture_inputs(alone) == [("4", "images.image_1")]
+    mixed = {**alone, "2": vae["2"]}
+    assert blank_picture_inputs(mixed) == []
+    # An encoder reading the empty picture on an input that is no image is not
+    # one of the encoder's picture inputs.
+    not_image = {
+        "1": empty,
+        "3": checkpoint,
+        "4": _node("TextEncodeX", clip=["3", 1], pixels=["1", 0]),
+    }
+    assert blank_picture_inputs(not_image) == []
+
+
+def test_a_run_without_the_blank_picture_draws_without_it():
+    """Off: the encoder's image input is taken off and the prompt goes in as
+    written, and nothing else in the graph changes. On, or not asked: the graph
+    runs as saved. A graph with no blank picture reports none and is left alone."""
+    name = "MiniMax H3 Image T2I (PixlStash).json"
+    saved = _load(BUILT_IN / name)
+    for blank in (None, True):
+        graph = _load(BUILT_IN / name)
+        report = run_service.apply_prompts(
+            graph, "a fox", None, None, blank_picture=blank
+        )
+        assert report["blank_picture"] is True
+        # Both encoders carry the one prompt, so both get it.
+        assert graph == {
+            **saved,
+            "6": {**saved["6"], "inputs": {**saved["6"]["inputs"], "prompt": "a fox"}},
+            "22": {
+                **saved["22"],
+                "inputs": {**saved["22"]["inputs"], "prompt": "a fox"},
+            },
+        }
+    graph = _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, "a fox", None, None, blank_picture=False)
+    assert report["blank_picture"] is True
+    expected = _load(BUILT_IN / name)
+    del expected["6"]["inputs"]["images.image_1"]
+    expected["6"]["inputs"]["prompt"] = "a fox"
+    expected["22"]["inputs"]["prompt"] = "a fox"
+    assert graph == expected
+    # The blank picture's own node is left in place, reading nothing.
+    assert "20" in graph
+    graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, blank_picture=False)
+    assert (report["blank_picture"], json.dumps(graph)) == (False, before)
+
+
+def test_a_sampler_choice_is_offered_only_where_lcm_meets_a_picture_input():
+    """Wrong if the text-to-image graph is offered Euler (it brings the crunch
+    back there), a graph with a picture input but no LCM is offered anything, or
+    a graph not offered is changed by a request for Euler."""
+    t2i = "MiniMax H3 Image T2I (PixlStash).json"
+    graph = _load(BUILT_IN / t2i)
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (False, None)
+    assert json.dumps(graph) == before
+    # Offered on the reference sheet: LCM as saved, and Euler on request.
+    name = "MiniMax H3 Image Sheet from Reference (PixlStash).json"
+    graph = _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, None, None, None)
+    assert (report["sampler_choice"], report["sampler"]) == (True, "lcm")
+    assert graph == _load(BUILT_IN / name)
+    run_service.apply_prompts(graph, None, None, None, sampler="lcm")
+    assert graph == _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (True, "euler")
+    expected = _load(BUILT_IN / name)
+    expected["14"] = {
+        "class_type": "KSamplerSelect",
+        "inputs": {"sampler_name": "euler"},
+    }
+    assert graph == expected
+
+
+def test_a_euler_run_changes_only_the_sampler_of_an_lcm_graph_with_a_picture():
+    """The KSampler shape: a KSampler on lcm takes euler in place and nothing
+    else in the graph moves. A graph on euler already, or with no picture
+    input, has nothing to offer and is left alone."""
+    name = "MiniMax H3 Image Inpaint (PixlStash).json"
+    graph = _load(BUILT_IN / name)
+    graph["9"]["inputs"]["sampler_name"] = "lcm"
+    saved = json.loads(json.dumps(graph))
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (True, "euler")
+    assert graph["9"]["inputs"]["sampler_name"] == "euler"
+    saved["9"]["inputs"]["sampler_name"] = "euler"
+    assert graph == saved
+    # Already Euler: not offered, and a request for Euler is a no-op.
+    graph = _load(BUILT_IN / name)
+    graph["9"]["inputs"]["sampler_name"] = "euler"
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (False, None)
+    assert json.dumps(graph) == before
+    # LCM with no picture input: not offered.
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
+    graph["9"]["inputs"]["sampler"] = ["14", 0]
+    graph["14"]["class_type"] = "SamplerLCM"
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert report["sampler_choice"] is False
+    assert graph["14"]["class_type"] == "SamplerLCM"
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
@@ -2188,3 +2342,116 @@ def test_a_converted_graph_keeps_the_workflows_own_keys():
         "pixlstash_output": "theirs",
     }
     assert with_converted_graph(editor, graph)["pixlstash_output"] == "mine"
+
+
+# ===========================================================================
+# Encoders that carry one prompt are one prompt
+#
+# A graph whose positive conditioning is several encoders carrying the same
+# prompt (MiniMax H3's blank-picture step and its text-only step, both fed by
+# one primitive) is ONE prompt everywhere PixlStash reads or writes one. Two
+# encoders that carry different prompts stay no single prompt, and nothing is
+# picked between them.
+# ===========================================================================
+
+
+def _combined_graph(first: dict, second: dict) -> dict:
+    """A text to image graph whose positive is a combine of two encoders."""
+    graph = _t2i_graph()
+    graph["7"] = _node(
+        "ConditioningCombine", conditioning_1=["2", 0], conditioning_2=["8", 0]
+    )
+    graph["8"] = _node("CLIPTextEncode", clip=["1", 1], **second)
+    graph["2"]["inputs"] = {"clip": ["1", 1], **first}
+    graph["4"]["inputs"]["positive"] = ["7", 0]
+    return graph
+
+
+def _shared_primitive_graph() -> dict:
+    """Both encoders of the combine read one primitive's text."""
+    graph = _combined_graph({"text": ["9", 0]}, {"text": ["9", 0]})
+    graph["9"] = _node("PrimitiveStringMultiline", value="a cat")
+    return graph
+
+
+def test_encoders_reading_one_primitive_are_one_positive_prompt():
+    graph = _shared_primitive_graph()
+    found = detect_workflow_io(graph)
+    assert (found.positive_prompts, found.positive_prompt_nodes) == (
+        ("2", "8"),
+        ("2", "8"),
+    )
+    assert found.ambiguities == ()
+    # One path, not one per encoder: the primitive is written once.
+    assert run_targets(graph)["caption"] == [
+        {"path": ["9", "inputs", "value"], "template": None}
+    ]
+
+
+def test_encoders_holding_the_same_text_are_one_positive_prompt():
+    graph = _combined_graph({"text": "a cat"}, {"text": "a cat"})
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("2", "8")
+    assert found.ambiguities == ()
+    assert run_targets(graph)["caption"] == [
+        {"path": ["2", "inputs", "text"], "template": None},
+        {"path": ["8", "inputs", "text"], "template": None},
+    ]
+
+
+def test_combined_encoders_with_different_prompts_are_no_single_prompt():
+    graph = _combined_graph({"text": "a cat"}, {"text": "oil painting"})
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ()
+    assert found.ambiguities == ("2 positive prompts: 2, 8",)
+    # Neither prompt is picked for the caption, and neither is for the recipe.
+    assert run_targets(graph)["caption"] == []
+
+
+def test_a_writer_fills_every_encoder_of_one_prompt_and_keeps_it_one():
+    graph = _shared_primitive_graph()
+    report = run_service.apply_prompts(graph, "a dog", None)
+    assert (report["positive_settable"], report["positive_text"]) == (True, "a cat")
+    assert report["unplaced"] == []
+    assert (graph["2"]["inputs"]["text"], graph["8"]["inputs"]["text"]) == (
+        "a dog",
+        "a dog",
+    )
+    # Writing must not leave one encoder reading the primitive and the other
+    # holding a literal: that reads as two prompts on the next detection.
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("2", "8")
+    assert found.ambiguities == ()
+
+
+def test_a_built_in_t2i_run_keeps_its_one_prompt_after_it_is_written():
+    """Step 1 (blank picture) and steps 2 to 6 (text only) share one prompt."""
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
+    report = run_service.apply_prompts(graph, "A woman in a red coat.", None)
+    assert report["positive_text"] is not None
+    assert report["unplaced"] == []
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("22", "6")
+    assert found.ambiguities == ()
+    assert [
+        graph[node]["inputs"]["prompt"] for node in found.positive_prompt_nodes
+    ] == ["A woman in a red coat."] * 2
+
+
+def test_the_built_in_blank_picture_is_read_as_no_picture():
+    """EmptyImage feeds the blank step's encoder and nothing else, so the
+    workflow is text to image with no picture input to fill."""
+    for name in (
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
+    ):
+        graph = _load(BUILT_IN / name)
+        found = detect_workflow_io(graph)
+        assert found.picture_inputs == ()
+        assert found.workflow_type == "t2i"
+        readers = [
+            key
+            for key, node in graph.items()
+            if any(v == ["20", 0] for v in node["inputs"].values())
+        ]
+        assert readers == ["6"]
