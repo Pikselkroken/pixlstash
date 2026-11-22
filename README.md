@@ -1112,7 +1112,7 @@ Both modes need:
   below. FLUX.2 counts only as Klein (Klein in its base model or file name);
   FLUX.2 dev does not.
 - **A size PixlStash can set.** Every sheet is drawn at 5:3 (1280×768,
-  1840×1104 or 2560×1536, and 3840×2304, 5280×3168 or 6240×3744 for MiniMax H3), so the workflow's
+  1840×1104 or 2560×1536; 3840×2304 or 6240×3744 for MiniMax H3 Image, and 5280×3168 for both MiniMax models), so the workflow's
   empty latent needs a `width` and `height` that are plain numbers, or are
   wired from a `ResolutionSelector` or a `PrimitiveInt`. A workflow whose size
   comes from its input picture cannot be listed as it is.

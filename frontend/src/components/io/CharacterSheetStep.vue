@@ -1275,7 +1275,7 @@ const sizeHint = computed(() => {
   const labels = (own || []).map((id) => SIZES.find((s) => s.id === id).label);
   const why = own
     ? ` ${engine.value.name} needs ${labels.slice(0, -1).join(", ")} or ${labels.at(-1)}.`
-    : " 4K, 5K and 6K are for MiniMax H3 and H3 Image.";
+    : " 4K and 6K are for MiniMax H3 Image, 5K for both MiniMax models.";
   return `Passport photos come out ${size.passport}. Larger is slower to draw.${why}`;
 });
 
