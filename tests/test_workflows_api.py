@@ -16679,14 +16679,21 @@ def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
     assert vram_history._need([row(10000, total), filled], None) == int(
         10000 * vram_history.COMFYUI_PEAK_MARGIN
     )
-    # A larger run is judged against proportionally more room, never the
-    # smaller room the measured run had: 5 GB filling 6 GB at 1 MP, run at
-    # 1.5 MP, had 9 GB of room, not 6.
+    # A larger run asks for no more than the room the measured run finished
+    # in: ComfyUI moves weights out to RAM to make room, so a need scaled
+    # past that room only makes the run wait. 5 GB filling 6 GB at 1 MP, run
+    # at 1.5 MP, asks for those 6 GB.
     sized = {**row(5000, 6000), "pixels": 1_000_000}
-    assert vram_history._need([sized], 1_500_000) == 9000 - margin
-    # Scaled past the card, the room is the card.
+    assert vram_history._need([sized], 1_500_000) == 6000 - margin
+    # A 5K sheet that peaked at 30 GB in 31.5 GB of room, drawn at 6K (1.4x
+    # the pixels): it fits beside the same 1.1 GB of other apps, where the
+    # whole card less the margin never came free and the run waited for ever.
+    five_k, six_k = 5280 * 3168, 6240 * 3744
+    sheet = {**row(30000, total - 1100), "pixels": five_k}
+    assert vram_history._need([sheet], six_k) <= budget(1100)
+    # Scaled past the card, the room is still the room it had.
     big = {**sized, "peak_mb": 25000, "room_mb": 25050}
-    assert vram_history._need([big], 1_500_000) == total - margin
+    assert vram_history._need([big], 1_500_000) == 25050 - margin
     # Rows with no recorded room keep the largest need, as before the column.
     legacy = [row(total - 100, None), row(22000, None)]
     assert vram_history._need(legacy, None) == total - margin
