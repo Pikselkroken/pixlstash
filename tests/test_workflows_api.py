@@ -14527,6 +14527,26 @@ def test_the_prompt_assist_is_off_unless_asked_and_on_by_default_only_for_h3(run
     assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == "A woman."
 
 
+def test_the_sheet_look_rides_in_a_preflight_with_no_prompt(runnable):
+    """The sheet step's check asks for the Photo look with no prompt of its
+    own, in the same pre-flight as the workflow's other checks. It answers
+    with the catalogue and submits nothing."""
+    _assist_runnable(runnable, None)
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_id": RUN_WF,
+            "count": 1,
+            "prompt_assist": {"context": "sheet", "on": True, "choices": {}},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert assist["context"] == "sheet"
+    assert assist["categories"], assist
+    assert not runnable.submitted
+
+
 def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
     _assist_runnable(runnable, "minimax_h3_image")
     layout = '{"summary": {"caption": "a sheet"}}'

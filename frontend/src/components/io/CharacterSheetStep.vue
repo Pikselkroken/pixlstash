@@ -61,6 +61,7 @@
           <AppSelect
             v-model="loraSha"
             label="Character LoRA · optional"
+            @update:model-value="picked.add('lora')"
             :options="loraOptions"
             data-testid="cs-lora"
           />
@@ -74,6 +75,7 @@
               max="1.5"
               step="0.05"
               aria-label="LoRA strength"
+              @input="picked.add('strength')"
             />
             <span class="cs-sl__val">{{ strength.toFixed(2) }}</span>
           </div>
@@ -145,8 +147,15 @@
           v-if="layout === 'prose' && sheetAssist"
           :assist="sheetAssist"
           :model="sheetLook"
-          :words="form.description"
           @change="askSheetAssist"
+        />
+        <!-- Until the chosen workflow answers its check the group's place is held,
+             so the step does not open on the switch below and then swap it. -->
+        <div
+          v-else-if="sheetLookPending"
+          class="cs-look-pending"
+          aria-hidden="true"
+          data-testid="cs-look-pending"
         />
         <!-- The choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
@@ -173,11 +182,14 @@
             </div>
             <div class="cs-opt">
               <FieldLabel>Sheet size</FieldLabel>
+              <!-- A pick: a click, even on the size shown, or the arrows. -->
               <Segmented
                 v-model="form.size"
                 aria-label="Sheet size"
                 :options="sizeOptions"
                 data-testid="cs-size"
+                @pick="picked.add('size')"
+                @update:model-value="picked.add('size')"
               />
             </div>
             <div class="cs-opt">
@@ -200,7 +212,7 @@
                 @pick="proportionsTouched = true"
               />
             </div>
-            <div v-if="layout === 'prose' && !sheetAssist" class="cs-opt">
+            <div v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-opt">
               <FieldLabel>Photo look</FieldLabel>
               <Segmented
                 v-model="form.photo_look"
@@ -225,7 +237,7 @@
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
           >
-          <span v-if="layout === 'prose' && !sheetAssist" class="cs-hint"
+          <span v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-hint"
             >Photo look asks for plain, unretouched photos rather than a
             polished render.</span
           >
@@ -394,6 +406,8 @@
             :options="MODES"
             full
             data-testid="cs-mode"
+            @pick="picked.add('mode')"
+            @update:model-value="picked.add('mode')"
           />
         </div>
         <template v-if="fromReference">
@@ -940,6 +954,8 @@ const pickButton = ref(null);
 // How many faces the last ranking measured closeness against.
 const rankedAgainst = ref(0);
 const workflowsLoaded = ref(false);
+/** The workflow list is not known yet: its select shows a placeholder. */
+const workflowsPending = computed(() => !workflowsLoaded.value);
 const workflowId = ref("");
 // Every candidate workflow's pre-flight, by id: its width/height inputs, its
 // picture inputs, and why it can't draw a sheet ("" when it can). Only the
@@ -975,6 +991,10 @@ const drawnWith = ref("");
 // The step has read its choices and restored `saved`: until then its
 // snapshot would store the defaults over what was saved.
 const restored = ref(false);
+// What the owner picked by hand before then ("mode", "workflow", "lora",
+// "strength", "reference", "size"): the step is usable from its card cache at
+// once, and restoring, or a size defaulting, must not take a pick back.
+const picked = new Set();
 // The kept sheets were cut and their pictures filed; their faces are still
 // being read.
 const cutDone = ref(false);
@@ -1025,57 +1045,85 @@ const layout = computed(() => {
   return engine.value === ENGINES.moss ? "" : "prose";
 });
 /** The rail is the reference's: its control before drawing, the picture after. */
-/** The pre-flight's Photo look for sheets on the chosen workflow, or null. */
-const sheetAssist = ref(null);
+/** The Photo look a check asks for with the shipped choices, on: what a first
+ * open shows. `SHEET_LOOK_OFF` is the same with the look turned off. */
+const SHEET_LOOK_DEFAULT = { context: "sheet", on: true, choices: {} };
+const SHEET_LOOK_OFF = { context: "sheet", on: false, choices: {} };
+/** The prompt a look check is asked with. A draw always sends the sheet
+ * prompt, and the server adds the look's lines (its `parts`) only to a prompt
+ * with words, so a check without one would answer that nothing is added. The
+ * sheet prompt itself is written only at the draw. */
+const SHEET_PROMPT_STAND_IN = "A character sheet.";
+/** The chosen workflow's Photo look for sheets, as its check answered (the
+ * check asks for it with the workflow's own pre-flight), or null. */
+const sheetAssist = computed(() =>
+  layout.value === "prose" ? checks.value[workflowId.value]?.assist || null : null,
+);
+/** The Photo look is not known yet: the chosen workflow has not answered its
+ * check (or, with none chosen, the list is not checked). Only then is its
+ * place held, so a workflow that never answers does not hold it for good. A
+ * chosen workflow holds it only on the prose layout, the one that can show a
+ * Photo look; with none chosen, only while a listed workflow could show one. */
+const sheetLookPending = computed(() =>
+  workflowId.value
+    ? layout.value === "prose" && !checks.value[workflowId.value]
+    : !workflowsLoaded.value &&
+      (!modeCards.value.length || modeCards.value.some(drawsProse)),
+);
+/** Whether *card* draws its sheet in prose, the layout a Photo look rides on:
+ * every draw from a reference, and any text one but MOSS-Image's and a sheet
+ * copy's regions. */
+function drawsProse(card) {
+  return fromReference.value || (!card.sheet_layout && cardEngine(card) !== ENGINES.moss);
+}
 const sheetLook = usePromptAssist(sheetAssist, "sheet");
 /** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
-const sheetSamplerChoice = ref(false);
+const sheetSamplerChoice = computed(
+  () => layout.value === "prose" && checks.value[workflowId.value]?.samplerChoice === true,
+);
 /** The sampler of the draw: LCM as saved, or Euler on the run's copy. Per draw. */
 const sampler = ref("lcm");
 const samplerOptions = computed(() =>
   SAMPLER_CHOICES.map((o) => ({ ...o, testid: `cs-sampler-${o.id}` })),
 );
 let sheetAssistAsk = 0;
+/** Put a workflow's answer about its look into its check, where the step reads it. */
+function setLookAnswer(id, answer) {
+  checks.value = { ...checks.value, [id]: { ...checks.value[id], ...answer } };
+}
 /**
- * Ask the chosen workflow for its sheet presets, and for the lines the
- * current choices add. Asked with them even while off: the catalogue is the
- * sheet context's only when the request names it.
+ * Ask the chosen workflow for the lines the owner's Photo look adds. Only the
+ * owner's own choices need this: the check already answered the shipped ones.
  */
 async function askSheetAssist() {
   const ask = ++sheetAssistAsk;
   const id = workflowId.value;
-  if (!id || layout.value !== "prose") {
-    sheetAssist.value = null;
-    sheetSamplerChoice.value = false;
-    return;
-  }
+  if (!id || layout.value !== "prose") return;
   try {
     const answer = await preflightWorkflowRun({
       workflow_id: id,
       count: 1,
-      // Off still names the context, so the sheet catalogue comes back.
-      prompt_assist: sheetLook.request() || { context: "sheet", on: false, choices: {} },
+      prompt: SHEET_PROMPT_STAND_IN,
+      prompt_assist: sheetLook.request() || SHEET_LOOK_OFF,
     });
     if (alive && ask === sheetAssistAsk) {
       const prompt = answer?.groups?.[0]?.prompt;
-      sheetAssist.value = prompt?.assist || null;
-      sheetSamplerChoice.value = prompt?.sampler_choice === true;
+      setLookAnswer(id, {
+        assist: prompt?.assist || null,
+        samplerChoice: prompt?.sampler_choice === true,
+      });
     }
   } catch (e) {
     console.warn("Couldn't ask for the photo look of sheet workflow", id, e);
-    if (ask === sheetAssistAsk) {
-      sheetAssist.value = null;
-      sheetSamplerChoice.value = false;
-    }
+    if (alive && ask === sheetAssistAsk) setLookAnswer(id, { assist: null, samplerChoice: false });
   }
 }
-// Another workflow or layout: its catalogue is not the last one's, so the old
-// one goes at once, or a draw before the answer would send the wrong look.
+// Another workflow or layout: the draw's sampler starts again. The look is the
+// check's answer for that workflow, so it arrives with the workflow's own
+// check; a remembered choice of the owner's is asked for once more.
 watch([workflowId, layout], () => {
-  sheetAssist.value = null;
-  sheetSamplerChoice.value = false;
   sampler.value = "lcm";
-  askSheetAssist();
+  if (sheetLook.changed.value) askSheetAssist();
 });
 // #2776's remembered Off seeds the group's Off, once.
 watch(sheetAssist, (assist) => {
@@ -1202,7 +1250,8 @@ watch([engine, restored], ([now, done], [, wasDone]) => {
   if (!done) return;
   const saved =
     !wasDone &&
-    !!(props.saved?.form?.size || remembered?.size_family === now.family);
+    (picked.has("size") ||
+      !!(props.saved?.form?.size || remembered?.size_family === now.family));
   const keep =
     sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
   if (!keep) form.size = now.size || "large";
@@ -1231,7 +1280,10 @@ function closePicker() {
 
 function onPicked(picture) {
   closePicker();
-  if (picture?.id) referenceId.value = picture.id;
+  if (picture?.id) {
+    picked.add("reference");
+    referenceId.value = picture.id;
+  }
 }
 
 const suggestedFraming = computed(() =>
@@ -1593,6 +1645,25 @@ function sheetUrl(sheet) {
   );
 }
 
+/** The workflow list and its checks as the last full check left them, on this
+ * machine: shown at once on the next open, then checked again behind it. */
+const CARD_CACHE_KEY = "pixlstash:sheetWorkflowCards:v1";
+function readCardCache() {
+  try {
+    return JSON.parse(localStorage.getItem(CARD_CACHE_KEY) || "null");
+  } catch (e) {
+    console.warn("Couldn't read the sheet workflows remembered here", e);
+    return null;
+  }
+}
+function writeCardCache(value) {
+  try {
+    localStorage.setItem(CARD_CACHE_KEY, JSON.stringify(value));
+  } catch (e) {
+    console.warn("Couldn't remember the sheet workflows", e);
+  }
+}
+
 /**
  * Pre-flight one card: a sheet is drawn at a size of its own, so the workflow
  * must have one to set, and it must be able to run at all; from a reference it
@@ -1602,13 +1673,24 @@ async function checkCard(card, reference) {
   try {
     const [{ card: full }, check] = await Promise.all([
       getWorkflowCard(card.id),
-      preflightWorkflowRun({ workflow_id: card.id, count: 1 }, { cached: true }),
+      // The Photo look rides in the same pre-flight: its catalogue and the
+      // sampler offer are what the step shows beside the workflow's list.
+      preflightWorkflowRun(
+        {
+          workflow_id: card.id,
+          count: 1,
+          prompt: SHEET_PROMPT_STAND_IN,
+          prompt_assist: SHEET_LOOK_DEFAULT,
+        },
+        { cached: true },
+      ),
     ]);
     const name = full?.name || card.name || "This workflow";
     const sizes = (full?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
     );
     const groups = check?.groups || [];
+    const prompt = groups[0]?.prompt;
     // ComfyUI never answered, so nothing is known about this workflow (nor
     // any other): that is what to say, not the workflow's own shortcomings.
     const down = comfyuiDown(groups);
@@ -1635,13 +1717,25 @@ async function checkCard(card, reference) {
     // All an edit workflow drawing at its picture's size lacks: a sheet copy
     // fixes that (#2700).
     const sizeless = reference && !sizes.length && !refused;
-    return { sizes, inputs, problem, sizeless, down };
+    return {
+      sizes,
+      inputs,
+      problem,
+      sizeless,
+      down,
+      assist: prompt?.assist || null,
+      samplerChoice: prompt?.sampler_choice === true,
+    };
   } catch (e) {
     console.warn("Couldn't check the sheet workflow", card.id, e);
     return {
       sizes: [],
       inputs: [],
       problem: `Couldn't check ${card.name || "this workflow"}: ${errorMessage(e)}`,
+      // Never answered, so not remembered: the next open checks it again.
+      failed: true,
+      assist: null,
+      samplerChoice: false,
     };
   }
 }
@@ -1676,9 +1770,23 @@ async function checkCards() {
   ].sort(([, a], [, b]) => Number(b === first) - Number(a === first));
   const results = await Promise.all(
     all.map(async ([card, ref]) => {
+      const askAt = sheetAssistAsk;
       const result = await checkCard(card, ref);
       if (alive && run === checkRun) {
-        checks.value = { ...checks.value, [card.id]: result };
+        // The check asked with the shipped look. Had the owner asked for their
+        // own, while it was out or before (the re-ask at open for a remembered
+        // look), their answer stands for the chosen workflow.
+        const own =
+          card.id === workflowId.value &&
+          (sheetAssistAsk !== askAt || sheetLook.changed.value);
+        const held = checks.value[card.id];
+        checks.value = {
+          ...checks.value,
+          [card.id]:
+            own && held
+              ? { ...result, assist: held.assist, samplerChoice: held.samplerChoice }
+              : result,
+        };
         if (!workflowId.value) workflowId.value = firstUsable();
       }
       return result;
@@ -1688,6 +1796,20 @@ async function checkCards() {
   checksDone.value = true;
   if (!usableCards.value.some((card) => card.id === workflowId.value)) {
     workflowId.value = usableCards.value[0]?.id || "";
+  }
+  // An outage, or a check that threw, is not remembered: the next open checks
+  // again, as this one did.
+  if (!results.some((result) => result.down || result.failed)) {
+    const faces = readCardCache()?.faces || {};
+    writeCardCache({
+      cards: cardRows,
+      // This run's answers only: `checks` also holds what `askSheetAssist`
+      // wrote for the owner's own look (or a failed ask's null), which is not
+      // what the workflow's check answered.
+      checks: Object.fromEntries(all.map(([card], i) => [card.id, results[i]])),
+      // Whether this character has faces to draw from: the mode rule's input.
+      faces: { ...faces, [props.character.id]: referenceIds.value.length > 0 },
+    });
   }
   // Not configured is fixed in Settings and said so; only a ComfyUI that may
   // yet start is waited for.
@@ -2227,10 +2349,13 @@ function referenceEngine(card) {
     : null;
 }
 
+/** The workflow cards as the server listed them, for the cache. */
+let cardRows = [];
 /** The cards each mode can draw with, most recently used first. */
 function sortCards(cards) {
   const recent = (a, b) =>
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
+  cardRows = cards;
   workflows.value = cards
     .filter(
       (card) =>
@@ -2260,8 +2385,28 @@ function sortCards(cards) {
         .sort(recent)[0] || null;
 }
 
+/** Show the workflows of the last full check at once. Their checks are run
+ * again by `load`, which replaces each answer as it lands. */
+function restoreCardCache() {
+  const remembered = readCardCache();
+  if (!remembered?.cards?.length) return;
+  sortCards(remembered.cards);
+  checks.value = remembered.checks || {};
+  checksDone.value = true;
+  workflowsLoaded.value = true;
+  // The mode rule `load` applies once the references are read, from the last
+  // read of this character's faces.
+  const faces = remembered.faces?.[props.character.id] === true;
+  mode.value =
+    referenceCards.value.length && (faces || !workflows.value.length)
+      ? "reference"
+      : "text";
+  if (!workflowId.value) workflowId.value = usableCards.value[0]?.id || "";
+}
+
 async function load() {
   const id = props.character.id;
+  restoreCardCache();
   const [character, adapters, cards, references] = await Promise.allSettled([
     getCharacter(id),
     listAdapters({ characterId: id }),
@@ -2287,11 +2432,14 @@ async function load() {
     sortCards(cards.value.cards);
     // A character with a face is drawn from it where a workflow can; one
     // with no pictures, from words.
-    if (
-      referenceCards.value.length &&
-      (referenceIds.value.length || !workflows.value.length)
-    ) {
-      mode.value = "reference";
+    // Both ways: a mode the last open left (restoreCardCache) is re-read here,
+    // unless the owner has picked a mode or a workflow of it since.
+    if (!picked.has("mode") && !picked.has("workflow")) {
+      mode.value =
+        referenceCards.value.length &&
+        (referenceIds.value.length || !workflows.value.length)
+          ? "reference"
+          : "text";
     }
     await checkCards();
   }
@@ -2350,26 +2498,35 @@ function restoreState(saved) {
 }
 
 /** Put back the choices that name what `load` read (the mode, workflow,
- * LoRA and reference picture) over the defaults it picked. */
+ * LoRA and reference picture) over the defaults it picked, never over one
+ * the owner picked while `load` was reading. */
 async function restore(saved) {
   if (saved && alive) {
-    if (saved.mode && saved.mode !== mode.value) {
+    const kept = (key) => !picked.has(key);
+    // A workflow is picked from its mode's list: the mode stays with it.
+    if (kept("mode") && kept("workflow") && saved.mode && saved.mode !== mode.value) {
       mode.value = saved.mode;
       // The mode's own watcher picks its first workflow and a fitting LoRA;
       // the saved ones go over those.
       await nextTick();
     }
-    if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
+    if (
+      kept("workflow") &&
+      usableCards.value.some((card) => card.id === saved.workflow_id)
+    ) {
       workflowId.value = saved.workflow_id;
     }
     if (
-      saved.lora_sha === "" ||
-      loras.value.some((lora) => lora.sha256 === saved.lora_sha)
+      kept("lora") &&
+      (saved.lora_sha === "" ||
+        loras.value.some((lora) => lora.sha256 === saved.lora_sha))
     ) {
       loraSha.value = saved.lora_sha;
     }
-    if (saved.strength != null) strength.value = saved.strength;
-    if (saved.reference_id != null) referenceId.value = saved.reference_id;
+    if (kept("strength") && saved.strength != null) strength.value = saved.strength;
+    if (kept("reference") && saved.reference_id != null) {
+      referenceId.value = saved.reference_id;
+    }
   }
   restored.value = true;
 }
@@ -2529,7 +2686,7 @@ const snapshot = computed(() => {
 
 function showReferences(body) {
   referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
-  referenceId.value = referenceIds.value[0] ?? null;
+  if (!picked.has("reference")) referenceId.value = referenceIds.value[0] ?? null;
 }
 
 /** The reference faces again, after the reference cluster changed. */
@@ -2558,8 +2715,16 @@ onBeforeUnmount(() => {
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({
-  workflowId,
+  // The parents' toolbar select is the owner picking a workflow.
+  workflowId: computed({
+    get: () => workflowId.value,
+    set: (id) => {
+      picked.add("workflow");
+      workflowId.value = id;
+    },
+  }),
   workflowOptions,
+  workflowsPending,
   footer,
   error,
   working,
@@ -2651,6 +2816,14 @@ defineExpose({
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* The Photo look's place while the workflows are checked: a skeleton of the
+   group's size, so the step opens on the layout it keeps. */
+.cs-look-pending {
+  min-height: calc(var(--space-7) * 4);
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
 }
 
 .cs-fld--grow {

@@ -1092,6 +1092,478 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("a second open shows the workflows and the Photo look before any answer comes back", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    };
+    gen.preflightWorkflowRun.mockImplementation(async () => ({
+      ok: true,
+      groups: [{ reasons: [], prompt: { assist } }],
+    }));
+    let wrapper = mountDialog();
+    await flushPromises();
+    wrapper.unmount();
+
+    // Nothing answers this time: the step is what the last open left.
+    const never = () => new Promise(() => {});
+    gen.listWorkflowCards.mockImplementation(never);
+    gen.getCharacter.mockImplementation(never);
+    gen.getWorkflowCard.mockImplementation(never);
+    gen.preflightWorkflowRun.mockImplementation(never);
+    wrapper = mountDialog();
+    await flushPromises();
+    const select = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow");
+    expect(select.props("options").map((o) => o.value)).toContain("manual:krea");
+    expect(select.props("disabled")).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  describe("picked by hand while the step is still restoring", () => {
+    const H3_CARD = {
+      id: "manual:h3",
+      name: "MiniMax H3 sheet",
+      type: "txt2img",
+      last_used: "2026-11-12T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    const CACHE_KEY = "pixlstash:sheetWorkflowCards:v1";
+    /** Open once to fill the card cache, then open again with every workflow
+     * check held until the returned `release` is called. */
+    async function secondOpen({ keepChoices, firstOpen = async () => {} }) {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman, copper bob" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3_CARD] });
+      let wrapper = mountDialog();
+      await flushPromises();
+      await firstOpen(wrapper);
+      wrapper.unmount();
+      if (!keepChoices) {
+        const cache = localStorage.getItem(CACHE_KEY);
+        localStorage.clear();
+        localStorage.setItem(CACHE_KEY, cache);
+      }
+      let release;
+      const held = new Promise((r) => (release = r));
+      gen.preflightWorkflowRun.mockImplementation(() =>
+        held.then(() => ({ ok: true, groups: [{ reasons: [] }] })),
+      );
+      wrapper = mountDialog();
+      await flushPromises();
+      return { wrapper, release };
+    }
+
+    it("a size picked before the checks land is still the size after", async () => {
+      const { wrapper, release } = await secondOpen({ keepChoices: false });
+      const size = (label) =>
+        wrapper.findAll('[data-testid="cs-size"] button').find((b) => b.text() === label);
+      await size("Large").trigger("click");
+      release();
+      await flushPromises();
+      // H3 starts at 4K, but not over the owner's Large.
+      expect(size("Large").attributes("aria-checked")).toBe("true");
+      expect(size("4K").attributes("aria-checked")).toBe("false");
+      wrapper.unmount();
+    });
+
+    it("a workflow picked in the toolbar survives the restore of the remembered one", async () => {
+      const workflowSelect = (wrapper) =>
+        wrapper
+          .findAllComponents({ name: "AppSelect" })
+          .find((c) => c.props("label") === "Sheet workflow");
+      const { wrapper, release } = await secondOpen({
+        keepChoices: true,
+        // The first open picks MOSS, then H3: H3 is remembered.
+        firstOpen: async (first) => {
+          for (const id of [MOSS_CARD.id, H3_CARD.id]) {
+            workflowSelect(first).vm.$emit("update:modelValue", id);
+            await flushPromises();
+          }
+        },
+      });
+      const select = () => workflowSelect(wrapper);
+      expect(select().props("modelValue")).toBe(H3_CARD.id);
+      select().vm.$emit("update:modelValue", MOSS_CARD.id);
+      await flushPromises();
+      release();
+      await flushPromises();
+      expect(select().props("modelValue")).toBe(MOSS_CARD.id);
+      wrapper.unmount();
+    });
+  });
+
+  it("the Photo look on a sheet says what it adds after the sheet prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = (parts) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts,
+    });
+    // As the server does: the look's lines are added only to a prompt with words.
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: {
+            assist: assist(
+              body.prompt?.trim()
+                ? [{ category: "look", id: "agency", text: "Agency digitals." }]
+                : [],
+            ),
+          },
+        },
+      ],
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"] .pa-foot').text()).toBe(
+      "Adds 2 words after the sheet prompt.",
+    );
+    await wrapper.find('[data-testid="pa-show-full"]').trigger("click");
+    const lines = wrapper.findAll('[data-testid="pa-full"] .pa-line').map((l) => l.text());
+    expect(lines[0]).toMatch(/^Sheet prompt ?Written from the choices above/);
+    expect(lines[0]).not.toContain("copper bob");
+    expect(lines[1]).toContain("Agency digitals.");
+    wrapper.unmount();
+  });
+
+  it("a first open holds the Photo look's place and the workflow select until the checks answer", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    };
+    // The card's pre-flight is out until the test answers it.
+    let cardAnswer;
+    gen.getWorkflowCard.mockImplementation(
+      () => new Promise((r) => (cardAnswer = r)),
+    );
+    gen.preflightWorkflowRun.mockImplementation(async () => ({
+      ok: true,
+      groups: [{ reasons: [], prompt: { assist } }],
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = () =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow");
+    expect(select().props("disabled")).toBe(true);
+    expect(select().props("placeholder")).toBe("Checking workflows…");
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+
+    cardAnswer({ card: { name: "Krea sheet", defaults: [
+      { slot_label: "lat", input_name: "width", value: 1024 },
+      { slot_label: "lat", input_name: "height", value: 1024 },
+    ] } });
+    await flushPromises();
+    expect(select().props("disabled")).toBe(false);
+    expect(select().props("options").map((o) => o.value)).toEqual(["manual:krea"]);
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("a check that throws is not remembered for the next open", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    gen.getWorkflowCard.mockRejectedValue(new Error("502 Bad Gateway"));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(localStorage.getItem("pixlstash:sheetWorkflowCards:v1")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("a sheet copy still being checked holds no Photo look place", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman" });
+    const sdxl = {
+      id: "auto:sdxl",
+      name: "SDXL",
+      type: "txt2img",
+      models: [{ base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    const flux = {
+      id: "auto:flux",
+      name: "Flux",
+      type: "txt2img",
+      models: [{ base_model_family: "flux" }],
+    };
+    const copy = {
+      id: "manual:sdxl-sheet",
+      name: "SDXL (sheet)",
+      type: "txt2img",
+      sheet_layout: true,
+      models: [{ kind: "checkpoint", base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    gen.listWorkflowCards
+      .mockResolvedValueOnce({ cards: [MOSS_CARD, sdxl, flux] })
+      .mockResolvedValue({ cards: [MOSS_CARD, sdxl, flux, copy] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    // The copy's check is out for the rest of the test: it is chosen first.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    gen.getWorkflowCard.mockImplementation((id) =>
+      id === copy.id ? new Promise(() => {}) : answer(id),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Copy")
+      .vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-convert-text"] button').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .props("modelValue"),
+    ).toBe(copy.id);
+    // A regions sheet never shows a Photo look, so nothing holds its place.
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("the owner's own look outlives a re-check, and only the check is remembered", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const look = (label) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label,
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    });
+    // The check asks with the shipped look; the owner's own ask (off) answers
+    // another catalogue, so the summary says whose answer is on show.
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: { assist: look(body.prompt_assist?.on === false ? "Owner look" : "Closing look") },
+        },
+      ],
+    }));
+    let wrapper = mountDialog();
+    await flushPromises();
+    wrapper.unmount();
+
+    // A second open: the step shows the cache at once and checks again.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    let release;
+    gen.getWorkflowCard.mockImplementation(
+      (id) => new Promise((r) => (release = () => r(answer(id)))),
+    );
+    wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    const summary = () => wrapper.find('[data-testid="pa-summary"]').text();
+    expect(summary()).toContain("owner");
+    // The re-check asked with the shipped look and lands after: the owner's stands.
+    release();
+    await flushPromises();
+    expect(summary()).toContain("owner");
+    expect(summary()).not.toContain("closing");
+    // What is remembered is what the check answered, not the owner's ask.
+    const cached = JSON.parse(localStorage.getItem("pixlstash:sheetWorkflowCards:v1"));
+    expect(cached.checks[KREA_CARD.id].assist.categories[0].label).toBe("Closing look");
+    wrapper.unmount();
+  });
+
+  it("a remembered look asked for at open outlives the re-check that lands after it", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const look = (label) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label,
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    });
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: { assist: look(body.prompt_assist?.on === false ? "Owner look" : "Closing look") },
+        },
+      ],
+    }));
+    // The owner turns the look off: that is remembered for the next open.
+    let wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+
+    // The next open re-asks for that look at once, before the re-check is sent.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    let release;
+    gen.getWorkflowCard.mockImplementation(
+      (id) => new Promise((r) => (release = () => r(answer(id)))),
+    );
+    wrapper = mountDialog();
+    await flushPromises();
+    const summary = () => wrapper.find('[data-testid="pa-summary"]').text();
+    expect(summary()).toContain("owner");
+    release();
+    await flushPromises();
+    expect(summary()).toContain("owner");
+    expect(summary()).not.toContain("closing");
+    wrapper.unmount();
+  });
+
+  it("a library of MOSS sheets only holds no Photo look place while it checks", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD] });
+    gen.getWorkflowCard.mockImplementation(() => new Promise(() => {}));
+    const wrapper = mountDialog();
+    await flushPromises();
+    // MOSS reads its layout itself: no Photo look can appear, so nothing waits for one.
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("a late Photo look for one workflow does not replace the one on show", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    const QWEN_CARD = {
+      id: "manual:qwen",
+      name: "Qwen sheet",
+      type: "txt2img",
+      last_used: "2026-11-08T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "qwen" }],
+    };
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD, QWEN_CARD] });
+    const look = (family, id, label, category) => ({
+      family,
+      context: "sheet",
+      default_on: true,
+      categories: [{ id, label: category, default: id, options: [{ id, label, text: `${label}.` }] }],
+      parts: [{ category: id, id, text: `${label}.` }],
+    });
+    const krea = look("krea2", "agency", "Agency digitals", "Closing look");
+    const qwen = look("qwen", "fine", "Fine grain", "Grain");
+    // Krea's answer to a change of its look is held back.
+    let lateKrea;
+    let holdKrea = false;
+    gen.preflightWorkflowRun.mockImplementation((body) => {
+      if (holdKrea && body.workflow_id === KREA_CARD.id) {
+        return new Promise((r) => (lateKrea = r));
+      }
+      const assist = body.workflow_id === QWEN_CARD.id ? qwen : krea;
+      return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const pick = async (id) => {
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .vm.$emit("update:modelValue", id);
+      await flushPromises();
+    };
+    const summary = () => wrapper.find('[data-testid="pa-summary"]').text();
+    await pick(KREA_CARD.id);
+    expect(summary()).toBe("Agency digitals");
+    // A change to Krea's look asks Krea, and the answer is still on its way...
+    holdKrea = true;
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await pick(QWEN_CARD.id);
+    expect(summary()).toContain("grain");
+    // ...when the owner has moved on to Qwen. Krea's answer lands: Qwen keeps its look.
+    lateKrea({ ok: true, groups: [{ reasons: [], prompt: { assist: krea } }] });
+    await flushPromises();
+    expect(summary()).toContain("grain");
+    expect(summary()).not.toContain("closing");
+    wrapper.unmount();
+  });
+
   it("Photo look off: no look at all, from the run or the sheet prompt", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -1127,7 +1599,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
-  it("a draw while the next workflow's look is still loading sends no old look", async () => {
+  it("a workflow whose pre-flight is still out shows no look, and draws with none", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
     );
@@ -1147,14 +1619,13 @@ describe("TrainingSetBuild: generating the pictures", () => {
       categories: [{ id: "look", label: "Closing look", default: "none", options: [] }],
       parts: [],
     };
-    // Krea's catalogue answers; Qwen's never does, so the draw happens in
-    // the window before it would.
+    // Krea's pre-flight answers its look; Qwen's is out until the test says so.
+    let answerQwen;
     gen.preflightWorkflowRun.mockImplementation((body) => {
-      if (!body.prompt_assist) return Promise.resolve({ ok: true, groups: [{ reasons: [] }] });
-      if (body.workflow_id === KREA_CARD.id) {
-        return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
+      if (body.workflow_id === QWEN_CARD.id) {
+        return new Promise((r) => (answerQwen = r));
       }
-      return new Promise(() => {});
+      return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
     });
     const wrapper = mountDialog();
     await flushPromises();
@@ -1164,7 +1635,12 @@ describe("TrainingSetBuild: generating the pictures", () => {
       .find((c) => c.props("label") === "Sheet workflow")
       .vm.$emit("update:modelValue", QWEN_CARD.id);
     await flushPromises();
+    // Krea's look is not kept for Qwen: its place is held until Qwen answers.
     expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(true);
+    answerQwen({ ok: true, groups: [{ reasons: [], prompt: {} }] });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("prompt_assist");
@@ -3404,7 +3880,9 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     world(false);
     wrapper = mountDialog();
     await flushPromises();
-    expect(workflowSelect(wrapper)).toBeUndefined();
+    // The select stays where it is, empty and inert, rather than vanishing.
+    expect(workflowSelect(wrapper).props("options")).toEqual([]);
+    expect(workflowSelect(wrapper).props("disabled")).toBe(true);
     expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
       "None of the 2 sheet workflows can draw a sheet. Unsized MOSS has no picture size",
     );
