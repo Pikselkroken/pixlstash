@@ -1040,7 +1040,12 @@ async function askSheetAssist() {
     if (ask === sheetAssistAsk) sheetAssist.value = null;
   }
 }
-watch([workflowId, layout], askSheetAssist);
+// Another workflow or layout: its catalogue is not the last one's, so the old
+// one goes at once, or a draw before the answer would send the wrong look.
+watch([workflowId, layout], () => {
+  sheetAssist.value = null;
+  askSheetAssist();
+});
 // #2776's remembered Off seeds the group's Off, once.
 watch(sheetAssist, (assist) => {
   if (assist && !form.photo_look && !sheetLook.hasStoredOn()) sheetLook.setOn(false);

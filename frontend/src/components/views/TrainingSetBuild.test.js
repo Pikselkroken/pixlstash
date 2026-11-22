@@ -1051,6 +1051,51 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("a draw while the next workflow's look is still loading sends no old look", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    const QWEN_CARD = {
+      id: "manual:qwen",
+      name: "Qwen sheet",
+      type: "txt2img",
+      last_used: "2026-11-08T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "qwen" }],
+    };
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD, QWEN_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [{ id: "look", label: "Closing look", default: "none", options: [] }],
+      parts: [],
+    };
+    // Krea's catalogue answers; Qwen's never does, so the draw happens in
+    // the window before it would.
+    gen.preflightWorkflowRun.mockImplementation((body) => {
+      if (!body.prompt_assist) return Promise.resolve({ ok: true, groups: [{ reasons: [] }] });
+      if (body.workflow_id === KREA_CARD.id) {
+        return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
+      }
+      return new Promise(() => {});
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow")
+      .vm.$emit("update:modelValue", QWEN_CARD.id);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("prompt_assist");
+    expect(gen.buildSheetPrompt.mock.lastCall[0]).not.toHaveProperty("look_added_by_run");
+    wrapper.unmount();
+  });
+
   it("Off on the group stays Off on an engine the server has no presets for", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
