@@ -1138,6 +1138,55 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("the Photo look on a sheet says what it adds after the sheet prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = (parts) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts,
+    });
+    // As the server does: the look's lines are added only to a prompt with words.
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: {
+            assist: assist(
+              body.prompt?.trim()
+                ? [{ category: "look", id: "agency", text: "Agency digitals." }]
+                : [],
+            ),
+          },
+        },
+      ],
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"] .pa-foot').text()).toBe(
+      "Adds 2 words after the sheet prompt.",
+    );
+    await wrapper.find('[data-testid="pa-show-full"]').trigger("click");
+    const lines = wrapper.findAll('[data-testid="pa-full"] .pa-line').map((l) => l.text());
+    expect(lines[0]).toMatch(/^Sheet prompt ?Written from the choices above/);
+    expect(lines[0]).not.toContain("copper bob");
+    expect(lines[1]).toContain("Agency digitals.");
+    wrapper.unmount();
+  });
+
   it("a first open holds the Photo look's place and the workflow select until the checks answer", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

@@ -145,7 +145,6 @@
           v-if="layout === 'prose' && sheetAssist"
           :assist="sheetAssist"
           :model="sheetLook"
-          :words="form.description"
           @change="askSheetAssist"
         />
         <!-- Until the chosen workflow answers its check the group's place is held,
@@ -1039,6 +1038,11 @@ const layout = computed(() => {
  * open shows. `SHEET_LOOK_OFF` is the same with the look turned off. */
 const SHEET_LOOK_DEFAULT = { context: "sheet", on: true, choices: {} };
 const SHEET_LOOK_OFF = { context: "sheet", on: false, choices: {} };
+/** The prompt a look check is asked with. A draw always sends the sheet
+ * prompt, and the server adds the look's lines (its `parts`) only to a prompt
+ * with words, so a check without one would answer that nothing is added. The
+ * sheet prompt itself is written only at the draw. */
+const SHEET_PROMPT_STAND_IN = "A character sheet.";
 /** The chosen workflow's Photo look for sheets, as its check answered (the
  * check asks for it with the workflow's own pre-flight), or null. */
 const sheetAssist = computed(() =>
@@ -1081,6 +1085,7 @@ async function askSheetAssist() {
     const answer = await preflightWorkflowRun({
       workflow_id: id,
       count: 1,
+      prompt: SHEET_PROMPT_STAND_IN,
       prompt_assist: sheetLook.request() || SHEET_LOOK_OFF,
     });
     if (alive && ask === sheetAssistAsk) {
@@ -1649,7 +1654,12 @@ async function checkCard(card, reference) {
       // The Photo look rides in the same pre-flight: its catalogue and the
       // sampler offer are what the step shows beside the workflow's list.
       preflightWorkflowRun(
-        { workflow_id: card.id, count: 1, prompt_assist: SHEET_LOOK_DEFAULT },
+        {
+          workflow_id: card.id,
+          count: 1,
+          prompt: SHEET_PROMPT_STAND_IN,
+          prompt_assist: SHEET_LOOK_DEFAULT,
+        },
         { cached: true },
       ),
     ]);

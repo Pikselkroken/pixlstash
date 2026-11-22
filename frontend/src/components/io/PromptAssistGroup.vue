@@ -145,8 +145,9 @@
       </div>
     </div>
 
-    <!-- What the server will draw from: your words, then each added line,
-         marked by "+" and its category in words, never by colour alone. -->
+    <!-- What the server will draw from: your words (on a sheet, the sheet
+         prompt the step writes), then each added line, marked by "+" and its
+         category in words, never by colour alone. -->
     <div
       v-if="showFull"
       class="pa-full"
@@ -156,8 +157,10 @@
     >
       <div class="pa-line">
         <span class="pa-mark" aria-hidden="true"></span>
-        <span class="pa-tag">Your prompt</span>
-        <span class="pa-text">{{ words }}</span>
+        <span class="pa-tag">{{ onSheet ? "Sheet prompt" : "Your prompt" }}</span>
+        <span class="pa-text" data-testid="pa-full-words">{{
+          onSheet ? "Written from the choices above when the sheets are drawn." : words
+        }}</span>
       </div>
       <div
         v-for="part in parts"
@@ -267,6 +270,13 @@ const labelOf = (id) =>
   props.model.categories.value.find((cat) => cat.id === id)?.label || id;
 
 const parts = computed(() => (props.model.on.value ? props.assist?.parts || [] : []));
+/** On the sheet step the owner writes no prompt: the step writes the sheet's. */
+const onSheet = computed(() => props.assist?.context === "sheet");
+
+/** What each field holds, the empty ones left out. */
+const chosen = computed(() =>
+  props.model.categories.value.map((cat) => props.model.fieldText(cat.id)).filter(Boolean),
+);
 
 const summary = computed(() => {
   if (!props.model.on.value) {
@@ -278,19 +288,20 @@ const summary = computed(() => {
       words.length > 1 ? `${words.slice(0, -1).join(", ")} and ${words.at(-1)}` : words[0];
     return `Off. Turn on to add ${list} lines.`;
   }
-  const shown = props.model.categories.value
-    .map((cat) => props.model.fieldText(cat.id))
-    .filter(Boolean);
-  return shown.length ? shown.join(" · ") : "Nothing added";
+  return chosen.value.length ? chosen.value.join(" · ") : "Nothing added";
 });
 
 const wordsLine = computed(() => {
   const count = parts.value
     .map((part) => part.text.split(/\s+/).filter(Boolean).length)
     .reduce((a, b) => a + b, 0);
-  return count
-    ? `Adds ${count} words after your prompt.`
-    : "Nothing added to your prompt.";
+  const after = onSheet.value ? "the sheet prompt" : "your prompt";
+  if (count) return `Adds ${count} words after ${after}.`;
+  // The server adds its lines only to a prompt with words.
+  if (props.model.on.value && chosen.value.length && !onSheet.value && !props.words.trim()) {
+    return "Adds its lines once your prompt has words.";
+  }
+  return `Nothing added to ${after}.`;
 });
 </script>
 
