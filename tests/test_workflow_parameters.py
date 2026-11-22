@@ -235,9 +235,10 @@ _FORM_INFO = {
 }
 
 
-def _form(object_info=_FORM_INFO, exposed=(), core=None, max_text=2000):
+def _form(object_info=_FORM_INFO, exposed=(), core=None, max_text=2000, twin=True):
     labels = {node_id: f"label-{node_id}" for node_id in _FORM_GRAPH}
-    labels["11"] = labels["8"]
+    if twin:
+        labels["11"] = labels["8"]
     nodes = run_service.form_inputs(
         _FORM_GRAPH, labels, core or {}, object_info, set(exposed), max_text
     )
@@ -252,15 +253,14 @@ def test_form_inputs_leave_out_what_pixlstash_already_sets():
     """Wrong if a prompt, seed, batch, model, LoRA, saver, picture or key is offered.
 
     Nor text of several lines (a row edits one), a name the address cannot
-    carry, or the twin of a node already listed: one write reaches both.
+    carry, or a node whose address its twin shares (node 8 and node 11 here):
+    a write reaches both, so neither gets a row that could set one alone.
     """
     rows = _form()
     assert set(rows) == {
         ("3", "steps"),
         ("5", "width"),
         ("5", "height"),
-        ("8", "upscale_method"),
-        ("8", "scale_by"),
         ("9", "max_tokens"),
         ("9", "notes"),
         ("9", "ratio"),
@@ -270,7 +270,7 @@ def test_form_inputs_leave_out_what_pixlstash_already_sets():
 
 
 def test_form_inputs_are_typed_and_listed_from_object_info():
-    rows = _form()
+    rows = _form(twin=False)
     method = rows[("8", "upscale_method")]
     assert (method["kind"], method["options"], method["value"]) == (
         "choice",
@@ -285,13 +285,17 @@ def test_form_inputs_are_typed_and_listed_from_object_info():
     listed = {"SomePackNode": {"input": {"required": {"ratio": [[1, 2, 4], {}]}}}}
     ratio = _form(object_info=listed)[("9", "ratio")]
     assert (ratio["kind"], ratio["options"]) == (None, None)
-    offline = _form(object_info=None)[("8", "upscale_method")]
+    offline = _form(object_info=None, twin=False)[("8", "upscale_method")]
     assert (offline["kind"], offline["options"]) == (None, None)
 
 
 def test_form_inputs_are_addressed_as_their_row_is_else_by_core():
     core = {"8": "c8", "3": "c3"}
-    rows = _form(core=core, exposed={("label-3", "steps"), ("core:c8", "scale_by")})
+    rows = _form(
+        core=core,
+        exposed={("label-3", "steps"), ("core:c8", "scale_by")},
+        twin=False,
+    )
     # A row keeps the address it was written at, either spelling.
     assert (rows[("3", "steps")]["slot_label"], rows[("3", "steps")]["exposed"]) == (
         "label-3",

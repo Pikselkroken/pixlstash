@@ -50,6 +50,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_io import is_picture_loader
 from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
+from pixlstash.utils.comfyui_utilities import ZEROED_CONDITIONING_CLASSES
 
 # Stamped beside every cached value, so a change of rule re-keys visibly.
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
@@ -874,7 +875,7 @@ def _negative_is_prompted(nodes: dict[str, ReducedNode], node: ReducedNode) -> b
             continue
         seen.add(current)
         upstream = nodes[current]
-        if upstream.class_type == "ConditioningZeroOut":
+        if upstream.class_type in ZEROED_CONDITIONING_CLASSES:
             continue
         if _TEXT_ENCODER_CLASS_RE.search(upstream.class_type):
             return True
@@ -977,6 +978,40 @@ def core_node_ids(document: dict, *, strip_loras: bool = True) -> set[str]:
         WorkflowGraphError: The document is a raw graph, or nothing survives.
     """
     return set(_core_graph(document, strip_loras))
+
+
+def node_addresses(
+    labels: dict[str, str], core: dict[str, str]
+) -> dict[str, list[str]]:
+    """Each node's parameter addresses, ``{node_id: [address, ...]}``.
+
+    Only the addresses no other node carries are listed.
+
+    An address names every node that carries it, so a value addressed by one
+    reaches all of them. Two same-class nodes in parallel branches can share a
+    slot label and a core address (the topology cannot tell them apart, only
+    their widget values can), and one value copied over both is the bug. So an
+    address that more than one node carries names no node, and is left out:
+    those nodes keep the values they store. Core address first, as it always
+    was preferred, then the slot label.
+
+    Args:
+        labels: ``{node_id: slot label}`` for every node of the graph.
+        core: ``{node_id: core label}`` for the nodes the core keeps.
+    """
+    label_count = Counter(labels.values())
+    core_count = Counter(core.values())
+    found: dict[str, list[str]] = {}
+    for node_id in set(labels) | set(core):
+        names = []
+        if node_id in core and core_count[core[node_id]] == 1:
+            names.append(CORE_ADDRESS_PREFIX + core[node_id])
+        label = labels.get(node_id)
+        if label is not None and label_count[label] == 1:
+            names.append(label)
+        if names:
+            found[node_id] = names
+    return found
 
 
 def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:

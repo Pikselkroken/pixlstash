@@ -65,10 +65,10 @@ from pixlstash.services.workflow_hash import (
     structural_document,
 )
 from pixlstash.services.workflow_identity import (
-    CORE_ADDRESS_PREFIX,
     UPSCALE,
     intermediate_saves,
     model_fix_kind,
+    node_addresses,
     special_groups,
 )
 from pixlstash.services.workflow_io import (
@@ -2540,8 +2540,8 @@ def form_inputs(
     *exposed* is the addresses that are parameter rows already; those are kept
     and flagged, so a row can be drawn with its options. An input is addressed
     the way its row is, else by ``core:`` label when the node has one, since
-    that survives a change of topology. Nodes the graph cannot tell apart share
-    an address, and one write reaches them all, so only the first is listed.
+    that survives a change of topology. A node whose address another node shares
+    has no row: no write can reach it alone.
 
     Returns:
         ``[{node_id, title, class_type, inputs: [{slot_label, input_name,
@@ -2567,6 +2567,7 @@ def form_inputs(
 
     seen: set[tuple[str, str]] = set()
     nodes = []
+    addresses = node_addresses(labels, core)
     for node_id, node in graph.items():
         inputs = node.get("inputs") if isinstance(node, dict) else None
         node_id = str(node_id)
@@ -2579,14 +2580,9 @@ def form_inputs(
             continue
         class_type = str(node.get("class_type") or "")
         # The core address first: it is the one that survives another topology.
-        forms = [
-            form
-            for form in (
-                CORE_ADDRESS_PREFIX + core[node_id] if node_id in core else None,
-                labels.get(node_id),
-            )
-            if form
-        ]
+        # A node sharing its label with another has no row: a write could not
+        # tell them apart, so none is offered.
+        forms = addresses.get(node_id, [])
         found = []
         for name, value in inputs.items():
             if (
