@@ -430,7 +430,10 @@ defineExpose({
 <style scoped>
 /* The tag field's treatment, repeated on purpose: two completion menus that
    looked different would be two things to learn. The values below are copied
-   from the old lightbox tag field along with the reasons they are off-token. */
+   from the old lightbox tag field along with the reasons they are off-token.
+   Block flow, never a flex column: under `max-height` a column shrinks its
+   rows (their `overflow: hidden` lets them go to nothing) instead of
+   scrolling, and a long list is drawn as labels on top of each other. */
 .bmi-menu {
   position: fixed;
   max-height: 240px;
@@ -440,8 +443,6 @@ defineExpose({
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
   border-radius: var(--radius-md);
   box-shadow: var(--elevation-3);
-  display: flex;
-  flex-direction: column;
 }
 
 .bmi-item {

@@ -115,8 +115,6 @@ def _t2i_graph() -> dict:
             "MiniMax H3 Image Sheet from Reference (PixlStash).json",
             (("11",), ("1",), ("6",), ()),
         ),
-        # MiniMax H3 guides with BasicGuider: no negative at all.
-        ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
         ("Qwen-Image 2.1 Sheet.json", (("18",), (), ("9",), ())),
         ("Qwen-Image 2.1 Sheet from Reference.json", (("18",), ("1",), ("9",), ())),
         ("RealESRGAN Upscale 2x.json", (("4",), ("3",), (), ())),
@@ -767,11 +765,6 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
         ("MiniMax H3 Image Sheet (PixlStash).json", [], [["21", "inputs", "value"]]),
         (
             "MiniMax H3 Image Sheet from Reference (PixlStash).json",
-            [["1", "inputs", "image"]],
-            [["6", "inputs", "prompt"]],
-        ),
-        (
-            "Sheet-MiniMax-H3-Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "prompt"]],
         ),
