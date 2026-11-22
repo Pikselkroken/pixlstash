@@ -1772,7 +1772,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     );
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
-    expect(gen.useSheets).toHaveBeenCalledWith(7, [502]);
+    expect(gen.useSheets).toHaveBeenCalledWith(7, [502], {});
     expect(wrapper.find('[data-testid="cts-picks"]').isVisible()).toBe(true);
     expect(wrapper.findAll('[data-testid="cts-new"]')).toHaveLength(1);
 
@@ -3477,7 +3477,7 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     await vi.advanceTimersByTimeAsync(700);
-    expect(gen.useSheets).toHaveBeenCalledWith(7, [501]);
+    expect(gen.useSheets).toHaveBeenCalledWith(7, [501], {});
     // Still reading faces, but the set already holds the cut as done.
     expect(lastBuild()).toMatchObject({
       stage: "pick",
@@ -3559,5 +3559,258 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
       wrapper.find('[data-testid="cts-generate-primary"]').attributes("disabled"),
     ).toBeDefined();
     wrapper.unmount();
+  });
+});
+
+describe("TrainingSetBuild: cutting a sheet by hand", () => {
+  // The cutter's six photos, in panel order.
+  const CUT = [
+    [0, 0, 0.25, 0.5],
+    [0.25, 0, 0.5, 0.5],
+    [0, 0.5, 0.25, 1],
+    [0.25, 0.5, 0.5, 1],
+    [0.5, 0, 0.75, 1],
+    [0.75, 0, 1, 1],
+  ];
+  const popout = () => document.querySelector('[data-testid="zoom-popout"]');
+  const marks = () => [...popout().querySelectorAll('[data-testid="cs-cell"]')];
+  const percent = (style) => parseFloat(style);
+  const mounted = [];
+  const mountKept = (...args) => {
+    const wrapper = mountDialog(...args);
+    mounted.push(wrapper);
+    return wrapper;
+  };
+  const unmountKept = (wrapper) => {
+    mounted.splice(mounted.indexOf(wrapper), 1);
+    wrapper.unmount();
+  };
+  const lastBuild = () =>
+    api.patchPictureSet.mock.calls.filter(([id]) => id === 55).at(-1)?.[1].building;
+  const handle = (box, name) =>
+    box.querySelector(`[data-testid="cs-handle"].cs-handle--${name}`);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // The overlay is the 1000 × 600 px picture: a pixel is a thousandth of it.
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function () {
+        if (this.classList.contains("zp-over")) {
+          return {
+            left: 0, top: 0, x: 0, y: 0, width: 1000, height: 600, right: 1000, bottom: 600,
+          };
+        }
+        return real.call(this);
+      },
+    );
+  });
+
+  afterEach(() => {
+    for (const wrapper of mounted.splice(0)) wrapper.unmount();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Drawn and read sheets, the first one zoomed. */
+  async function zoomFirstSheet(ranked) {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld();
+    gen.runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ run_id: "r1", status: "queued" }],
+    });
+    gen.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [501, 502] });
+    gen.rankSheets.mockResolvedValue({
+      sheets: ranked || [
+        sheet(501, 0.7, { format: "png", cells: CUT }),
+        sheet(502, 0.5, { format: "png", cells: CUT }),
+      ],
+      references: 0,
+    });
+    const wrapper = mountKept();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("x");
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3000);
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[0].trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  /** A pointer gesture on an element of the zoomed sheet, in overlay pixels. */
+  function drag(element, from, to) {
+    const at = (type, [x, y]) =>
+      element.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y }),
+      );
+    at("pointerdown", from);
+    at("pointermove", to);
+    at("pointerup", to);
+  }
+
+  it("draws the cut from the moment a sheet exists, before its faces are read", async () => {
+    const unread = {
+      ...sheet(501, null, { format: "png", cells: CUT }),
+      faces_read: false,
+      faces: 0,
+      agreement: null,
+      agreement_words: "",
+    };
+    await zoomFirstSheet([unread]);
+    expect(marks()).toHaveLength(6);
+    expect(percent(marks()[0].style.width)).toBeCloseTo(25, 5);
+    expect(marks().some((m) => m.classList.contains("cs-cell--edited"))).toBe(false);
+  });
+
+  it("drags a corner to resize one box and marks only that box edited", async () => {
+    const wrapper = await zoomFirstSheet();
+    // The first photo's bottom-right corner, dragged 50 px right and 30 px down.
+    drag(handle(marks()[0], "se"), [250, 300], [300, 330]);
+    await flushPromises();
+    expect(percent(marks()[0].style.width)).toBeCloseTo(30, 5);
+    expect(percent(marks()[0].style.height)).toBeCloseTo(55, 5);
+    expect(marks()[0].classList.contains("cs-cell--edited")).toBe(true);
+    expect(marks()[0].getAttribute("aria-label")).toBe("Passport photo 1, edited");
+    // The other five are the cutter's, untouched and not marked.
+    expect(marks()[1].classList.contains("cs-cell--edited")).toBe(false);
+    expect(percent(marks()[1].style.left)).toBeCloseTo(25, 5);
+    expect(wrapper.find('[data-testid="cs-cut-reset"]').exists()).toBe(true);
+  });
+
+  it("drags the middle of a box to move it, and never past the sheet", async () => {
+    await zoomFirstSheet();
+    drag(marks()[5], [900, 550], [1400, 550]);
+    await flushPromises();
+    // The last photo is at the right edge already: a move right goes nowhere.
+    expect(percent(marks()[5].style.left)).toBeCloseTo(75, 5);
+    expect(percent(marks()[5].style.width)).toBeCloseTo(25, 5);
+  });
+
+  it("holds a resized side a fifth of the sheet from its opposite edge", async () => {
+    await zoomFirstSheet();
+    drag(handle(marks()[0], "e"), [250, 150], [-400, 150]);
+    await flushPromises();
+    expect(percent(marks()[0].style.width)).toBeCloseTo(5, 5);
+  });
+
+  it("nudges the focused box with the arrow keys, and Shift and Alt move one edge", async () => {
+    await zoomFirstSheet();
+    expect(marks()[0].getAttribute("tabindex")).toBe("0");
+    // An arrow is the box's: it never reaches the zoom, which would step to
+    // the next sheet on it.
+    const zoomKeys = vi.fn();
+    popout().addEventListener("keydown", zoomKeys);
+    marks()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await flushPromises();
+    expect(percent(marks()[0].style.left)).toBeCloseTo(0.5, 5);
+    expect(zoomKeys).not.toHaveBeenCalled();
+    marks()[0].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
+    );
+    await flushPromises();
+    expect(percent(marks()[0].style.height)).toBeCloseTo(50.5, 5);
+    marks()[0].dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }),
+    );
+    await flushPromises();
+    expect(percent(marks()[0].style.height)).toBeCloseTo(50, 5);
+  });
+
+  it("keeps an edited box through a re-rank, then resets to the cutter's latest", async () => {
+    const wrapper = await zoomFirstSheet([
+      {
+        ...sheet(501, 0.7, { format: "png", cells: CUT }),
+        faces_read: false,
+        faces: 0,
+        agreement: null,
+        agreement_words: "",
+      },
+      sheet(502, 0.5, { format: "png", cells: CUT }),
+    ]);
+    drag(handle(marks()[0], "se"), [250, 300], [300, 330]);
+    await flushPromises();
+    // The faces are read now, and the cutter finds a narrower first photo.
+    const reread = CUT.map((box, i) => (i === 0 ? [0, 0, 0.2, 0.5] : box));
+    gen.rankSheets.mockResolvedValue({
+      sheets: [
+        sheet(501, 0.7, { format: "png", cells: reread }),
+        sheet(502, 0.5, { format: "png", cells: CUT }),
+      ],
+      references: 0,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushPromises();
+    // Drawing ended with the re-rank, which closes the zoom: open it again.
+    await wrapper.findAll('[data-testid="cs-zoom-open"]')[0].trigger("click");
+    await flushPromises();
+    expect(percent(marks()[0].style.width)).toBeCloseTo(30, 5);
+    expect(marks()[0].classList.contains("cs-cell--edited")).toBe(true);
+
+    await wrapper.find('[data-testid="cs-cut-reset"]').trigger("click");
+    await flushPromises();
+    expect(percent(marks()[0].style.width)).toBeCloseTo(20, 5);
+    expect(marks()[0].classList.contains("cs-cell--edited")).toBe(false);
+    expect(wrapper.find('[data-testid="cs-cut-reset"]').exists()).toBe(false);
+  });
+
+  it("saves the boxes drawn by hand with the build, and opens with them", async () => {
+    const first = await zoomFirstSheet();
+    drag(handle(marks()[0], "se"), [250, 300], [300, 330]);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(700);
+    const edits = lastBuild().sheets.cut_edits;
+    expect(Object.keys(edits)).toEqual(["501"]);
+    expect(edits[501][0][2]).toBeCloseTo(0.3, 5);
+    expect(edits[501][0][3]).toBeCloseTo(0.55, 5);
+    expect(edits[501][1]).toBeNull();
+    // Closed and opened again: only the saved build is on screen.
+    unmountKept(first);
+
+    const again = mountKept({
+      v: 1,
+      stage: "generate",
+      stepped: true,
+      sheets: {
+        phase: "pick",
+        form: { description: "x" },
+        runs: [{ key: "r1", status: "completed", picture_ids: [501, 502] }],
+        order: [501, 502],
+        kept: [501],
+        kept_touched: true,
+        ranking: {
+          501: sheet(501, 0.7, { format: "png", cells: CUT }),
+          502: sheet(502, 0.5, { format: "png", cells: CUT }),
+        },
+        cut_edits: edits,
+      },
+    });
+    await flushPromises();
+    await again.findAll('[data-testid="cs-zoom-open"]')[0].trigger("click");
+    await flushPromises();
+    expect(percent(marks()[0].style.width)).toBeCloseTo(30, 5);
+    expect(marks()[0].classList.contains("cs-cell--edited")).toBe(true);
+    expect(marks()[1].classList.contains("cs-cell--edited")).toBe(false);
+  });
+
+  it("sends the boxes of the edited sheets kept, and none for the rest", async () => {
+    const wrapper = await zoomFirstSheet();
+    drag(handle(marks()[0], "se"), [250, 300], [300, 330]);
+    await flushPromises();
+    // Both sheets kept: the second is cut automatically.
+    await wrapper.findAll('[data-testid="cs-sheet"]')[1].trigger("click");
+    gen.useSheets.mockResolvedValue({ picture_ids: [601, 602] });
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(gen.useSheets).toHaveBeenCalledTimes(1);
+    const [id, ids, boxes] = gen.useSheets.mock.calls[0];
+    expect([id, ids]).toEqual([7, [501, 502]]);
+    expect(Object.keys(boxes)).toEqual(["501"]);
+    expect(boxes[501]).toHaveLength(6);
+    expect(boxes[501][0][2]).toBeCloseTo(0.3, 5);
+    expect(boxes[501][1]).toEqual(CUT[1]);
   });
 });

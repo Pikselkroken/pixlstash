@@ -49,12 +49,16 @@ export async function rankSheets(characterId, pictureIds, referencePictureIds) {
  *
  * @param {number} characterId
  * @param {number[]} pictureIds
+ * @param {Record<number, number[][]>} [boxes] the photo boxes drawn by hand,
+ *   keyed by sheet picture id: six `[left, top, right, bottom]` fractions each.
+ *   A sheet without one is cut automatically; none sends no `boxes` at all.
  * @returns {Promise<{picture_ids: number[]}>} sheet by sheet, passport photos first.
  */
-export async function useSheets(characterId, pictureIds) {
+export async function useSheets(characterId, pictureIds, boxes = {}) {
   return unwrap(
     apiClient.post(`/characters/${characterId}/sheets/use`, {
       picture_ids: pictureIds,
+      ...(Object.keys(boxes).length ? { boxes } : {}),
     }),
   );
 }
