@@ -237,9 +237,13 @@ def _need(rows: list, pixels: int | None) -> int | None:
 
     The margin never lifts a need past the run's *ceiling*, the room it had
     (``room_mb``: what ComfyUI held at the peak plus what was still free on
-    the card; a row written before that was recorded takes the card's total)
-    scaled up with the peak but never past the card, less the arbiter's
-    safety margin, divided by the margin: a peak that high
+    the card; a row written before that was recorded takes the card's total),
+    less the arbiter's safety margin, divided by the margin. The room is not
+    scaled up with the peak: a larger run that would not fit the room an
+    earlier one finished in still runs there, because ComfyUI moves weights
+    out to system RAM to make room, so asking for more only makes it wait
+    (a 6K sheet waited for ever for 5K's room scaled up to the whole card,
+    which other apps never leave free). A peak that high
     is taken to have filled the card, since ComfyUI keeps models resident
     while there is room, so it is what the run completed in and asks for no
     more (#2081). Nor does a need pass the ceiling itself, which leaves it
@@ -258,8 +262,8 @@ def _need(rows: list, pixels: int | None) -> int | None:
         scale = max(1.0, pixels / row["pixels"] if pixels else 1.0)
         peak = row["peak_mb"] * scale
         total = row["device_total_mb"]
-        # A larger run had proportionally more room, up to the whole card.
-        room = min(row["room_mb"] * scale, total) if row["room_mb"] else total
+        # The room the run finished in, not scaled: ComfyUI offloads to RAM.
+        room = min(row["room_mb"], total) if row["room_mb"] else total
         ceiling = room - safety_margin_mb(total)
         if ceiling <= 0:
             # A card whose size was not read: no ceiling to judge the margin
