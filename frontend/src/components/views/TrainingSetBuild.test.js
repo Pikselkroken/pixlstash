@@ -1181,7 +1181,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       await size("Large").trigger("click");
       release();
       await flushPromises();
-      // H3 starts at 4K, but not over the owner's Large.
+      // H3 starts at 5K, but not over the owner's Large.
       expect(size("Large").attributes("aria-checked")).toBe("true");
       expect(size("4K").attributes("aria-checked")).toBe("false");
       wrapper.unmount();
@@ -1437,6 +1437,59 @@ describe("TrainingSetBuild: generating the pictures", () => {
     // What is remembered is what the check answered, not the owner's ask.
     const cached = JSON.parse(localStorage.getItem("pixlstash:sheetWorkflowCards:v1"));
     expect(cached.checks[KREA_CARD.id].assist.categories[0].label).toBe("Closing look");
+    wrapper.unmount();
+  });
+
+  it("a remembered look asked for at open outlives the re-check that lands after it", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const look = (label) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label,
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    });
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: { assist: look(body.prompt_assist?.on === false ? "Owner look" : "Closing look") },
+        },
+      ],
+    }));
+    // The owner turns the look off: that is remembered for the next open.
+    let wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+
+    // The next open re-asks for that look at once, before the re-check is sent.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    let release;
+    gen.getWorkflowCard.mockImplementation(
+      (id) => new Promise((r) => (release = () => r(answer(id)))),
+    );
+    wrapper = mountDialog();
+    await flushPromises();
+    const summary = () => wrapper.find('[data-testid="pa-summary"]').text();
+    expect(summary()).toContain("owner");
+    release();
+    await flushPromises();
+    expect(summary()).toContain("owner");
+    expect(summary()).not.toContain("closing");
     wrapper.unmount();
   });
 

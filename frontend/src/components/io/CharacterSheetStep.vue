@@ -1757,8 +1757,11 @@ async function checkCards() {
       const result = await checkCard(card, ref);
       if (alive && run === checkRun) {
         // The check asked with the shipped look. Had the owner asked for their
-        // own while it was out, their answer stands for the chosen workflow.
-        const own = sheetAssistAsk !== askAt && card.id === workflowId.value;
+        // own, while it was out or before (the re-ask at open for a remembered
+        // look), their answer stands for the chosen workflow.
+        const own =
+          card.id === workflowId.value &&
+          (sheetAssistAsk !== askAt || sheetLook.changed.value);
         const held = checks.value[card.id];
         checks.value = {
           ...checks.value,
