@@ -4593,8 +4593,15 @@ _CHANGED_SINCE = (
 )
 
 
-def _assemble_prompt_assist(family: str | None, body: RunRequest) -> dict:
-    """The prompt assist stamp for *body*, or a 422 naming the field at fault."""
+def _assemble_prompt_assist(
+    family: str | None, body: RunRequest, layout: bool = False
+) -> dict | None:
+    """The prompt assist stamp for *body*, or a 422 naming the field at fault.
+
+    The choices are checked whatever the prompt is, so a bad choice is refused
+    the same way on every graph. With *layout* (a JSON layout prompt, which
+    the assist never writes into) there is no stamp and no length to check.
+    """
     choices = {
         name: choice if isinstance(choice, str) else choice.model_dump()
         for name, choice in body.prompt_assist.choices.items()
@@ -4614,6 +4621,8 @@ def _assemble_prompt_assist(family: str | None, body: RunRequest) -> dict:
                 }
             ],
         ) from exc
+    if layout:
+        return None
     added = len(prompt_assist_tail(stamp) or "")
     if body.prompt and len(body.prompt) + added > MAX_PROMPT_LENGTH:
         raise HTTPException(
@@ -7800,11 +7809,10 @@ def create_router(server) -> APIRouter:
             family = run_family(hub, graph)
             offered = prompt_assist.catalogue(family, context)
             stamp = (
-                _assemble_prompt_assist(family, body)
-                if asked
-                and asked.on
-                and offered
-                and not prompt_assist.is_layout_prompt(body.prompt)
+                _assemble_prompt_assist(
+                    family, body, layout=prompt_assist.is_layout_prompt(body.prompt)
+                )
+                if asked and asked.on and offered
                 else None
             )
             placed = run_service.apply_prompts(

@@ -14026,6 +14026,16 @@ def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
         "flags"
     ]
     assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == layout
+    # The choices are still checked: a bad one is refused as on a prose prompt.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": layout,
+            "prompt_assist": {"choices": {"lens": "none"}},
+        },
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_the_prompt_assist_writes_its_parts_after_the_words_and_stamps_them(runnable):
