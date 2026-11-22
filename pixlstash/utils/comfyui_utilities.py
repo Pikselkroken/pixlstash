@@ -511,6 +511,46 @@ def rewritten_prompt_input(workflow: dict, node_id: str, field: str) -> tuple[st
     return at if rewritten else (str(node_id), field)
 
 
+def _is_image_input(name: Any) -> bool:
+    """An image input by name: ``image``, ``image_1``, ``images.image_1``."""
+    return str(name).split(".")[0].split("_")[0] in ("image", "images")
+
+
+def blank_picture_inputs(workflow: dict) -> list[tuple[str, str]]:
+    """The inputs a blank picture feeds, as ``(node_id, input)``.
+
+    A blank picture is an ``EmptyImage`` whose every reader takes it on an
+    image input of a conditioning encoder: a node with a ``clip`` and no
+    conditioning input of its own, the one :func:`_follow_prompt_api` reads as
+    making the conditioning itself (MiniMax H3 Image's ``images.image_1``). An
+    ``EmptyImage`` that feeds anything else, such as a VAE encode, is content
+    and is not one. Empty when the graph has none.
+    """
+    readers: dict[str, list[tuple[str, str]]] = {}
+    for node_id, node in workflow.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        for name, value in (inputs or {}).items():
+            if _is_api_ref(value):
+                readers.setdefault(str(value[0]), []).append((str(node_id), name))
+    found: list[tuple[str, str]] = []
+    for empty_id, node in workflow.items():
+        if not isinstance(node, dict) or node.get("class_type") != "EmptyImage":
+            continue
+        links = readers.get(str(empty_id), [])
+        if links and all(
+            _is_image_input(name) and _is_encoder_inputs(workflow.get(reader))
+            for reader, name in links
+        ):
+            found.extend(links)
+    return found
+
+
+def _is_encoder_inputs(node: Any) -> bool:
+    """Whether *node* makes conditioning from a ``clip``, as the walk reads it."""
+    inputs = (node or {}).get("inputs") or {}
+    return "clip" in inputs and not any(map(_is_conditioning_input, inputs))
+
+
 def _follow_prompt_api(
     node_id: str,
     workflow: dict,

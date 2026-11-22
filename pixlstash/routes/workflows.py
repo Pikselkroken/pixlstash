@@ -1856,6 +1856,11 @@ class RunRequest(BaseModel):
     # encoder as written and cuts the enhancer out of the run's copy, so its
     # model is never loaded; null and true run the graph as it is.
     enhance_prompt: bool | None = None
+    # Whether a blank picture (an `EmptyImage` a conditioning encoder reads,
+    # as MiniMax H3 Image's text workflows feed one) stays in the run. False
+    # takes it off the encoder's image input, so the run draws without it; null
+    # and true run the graph as it is. Only a graph with one is changed.
+    blank_picture: bool | None = None
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
     # LoRAs this run adds in new loaders of their own, after `loras` and the
     # recipe's LoRAs are placed: nothing the graph loads is replaced, so a
@@ -2476,6 +2481,9 @@ class RunPrompt(BaseModel):
     # a prompt before its encoder reads it, whether or not this request's
     # `enhance_prompt: false` cut it out: the Run popup's switch for it.
     enhancer: bool = False
+    # True where a conditioning encoder reads a blank picture, whether or not
+    # this request's `blank_picture: false` took it off: the Run popup's switch.
+    blank_picture: bool = False
 
 
 class RunGroup(BaseModel):
@@ -7632,13 +7640,18 @@ def create_router(server) -> APIRouter:
                 )
             group.flags = _apply_models(hub, graph, body.models, object_info, request)
             placed = run_service.apply_prompts(
-                graph, body.prompt, body.negative, body.enhance_prompt
+                graph,
+                body.prompt,
+                body.negative,
+                body.enhance_prompt,
+                body.blank_picture,
             )
             group.prompt = RunPrompt(
                 positive_settable=placed["positive_settable"],
                 negative_settable=placed["negative_settable"],
                 positive_text=placed["positive_text"],
                 enhancer=placed["enhancer"],
+                blank_picture=placed["blank_picture"],
             )
             group.flags += [
                 {"code": "prompt_not_applied", "side": side}
