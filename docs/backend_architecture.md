@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster)
+25. [Model Shelf](#25-model-shelf), incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster), [25.31 The prompt assist: curated prompt text per model family](#2531-the-prompt-assist-curated-prompt-text-per-model-family)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -1268,6 +1268,8 @@ Snapshot: id, kind, created_at, relative_path,
 - **`WorkPlanner`** — polls each finder, respects `*_MAX_INFLIGHT` limits, applies adaptive backoff when no work is found.
 
 **Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
+
+**The worker loop survives a task it cannot handle.** Each `TaskRunner` worker thread (the CPU pool and the single GPU worker share `_run`) handles one dequeued task in `_handle`. Anything that raises there outside the task's own `run()` - admission, the run bookkeeping - is logged at error with its traceback, the task is failed (not requeued, since a runner fault would recur on every pass), its completion callbacks fire, and the thread takes the next task. A GPU requeue backoff is capped at `VRAM_REQUEUE_MAX_S`, with its exponent bounded so a long wait cannot overflow.
 
 **A GPU out-of-memory failure is retried, not lost.** VRAM pressure is almost always another process (a ComfyUI run, a second model) that gives the card back shortly, so `BaseTask.run()` gives a task `VRAM_OOM_ATTEMPTS` (3) attempts. Two guards keep that narrow, because re-running `_run_task()` from the top is only safe for an inference pass that failed before it wrote anything:
 
@@ -2845,7 +2847,11 @@ latent or checkpoint loader has the same **core address**
 group has no core label and is addressed by its slot label on the base
 topology, which goes stale if the base topology changes: an accepted limit, and
 `_apply_addressed` now logs every address that matches no node on the run graph
-rather than dropping it silently. LoRAs are not addressed by label:
+rather than dropping it silently. An address that more than one node carries
+names none of them: `workflow_identity.node_addresses` leaves it out of the
+default recipe, the run and export writes, and the form rows, so each such node
+keeps the value it stores (the topology cannot tell same-class nodes in parallel
+branches apart; their widget values can). LoRAs are not addressed by label:
 `lora:<sha256>`, placed by `place_recipe_loras`.
 
 **The default recipe** (`workflow_card_service.workflow_defaults`) is
@@ -10583,7 +10589,9 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   input takes whatever the rewrite read (the typed words, or the link that
   fed them), and every node only the enhancer read is deleted, its CLIP
   loader included, so neither the judge nor ComfyUI sees it. The recipe then
-  reads the prompt off the encoder, the same words. `Text Multiline` drops its `#` comment lines as the node
+  reads the prompt off the encoder, the same words. A run's prompt assist
+  (§25.31) is written by the same call (`apply_prompts(..., assist=)`), and a
+  `null` `enhance_prompt` with it applied cuts the enhancer too. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
@@ -12976,7 +12984,11 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   `photo_look` (default on) drops "photorealistic", render vocabulary, and
   ends with `PHOTO_LOOK`: the photos as a model agency's unedited digitals.
   Every skin detail named gets exaggerated, so the skin is said once and
-  gently. The MOSS and regions layouts ignore both. Every panel's caption carries the whole character,
+  gently. `look_added_by_run` hands the look to the run's prompt assist
+  (§25.31): the prose prompt drops "photorealistic" and appends nothing,
+  whatever `photo_look` says, and the sheet context's default (the camera's
+  finish) then sends the model `PHOTO_LOOK` byte for byte. `photo_look` stays for the prose engines
+  with no presets file. The MOSS and regions layouts ignore all three. Every panel's caption carries the whole character,
   build included (a different build draws a different face), and the summary
   asks for the `background` given, a plain light-grey studio by default (only
   the summary says it; no probe has measured how well each model keeps it, or
@@ -13236,6 +13248,77 @@ translates.
   grid asks once per stream batch and the linkage is about 1 s at 5k faces.
 - Not to be confused with the grid's likeness groups
   (`GET /pictures/likeness-groups`), which join near-duplicate pictures.
+
+### 25.31 The prompt assist: curated prompt text per model family
+
+Some models draw a glossy render from a short prompt (MiniMax H3 Image's
+beauty-filter face); the cure is photography wording most owners do not know.
+The prompt assist adds it after the owner's words at run time, never into the
+prompt box, and keeps the two apart in the picture.
+
+- **Presets are data.** JSON files in `pixlstash/data/prompt-presets/`:
+  `<family>.json` for a family whose model needs its own, and `_default.json`
+  for every other graph. Each has `family`, an integer `version`, and per
+  context, `photo` or `sheet`, `default_on` (whether a surface starts with
+  it on) and an ordered list of categories (Camera, Light, Skin and makeup),
+  each with `options` and a `default`. `photo` starts on only where the
+  model needs it (MiniMax H3 Image today); `sheet` starts on everywhere,
+  because #2776's agency-digitals look is on for every prose sheet today. An option has a `text`, a `finish`
+  or both: the finish is a closing sentence added after every category's
+  text (the camera's, which sets how the picture reads as a whole).
+  `services/prompt_assist.py` validates on load: ids `[a-z0-9_]+`, `none`
+  reserved, texts full sentences under 400 characters with no render
+  vocabulary, and a `default` that is `none` or an option whose `evidence`
+  is `tested`. The generic file's options were tested on MiniMax H3 Image
+  only; they count as tested there (their notes say so) because the generic
+  file starts off. `tests/test_prompt_assist.py` validates every shipped
+  file. A new family, option or `default_on` is a data change. An option id
+  is for good: never reused for another look, removed when retired. Raise
+  `version` when a text or a default changes.
+- **Which presets.** `hub/workflow_cards.run_family` reads the run's own
+  graph after `_apply_models`: the base-model loaders the core keeps,
+  resolved as `variant_families` resolves them. A family with a file of its
+  own gets it; anything else, two families, an unknown model or a loader
+  naming none included, gets `_default`.
+- **One assembler, one writer, one reader.** The run planner turns the
+  request's `prompt_assist` into a stamp with `prompt_assist.assemble`
+  (choices left out take the default; each choice is a `kind: "choice"`
+  part in category order, then a chosen option's `finish` a `kind:
+  "finish"` part; typed text is trimmed and closed as a sentence, `id` null,
+  no finish; a sentence the prompt already holds is not added again, so a
+  prompt that lost its stamp is not doubled). A JSON layout prompt (a MOSS
+  or regions sheet) is never given it.
+  `workflow_run_service.apply_prompts` writes `words + joiner + parts` into
+  each positive literal, only where the run writes words, then stamps
+  `_meta.pixlstash_prompt_assist = {v: 1, family, presets, context,
+  preset_version, joiner, parts: [{category, kind, id, text}]}` on the node
+  holding the literal,
+  **after** any enhancer cut, which moves the literal onto the encoder.
+  Writing a literal drops a stamp the source graph carried there.
+  `comfyui_utilities.split_prompt_assist` is the reader: it trusts a stamp
+  only where the literal ends with exactly the parts it names, after some
+  words of the owner's, and otherwise logs and reads the whole literal as
+  the prompt.
+- **Read-back.** `extract_generation_info`'s `positive_prompt`, and so
+  `picture.comfyui_positive_prompt`, prompt match (§26), the recipe
+  (`GET /comfyui/pictures/{id}/recipe`, which reads the file's `prompt`
+  chunk, never the stored columns) and `RunPrompt.positive_text`, are the
+  owner's words. The recipe carries the stamp as `prompt_assist`; a replay's
+  pre-flight reports it as `prompt.assist.recorded`. ComfyUI embeds node
+  `_meta` in the saved PNG as submitted (probed on a real run), and `_meta`
+  is volatile to every workflow hash, so the assist moves no workflow
+  identity.
+- **Absent is off**, and that is load-bearing: a JSON layout prompt, a
+  `prompt: null` replay and every API and MCP caller that does not ask are
+  untouched. A sheet asks the builder for its prompt with
+  `look_added_by_run` (§25.29) and sends it with `prompt_assist: {context:
+  "sheet"}`; the sheet camera's finish is `PHOTO_LOOK`. The enhancer
+  defaults off where the assist is applied; an explicit `enhance_prompt:
+  true` wins. `default_on` is the server's answer for whether a surface
+  starts on: the file's `default_on`, a settable prompt, and for `photo` a
+  graph that takes no picture.
+- **Choices live in the client** (browser storage) for now; the run carries
+  them, never a reference to stored state. Contract: integration §2.
 
 ## 26. Prompt match
 

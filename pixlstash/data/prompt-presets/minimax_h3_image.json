@@ -1,0 +1,120 @@
+{
+  "family": "minimax_h3_image",
+  "version": 1,
+  "contexts": {
+    "photo": {
+      "default_on": true,
+      "categories": [
+        {
+          "id": "camera",
+          "label": "Camera",
+          "default": "phone_snapshot",
+          "options": [
+            {
+              "id": "phone_snapshot",
+              "label": "Phone snapshot",
+              "text": "Taken by a friend on an iPhone main camera, held at chest height about a metre away, default photo mode, no portrait blur.",
+              "finish": "It looks like an ordinary unedited iPhone photo: natural colours, true-to-life skin tones, the slight HDR flatness phones give a bright window, a touch of sensor noise in the shadows, and sharpness that falls off softly rather than looking crisp or retouched.",
+              "evidence": "tested",
+              "note": "Text and finish are the tested camera and closing-look lines; the finish goes last."
+            }
+          ]
+        },
+        {
+          "id": "light",
+          "label": "Light",
+          "default": "window_daylight",
+          "options": [
+            {
+              "id": "window_daylight",
+              "label": "Window daylight",
+              "text": "Window daylight from one side, gentle shadows under the jaw, small window catchlights in the eyes.",
+              "evidence": "tested",
+              "note": "The content document's tested phrase, capitalised and closed with a full stop."
+            }
+          ]
+        },
+        {
+          "id": "skin",
+          "label": "Skin and makeup",
+          "default": "smooth_youthful",
+          "options": [
+            {
+              "id": "smooth_youthful",
+              "label": "Smooth and youthful",
+              "text": "Smooth and youthful skin with a natural, unretouched look.",
+              "evidence": "tested",
+              "note": "Subject-neutral rewording of the tested \"She has smooth and youthful skin with a natural, unretouched look.\" (2026-11-21, indicative)."
+            },
+            {
+              "id": "sun_kissed",
+              "label": "Sun-kissed",
+              "text": "Smooth, youthful skin with a light golden summer tan.",
+              "evidence": "tested",
+              "note": "Opt-in, never a default. Retested 2026-11-21 on a young woman and a man in his late forties, seed 1701."
+            },
+            {
+              "id": "mature",
+              "label": "Mature (older subjects)",
+              "text": "Lived-in, mature skin with natural fine lines, unretouched but kindly shown.",
+              "evidence": "tested",
+              "note": "Ages a young face by about 30 years: for older subjects only. GPU-tested 2026-11-21, seed 1701."
+            },
+            {
+              "id": "weathered",
+              "label": "Weathered (older, outdoorsy subjects)",
+              "text": "Weathered, outdoorsy skin from years of wind and sun, shown naturally.",
+              "evidence": "tested",
+              "note": "GPU-tested 2026-11-21 on a young woman and a man in his late forties, seed 1701."
+            },
+            {
+              "id": "makeup_daytime",
+              "label": "Natural daytime makeup",
+              "text": "Natural daytime makeup: light foundation, mascara and a tinted lip.",
+              "evidence": "tested",
+              "note": "Feminises a male subject: never a default. GPU-tested 2026-11-21, seed 1701."
+            },
+            {
+              "id": "makeup_evening",
+              "label": "Evening makeup",
+              "text": "Dressed-up evening makeup with defined eyes and a bold lip.",
+              "evidence": "tested",
+              "note": "Feminises a male subject: never a default. GPU-tested 2026-11-21, seed 1701."
+            }
+          ]
+        }
+      ]
+    },
+    "sheet": {
+      "default_on": true,
+      "categories": [
+        {
+          "id": "camera",
+          "label": "Camera",
+          "default": "agency_digitals",
+          "options": [
+            {
+              "id": "agency_digitals",
+              "label": "Model agency digitals",
+              "finish": "The photos look like a model agency's digitals: plain unedited camera photos, natural colour, true-to-life skin, little or no makeup, soft focus falloff, nothing retouched or sharpened.",
+              "evidence": "tested",
+              "note": "The sheet's photo look from #2776, word for word."
+            }
+          ]
+        },
+        {
+          "id": "light",
+          "label": "Light",
+          "default": "none",
+          "options": []
+        },
+        {
+          "id": "skin",
+          "label": "Skin and makeup",
+          "default": "none",
+          "options": []
+        }
+      ]
+    }
+  }
+}

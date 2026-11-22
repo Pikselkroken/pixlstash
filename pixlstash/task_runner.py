@@ -381,7 +381,13 @@ class TaskRunner:
                 )
         attempts = self._requeue_counts.get(task.id, 0)
         self._requeue_counts[task.id] = attempts + 1
-        delay = min(self.VRAM_REQUEUE_MAX_S, self.VRAM_REQUEUE_BASE_S * (2**attempts))
+        # The exponent is capped: a task that waits out a long GPU run is requeued
+        # thousands of times, and ``2**attempts`` overflows the float conversion
+        # past ~1024. 64 doublings is far past the cap for any real base.
+        delay = min(
+            self.VRAM_REQUEUE_MAX_S,
+            self.VRAM_REQUEUE_BASE_S * (2 ** min(attempts, 64)),
+        )
         logger.debug(
             "Task %s (%s) waits %.0fs for GPU memory (%s MB)",
             task.id,
@@ -597,140 +603,189 @@ class TaskRunner:
             if isinstance(task, _StopTask):
                 continue
 
-            if self._stop.is_set():
-                self._cancel_queued_task(task, "runner stopped before the task ran")
-                continue
-
-            logger.debug(
-                "TaskRunner %s: dequeued task id=%s type=%s queue=%s queue_depth=%s.",
-                self._name,
-                task.id,
-                task.type,
-                task.queue_type,
-                work_queue.qsize(),
-            )
-
-            run_now, lease = self._admit(task, work_queue)
-            if not run_now:
-                continue
-
-            task_start = time.perf_counter()
-            logger.debug(
-                "TaskRunner %s: starting task id=%s type=%s.",
-                self._name,
-                task.id,
-                task.type,
-            )
-            error: Optional[BaseException] = None
-            thread_ident = threading.current_thread().ident
-            with self._active_task_lock:
-                self._active_tasks[thread_ident] = task
-                if lease is not None and not lease.on_cpu:
-                    self._leased_on_gpu.add(task.id)
             try:
-                task.run(on_vram_oom=self._pause_and_report_vram_oom)
-                # ``vram_oom_attempts`` decides whether the user has a card open
-                # about this task; ``attempts_used`` is what that card counts -
-                # the attempt that actually finished the work, not the last one
-                # that OOMed.
-                if task.vram_oom_attempts:
-                    # It got there in the end - say so, rather than leaving the
-                    # user's last card reading "retrying".
-                    self._report_vram_oom(
-                        task, task.attempts_used, final=False, recovered=True
-                    )
+                self._handle(task, work_queue)
             except Exception as exc:
-                error = exc
-                preempted_by = self._preempted.get(task.id)
-                if preempted_by is not None:
-                    # Stopped to make room, whatever the task raised on the
-                    # way out. A finder defers a batch for the session on any
-                    # other error; this one says nothing about the pictures.
-                    task.status = TaskStatus.CANCELLED
-                    error = TaskCancelledError(
-                        f"Task {task.id} ({task.type}) {preempted_by}"
-                    )
-                # Same split: a task that OOMed twice and then died of something
-                # else still has a card open, and it closes naming the attempt
-                # that died - as does one abandoned at shutdown, which used one
-                # attempt, not three.
-                if task.vram_oom_attempts:
-                    self._report_vram_oom(task, task.attempts_used, final=True)
-                tb = traceback.extract_tb(exc.__traceback__)
-                if tb:
-                    last = tb[-1]
-                    logger.warning(
-                        "Task %s (%s) failed at %s:%s in %s: %s | code=%s",
-                        task.id,
-                        task.type,
-                        last.filename,
-                        last.lineno,
-                        last.name,
-                        exc,
-                        (last.line or "").strip(),
-                    )
-                else:
-                    logger.warning("Task %s (%s) failed: %s", task.id, task.type, exc)
-            finally:
-                with self._active_task_lock:
-                    self._active_tasks.pop(thread_ident, None)
-                    self._leased_on_gpu.discard(task.id)
-                    self._preempted.pop(task.id, None)
-                if lease is not None:
-                    lease.release()
-                # Always flush PyTorch's CUDA allocator cache after a GPU-queue
-                # task so that activation tensors (data, not models) are returned
-                # promptly.  CPU-queue tasks only flush when they held a VRAM
-                # reservation.
-                if task.queue_type == QueueType.GPU:
-                    try:
-                        empty_device_cache()
-                    except Exception:
-                        logger.warning(
-                            "Failed to flush CUDA cache after task %s (%s): %s",
-                            task.id,
-                            task.type,
-                            traceback.format_exc(),
-                        )
-                    # Collect Python objects freed during inference (e.g. preloaded
-                    # image dicts) and trim glibc's malloc arena so that resident
-                    # set size drops back towards the true working set.
-                    gc.collect()
-                    if platform.system().lower().startswith("linux"):
-                        try:
-                            trim = getattr(
-                                ctypes.CDLL("libc.so.6"), "malloc_trim", None
-                            )
-                            if trim is not None:
-                                trim(0)
-                        except Exception:
-                            logger.warning(
-                                "Failed to trim malloc arena after task %s (%s): %s",
-                                task.id,
-                                task.type,
-                                traceback.format_exc(),
-                            )
-                elif lease is not None and not lease.on_cpu:
-                    try:
-                        empty_device_cache()
-                    except Exception:
-                        logger.warning(
-                            "Failed to flush CUDA cache after task %s (%s): %s",
-                            task.id,
-                            task.type,
-                            traceback.format_exc(),
-                        )
-                elapsed_s = time.perf_counter() - task_start
-                logger.debug(
-                    "TaskRunner %s: finished task id=%s type=%s status=%s elapsed=%.3fs.",
-                    self._name,
+                self._fail_unhandled(task, exc)
+
+        logger.debug("TaskRunner %s stopped.", self._name)
+
+    def _handle(self, task: BaseTask, work_queue: queue.PriorityQueue) -> None:
+        """Admit, run and settle one dequeued task. See _run."""
+        if self._stop.is_set():
+            self._cancel_queued_task(task, "runner stopped before the task ran")
+            return
+
+        logger.debug(
+            "TaskRunner %s: dequeued task id=%s type=%s queue=%s queue_depth=%s.",
+            self._name,
+            task.id,
+            task.type,
+            task.queue_type,
+            work_queue.qsize(),
+        )
+
+        run_now, lease = self._admit(task, work_queue)
+        if not run_now:
+            return
+
+        task_start = time.perf_counter()
+        logger.debug(
+            "TaskRunner %s: starting task id=%s type=%s.",
+            self._name,
+            task.id,
+            task.type,
+        )
+        error: Optional[BaseException] = None
+        thread_ident = threading.current_thread().ident
+        with self._active_task_lock:
+            self._active_tasks[thread_ident] = task
+            if lease is not None and not lease.on_cpu:
+                self._leased_on_gpu.add(task.id)
+        try:
+            task.run(on_vram_oom=self._pause_and_report_vram_oom)
+            # ``vram_oom_attempts`` decides whether the user has a card open
+            # about this task; ``attempts_used`` is what that card counts -
+            # the attempt that actually finished the work, not the last one
+            # that OOMed.
+            if task.vram_oom_attempts:
+                # It got there in the end - say so, rather than leaving the
+                # user's last card reading "retrying".
+                self._report_vram_oom(
+                    task, task.attempts_used, final=False, recovered=True
+                )
+        except Exception as exc:
+            error = exc
+            preempted_by = self._preempted.get(task.id)
+            if preempted_by is not None:
+                # Stopped to make room, whatever the task raised on the
+                # way out. A finder defers a batch for the session on any
+                # other error; this one says nothing about the pictures.
+                task.status = TaskStatus.CANCELLED
+                error = TaskCancelledError(
+                    f"Task {task.id} ({task.type}) {preempted_by}"
+                )
+            # Same split: a task that OOMed twice and then died of something
+            # else still has a card open, and it closes naming the attempt
+            # that died - as does one abandoned at shutdown, which used one
+            # attempt, not three.
+            if task.vram_oom_attempts:
+                self._report_vram_oom(task, task.attempts_used, final=True)
+            tb = traceback.extract_tb(exc.__traceback__)
+            if tb:
+                last = tb[-1]
+                logger.warning(
+                    "Task %s (%s) failed at %s:%s in %s: %s | code=%s",
                     task.id,
                     task.type,
-                    task.status,
-                    elapsed_s,
+                    last.filename,
+                    last.lineno,
+                    last.name,
+                    exc,
+                    (last.line or "").strip(),
                 )
-                self._fire_task_complete_callbacks(task, error)
-        logger.debug("TaskRunner %s stopped.", self._name)
+            else:
+                logger.warning("Task %s (%s) failed: %s", task.id, task.type, exc)
+        finally:
+            with self._active_task_lock:
+                self._active_tasks.pop(thread_ident, None)
+                self._leased_on_gpu.discard(task.id)
+                self._preempted.pop(task.id, None)
+            if lease is not None:
+                try:
+                    lease.release()
+                except Exception as exc:
+                    # Logged, not raised: the completion callbacks below must
+                    # still fire, or the finder never releases its claims.
+                    logger.error(
+                        "Task %s (%s) could not give back its GPU lease: %s",
+                        task.id,
+                        task.type,
+                        exc,
+                        exc_info=True,
+                    )
+            # Always flush PyTorch's CUDA allocator cache after a GPU-queue
+            # task so that activation tensors (data, not models) are returned
+            # promptly.  CPU-queue tasks only flush when they held a VRAM
+            # reservation.
+            if task.queue_type == QueueType.GPU:
+                try:
+                    empty_device_cache()
+                except Exception:
+                    logger.warning(
+                        "Failed to flush CUDA cache after task %s (%s): %s",
+                        task.id,
+                        task.type,
+                        traceback.format_exc(),
+                    )
+                # Collect Python objects freed during inference (e.g. preloaded
+                # image dicts) and trim glibc's malloc arena so that resident
+                # set size drops back towards the true working set.
+                gc.collect()
+                if platform.system().lower().startswith("linux"):
+                    try:
+                        trim = getattr(ctypes.CDLL("libc.so.6"), "malloc_trim", None)
+                        if trim is not None:
+                            trim(0)
+                    except Exception:
+                        logger.warning(
+                            "Failed to trim malloc arena after task %s (%s): %s",
+                            task.id,
+                            task.type,
+                            traceback.format_exc(),
+                        )
+            elif lease is not None and not lease.on_cpu:
+                try:
+                    empty_device_cache()
+                except Exception:
+                    logger.warning(
+                        "Failed to flush CUDA cache after task %s (%s): %s",
+                        task.id,
+                        task.type,
+                        traceback.format_exc(),
+                    )
+            elapsed_s = time.perf_counter() - task_start
+            logger.debug(
+                "TaskRunner %s: finished task id=%s type=%s status=%s elapsed=%.3fs.",
+                self._name,
+                task.id,
+                task.type,
+                task.status,
+                elapsed_s,
+            )
+            self._fire_task_complete_callbacks(task, error)
+
+    def _fail_unhandled(self, task: BaseTask, exc: Exception) -> None:
+        """Fail a task the worker could not finish, and keep the worker going.
+
+        Reached only when something raised while the runner was handling a
+        task outside its own ``run()`` - admission, or the bookkeeping around
+        the run. The task is failed, as a task that raised from ``run()`` is,
+        and its completion callbacks fire so the finder releases its pictures.
+        It is not requeued: a fault in the runner or a task hook would recur on
+        every pass and never end. A task that already settled is only logged.
+
+        Args:
+            task: The task being handled when the error was raised.
+            exc: The error.
+        """
+        logger.error(
+            "TaskRunner %s: task id=%s type=%s could not be handled; failing it "
+            "and moving on: %s",
+            self._name,
+            task.id,
+            task.type,
+            exc,
+            exc_info=True,
+        )
+        self._requeue_counts.pop(task.id, None)
+        if task._done_event.is_set():
+            return
+        task.error = str(exc)
+        task.status = TaskStatus.FAILED
+        task.completed_at = datetime.now(UTC)
+        task._done_event.set()
+        self._fire_task_complete_callbacks(task, exc)
 
     def _fire_task_complete_callbacks(
         self, task: BaseTask, error: Optional[BaseException]

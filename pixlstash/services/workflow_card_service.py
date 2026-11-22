@@ -90,6 +90,7 @@ from pixlstash.services.workflow_identity import (
     Slot,
     base_model_kind,
     core_node_labels,
+    node_addresses,
     unswapped,
     is_lora_widget,
     live_slots,
@@ -1734,17 +1735,18 @@ def workflow_defaults(
             continue
         sampled += 1
         sized = size_inputs(document)
+        # A value read per address is one value for every node that carries it,
+        # so a node that shares its address with another contributes nothing.
+        addresses = node_addresses(read.base, read.core)
         for node_id, node in document.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
             node_id = str(node_id)
-            if node_id in read.core:
-                slot_label = CORE_ADDRESS_PREFIX + read.core[node_id]
-            elif node_id in read.base:
-                slot_label = read.base[node_id]
-            else:
+            names = addresses.get(node_id)
+            if not names:
                 continue
+            slot_label = names[0]
             for name, value in inputs.items():
                 # A wired picture size is offered as the number its source
                 # works out to (a ResolutionSelector, a primitive), so a run
@@ -1781,13 +1783,17 @@ def workflow_defaults(
                     ] += 1
                 continue
             kind = model_fix_kind(slot.class_type, slot.widget)
-            label = read.core.get(slot.node_id)
-            if label:
-                label = CORE_ADDRESS_PREFIX + label
-            elif graph_stages is not None:
-                # A workflow read off its own graph names a loader its core
-                # does not hold (every loader of a manual one) by slot label.
-                label = read.base.get(slot.node_id)
+            names = addresses.get(slot.node_id, [])
+            # A core address is always the loader's; a slot label is only read
+            # off a workflow's own graph, which names a loader its core does not
+            # hold (every loader of a manual one) by it.
+            label = names[0] if names else None
+            if (
+                label
+                and not label.startswith(CORE_ADDRESS_PREFIX)
+                and graph_stages is None
+            ):
+                label = None
             if kind and label:
                 address = f"{label}/{slot.widget}"
                 models.setdefault(address, Counter())[slot.asset] += 1

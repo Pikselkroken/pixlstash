@@ -66,6 +66,12 @@ PROMPT_FIELDS = ("text", "prompt", "value")
 # Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
 # negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
 NEGATIVE_FIELDS = ("negative_prompt", "negative")
+# Nodes whose output is zeroed conditioning: the prompt on their input is not
+# what reaches the sampler. A model with no negative prompt is wired through
+# one (its guider's negative takes the zeroed positive), so a walk up the
+# negative side stops there and finds none. Shared with workflow_io and
+# workflow_identity, which detect the same thing.
+ZEROED_CONDITIONING_CLASSES = frozenset({"ConditioningZeroOut"})
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -528,6 +534,12 @@ def _follow_prompt_api(
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
 
+    # A zeroed negative has no prompt, however the zeroing node is wired to the
+    # positive one. Only the negative side stops here: a walk up the positive
+    # side is read as it always was.
+    if side == "negative" and class_type in ZEROED_CONDITIONING_CLASSES:
+        return None
+
     # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
     # `TextEncode` class, or a node that takes `clip` and no conditioning, so
     # makes the conditioning itself (`MiniMaxH3ImageToVideo`).
@@ -659,12 +671,76 @@ def _extract_generation_info_api(workflow: dict) -> dict:
                     seed = val
                     break
 
+    positive_prompt, prompt_assist = split_prompt_assist(positive_prompt, workflow)
     return {
         "models": models,
         "loras": loras,
         "positive_prompt": positive_prompt,
         "seed": seed,
+        "prompt_assist": prompt_assist,
     }
+
+
+# ── prompt assist stamp ───────────────────────────────────────────────────────
+
+#: The ``_meta`` key a run's prompt assist (backend §25) records what it added
+#: under, on the node holding the prompt literal. ``_meta`` is volatile to
+#: every workflow hash, so the stamp never changes a picture's workflow.
+PROMPT_ASSIST_META = "pixlstash_prompt_assist"
+
+
+def prompt_assist_tail(stamp: Any) -> str | None:
+    """What a ``v: 1`` stamp says was added after the owner's words.
+
+    ``joiner`` and then the parts' texts joined by single spaces. ``None`` for
+    a stamp this build cannot read, or one that added nothing.
+    """
+    try:
+        texts = [part["text"] for part in stamp["parts"]]
+        if stamp["v"] != 1 or not isinstance(stamp["joiner"], str) or not texts:
+            return None
+        if not all(isinstance(text, str) and text for text in texts):
+            return None
+        return stamp["joiner"] + " ".join(texts)
+    except (KeyError, TypeError):
+        return None
+
+
+def split_prompt_assist(
+    text: Any, workflow: dict, node_id: Any = None
+) -> tuple[Any, dict | None]:
+    """The owner's words in a prompt literal, and the stamp of what a run added.
+
+    The one reader of :data:`PROMPT_ASSIST_META`. A stamp is trusted only
+    where *text* ends with exactly what it says was added, after some words
+    of the owner's; otherwise the whole literal is the owner's prompt (a file
+    edited elsewhere) and the mismatch is logged. With *node_id*, the node
+    holding the literal, only that node's stamp is read: the run writes the
+    stamp there. Without it (a recipe read, whose text may come through a
+    primitive), any stamp whose lines end the text is the one.
+    """
+    if not isinstance(text, str):
+        return text, None
+    stamps = [
+        node["_meta"][PROMPT_ASSIST_META]
+        for nid, node in workflow.items()
+        if (node_id is None or str(nid) == str(node_id))
+        and isinstance(node, dict)
+        and isinstance(node.get("_meta"), dict)
+        and PROMPT_ASSIST_META in node["_meta"]
+    ]
+    for stamp in stamps:
+        tail = prompt_assist_tail(stamp)
+        if tail and len(text) > len(tail) and text.endswith(tail):
+            return text[: -len(tail)], stamp
+    if stamps:
+        logger.info(
+            "A prompt assist stamp does not match the end of the prompt, so the "
+            "whole prompt is read as the owner's words (%d stamps, %d characters).",
+            len(stamps),
+            len(text),
+        )
+    return text, None
 
 
 # ── public extraction API ─────────────────────────────────────────────────────
@@ -691,10 +767,13 @@ def extract_generation_info(workflow: dict) -> dict:
         - ``loras`` (list[str]): LoRA file names found in LoRA loader nodes.
         - ``positive_prompt`` (str | None): text from the CLIPTextEncode node
           connected to the sampler's ``positive`` input, or ``None`` if the
-          chain could not be resolved.
+          chain could not be resolved. The owner's words only: what a
+          run's prompt assist added is cut off (:func:`split_prompt_assist`).
         - ``seed`` (int | None): the seed value used for sampling, taken from
           the ``seed`` widget of ``KSampler``/``KSamplerAdvanced`` or the
           ``noise_seed`` input of ``RandomNoise``.
+        - ``prompt_assist`` (dict | None, API format only): the stamp of
+          what was cut off, ``None`` where nothing was.
     """
     # The format check used to sit outside this `try`, so a non-dict raised
     # `AttributeError` at the caller. `is_api_format` answers for one instead

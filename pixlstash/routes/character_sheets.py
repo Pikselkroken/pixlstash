@@ -75,6 +75,13 @@ class SheetPromptRequest(BaseModel):
         'unedited digitals rather than renders, and "photorealistic" is '
         "left out. The `moss` and `regions` layouts ignore it.",
     )
+    look_added_by_run: bool = Field(
+        False,
+        description="With `layout: prose`, the run adds the look itself "
+        '(`prompt_assist` on `POST /workflows/run`): "photorealistic" is '
+        "left out and no look is appended, whatever `photo_look` says. The "
+        "`moss` and `regions` layouts ignore it.",
+    )
 
 
 class SheetPrompt(BaseModel):

@@ -148,7 +148,7 @@ from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import MAX_PROMPT_LENGTH, RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_templates import load_templates
@@ -13803,6 +13803,262 @@ def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
 
 
+def _parallel_branches_document(titled: bool = False) -> dict:
+    """Two same-shaped KSampler branches and one that differs, all of one class.
+
+    Branches 2 and 4 are topologically identical, so their KSampler nodes share
+    a slot label and only their widget values tell them apart. Branch 6 ends in
+    an extra scale, so its KSampler has a label of its own.
+    """
+    document = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["4", 0], "filename_prefix": "b"},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 3, "steps": 30, "cfg": 6.5},
+        },
+        "7": {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["6", 0],
+                "upscale_method": "nearest-exact",
+                "width": 512,
+                "height": 512,
+                "crop": "disabled",
+            },
+        },
+        "8": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["7", 0], "filename_prefix": "c"},
+        },
+    }
+    if titled:
+        for node_id, node in document.items():
+            node["_meta"] = {"title": f"Branch {node_id}"}
+    return document
+
+
+def _parallel_label(document: dict, node_id: str) -> str:
+    """A node's slot label, read off the stored form (model names by reference).
+
+    A label is topology alone, so the widget spelling does not change it; the
+    reduction only wants every model name as a reference.
+    """
+    stored = json.loads(json.dumps(document))
+    for node in stored.values():
+        for name, value in node.get("inputs", {}).items():
+            if isinstance(value, str) and value.endswith(".safetensors"):
+                node["inputs"][name] = asset_reference(value)
+    return topology_node_labels(stored)[node_id]
+
+
+def _run_parallel_branches(runnable, monkeypatch, document, values=()) -> dict:
+    """Run *document* as a manual workflow and return the graph ComfyUI gets."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["ImageScale"] = {
+        "input": {
+            "required": {
+                "image": ["IMAGE", {}],
+                "upscale_method": [["nearest-exact"], {}],
+                "width": ["INT", {}],
+                "height": ["INT", {}],
+                "crop": [["disabled"], {}],
+            }
+        }
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    manual = create_manual_workflow(
+        runnable.server.hub, "Parallel branches", document, "import"
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": manual, "values": list(values)},
+    )
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert not group["reasons"], group
+    return runnable.submitted[-1]["graph"]
+
+
+@pytest.mark.parametrize("titled", [False, True])
+def test_parallel_branches_of_one_class_keep_their_own_values(
+    runnable, monkeypatch, titled
+):
+    """Same-class nodes in parallel branches each keep their stored value (#1622).
+
+    The default recipe reads one value per slot label, and branches 2 and 4
+    share a label. Before the fix the recipe's one value landed on both; the
+    titles must not change that either way.
+    """
+    graph = _run_parallel_branches(
+        runnable, monkeypatch, _parallel_branches_document(titled)
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def test_a_run_value_for_one_slot_changes_only_the_node_it_names(runnable, monkeypatch):
+    """A slot label only one node carries reaches only that node."""
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "6")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        99,
+    ]
+
+
+def test_a_run_value_for_a_label_two_nodes_share_is_applied_to_neither(
+    runnable, monkeypatch
+):
+    """The label names no single node, so neither keeps a value it was not given.
+
+    Both nodes keep their own steps, and the request is logged as matching no
+    settable input rather than copied over the pair.
+    """
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "2")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def _two_model_branches() -> dict:
+    """Two identical UNET branches, each loading a different model."""
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": _ZIMAGE_UNET}},
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": _KREA_UNET}},
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["4", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "6": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["5", 0], "filename_prefix": "b"},
+        },
+    }
+
+
+@pytest.fixture
+def model_branches(runnable, monkeypatch):
+    """The two-branch graph as a manual workflow, its two models on the shelf."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["UNETLoader"] = {
+        "input": {"required": {"unet_name": [[_ZIMAGE_UNET, _KREA_UNET], {}]}}
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    hub = runnable.server.hub
+    with hub.transaction() as conn:
+        for filename, base_model in (
+            (_ZIMAGE_UNET, "Z-Image Turbo"),
+            (_KREA_UNET, "Krea 2"),
+        ):
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, base_model, "
+                "provenance) VALUES ('checkpoint', ?, ?, ?, 'scanned')",
+                (filename, _h(filename), base_model),
+            )
+    manual = create_manual_workflow(
+        hub, "Two model branches", _two_model_branches(), "import"
+    )
+    yield SimpleNamespace(runnable=runnable, manual=manual)
+    delete_manual_workflow(hub, manual)
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model WHERE filename IN (?, ?)", (_ZIMAGE_UNET, _KREA_UNET)
+        )
+
+
+def test_two_loaders_of_one_model_keep_their_own_files(model_branches):
+    """The default recipe's one model for a shared address goes to neither loader.
+
+    Both the run and the export apply the default recipe; the export is the
+    path that writes its models from the recipe (``_export_default_recipe``).
+    """
+    runnable = model_branches.runnable
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_id": model_branches.manual}
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+    r = runnable.owner.get(f"{API}/workflows/{model_branches.manual}/export")
+    assert r.status_code == 200, r.text
+    exported = r.json()["workflow"]
+    assert (
+        exported["1"]["inputs"]["unet_name"],
+        exported["4"]["inputs"]["unet_name"],
+    ) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
+def test_a_run_model_for_a_shared_address_is_applied_to_neither_loader(model_branches):
+    """A model the request names by an address two loaders share is not copied."""
+    runnable = model_branches.runnable
+    label = _parallel_label(_two_model_branches(), "1")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": model_branches.manual,
+            "models": [{"address": f"{label}/unet_name", "filename": _KREA_UNET}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
 def test_one_input_named_two_ways_takes_the_later_value(runnable):
     """A saved recipe's core-addressed override must not beat a request's slot label."""
     core = {"slot_label": _core_address("3", "steps").rpartition("/")[0]}
@@ -14075,11 +14331,15 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
     )
     group = r.json()["groups"][0]
+    # Every graph is offered the generic prompt assist, off by default.
+    assist = group["prompt"].pop("assist")
+    assert (assist["presets"], assist["default_on"]) == ("_default", False)
     assert group["prompt"] == {
         "positive_settable": True,
         "negative_settable": False,
         "positive_text": "the saved prompt",
         "enhancer": False,
+        "enhancer_on": False,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -14162,6 +14422,207 @@ def test_a_run_can_go_without_the_prompt_enhancer(runnable):
     )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["reasons"] == []
+
+
+def _assist_runnable(runnable, family):
+    """RUN_DOCUMENT with a literal prompt, read as a graph of *family*."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document["5"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "the saved prompt"},
+    }
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CLIPTextEncode"] = {"input": {"required": {}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    if family is not None:
+        # Which family a graph is, is `run_family`'s (test_prompt_assist.py).
+        runnable.monkeypatch.setattr(
+            workflows_routes, "run_family", lambda hub, graph: family
+        )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+
+
+def test_the_prompt_assist_is_off_unless_asked_and_on_by_default_only_for_h3(runnable):
+    """Absent is off: the prompt goes byte for byte. Every graph is offered
+    it: SDXL (no file of its own; an unknown or mixed family reads the same)
+    gets the generic presets, off by default; MiniMax H3 Image its own, on."""
+    _assist_runnable(runnable, None)
+    asked = {
+        "workflow_id": RUN_WF,
+        "prompt": "A woman.",
+        "seed_mode": "fixed",
+        "seed": 1,
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "_default",
+        False,
+        False,
+    )
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman."
+    assert "_meta" not in sent["5"]
+    # Asked for, the generic presets apply like any other.
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "prompt_assist": {}})
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is True
+    runnable.submitted.pop()
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "minimax_h3_image",
+        True,
+        False,
+    )
+    assert assist["parts"] == []
+    assert [c["id"] for c in assist["categories"]] == ["camera", "light", "skin"]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == "A woman."
+
+
+def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    layout = '{"summary": {"caption": "a sheet"}}'
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "prompt": layout, "prompt_assist": {}},
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert group["prompt"]["assist"]["applied"] is False
+    assert {"code": "prompt_assist_not_applied", "why": "layout_prompt"} in group[
+        "flags"
+    ]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == layout
+    # The choices are still checked: a bad one is refused as on a prose prompt.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": layout,
+            "prompt_assist": {"choices": {"lens": "none"}},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_blank_prompt_near_the_limit_is_not_refused_for_lines_it_never_gets(runnable):
+    """The tail is only written after words, so a blank prompt counts as is."""
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": " " * (MAX_PROMPT_LENGTH - 5),
+            "prompt_assist": {},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is False
+    runnable.submitted.pop()
+
+
+def test_the_prompt_assist_writes_its_parts_after_the_words_and_stamps_them(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    asked = {"workflow_id": RUN_WF, "seed_mode": "fixed", "seed": 1}
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            **asked,
+            "prompt": "A woman.",
+            "prompt_assist": {
+                "choices": {"skin": "none", "light": {"text": "a photorealistic lamp"}}
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assist = group["prompt"]["assist"]
+    assert assist["applied"] is True
+    assert [(p["category"], p["kind"], p["id"]) for p in assist["parts"]] == [
+        ("camera", "choice", "phone_snapshot"),
+        ("light", "choice", None),
+        ("camera", "finish", "phone_snapshot"),
+    ]
+    assert assist["parts"][1]["text"] == "a photorealistic lamp."
+    assert group["prompt"]["positive_text"] == "the saved prompt"
+    assert {
+        "code": "prompt_assist_render_words",
+        "category": "light",
+        "words": ["photorealistic"],
+    } in group["flags"]
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman. " + " ".join(
+        p["text"] for p in assist["parts"]
+    )
+    assert sent["5"]["_meta"]["pixlstash_prompt_assist"]["parts"] == assist["parts"]
+    assert extract_generation_info(sent)["positive_prompt"] == "A woman."
+    # No words to add to: nothing is written, byte for byte, and it is said.
+    graphs = []
+    for extra in ({}, {"prompt_assist": {}}):
+        r = runnable.owner.post(f"{API}/workflows/run", json={**asked, **extra})
+        assert r.status_code == 200, r.text
+        graphs.append(runnable.submitted.pop()["graph"])
+    assert graphs[0] == graphs[1]
+    assert {"code": "prompt_assist_not_applied", "why": "no_prompt"} in r.json()[
+        "groups"
+    ][0]["flags"]
+    # Off, in the sheet context: that context's catalogue, nothing added.
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            **asked,
+            "prompt": "x",
+            "prompt_assist": {"context": "sheet", "on": False},
+        },
+    )
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["context"], assist["applied"]) == ("sheet", False)
+    assert assist["categories"][0]["options"][0]["id"] == "agency_digitals"
+    assert r.json()["groups"][0]["flags"] == []
+
+
+@pytest.mark.parametrize(
+    "prompt_assist, loc",
+    [
+        ({"choices": {"lens": "none"}}, ["body", "prompt_assist", "choices", "lens"]),
+        (
+            {"choices": {"camera": {"id": "webcam"}}},
+            ["body", "prompt_assist", "choices", "camera"],
+        ),
+    ],
+)
+def test_a_prompt_assist_choice_the_family_lacks_is_a_422(runnable, prompt_assist, loc):
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": prompt_assist},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"][0]["loc"] == loc
+
+
+def test_a_prompt_assist_body_is_checked_at_the_door(runnable):
+    for body in (
+        {"choices": {"camera": {"text": "x" * 401}}},
+        {"choices": {"camera": {"id": "a", "text": "b"}}},
+        {"choices": {"Camera!": "none"}},
+        {"context": "video"},
+    ):
+        r = runnable.owner.post(
+            f"{API}/workflows/run/preflight",
+            json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": body},
+        )
+        assert r.status_code == 422, body
 
 
 def test_more_runs_than_one_request_starts_are_refused(runnable):
@@ -15021,6 +15482,9 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "positive_text": "the saved prompt",
         "unplaced": [],
         "enhancer": False,
+        "enhancer_on": False,
+        "recorded": None,
+        "assist_applied": False,
     }
 
 
@@ -15052,6 +15516,9 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "positive_text": None,
         "unplaced": ["positive"],
         "enhancer": False,
+        "enhancer_on": False,
+        "recorded": None,
+        "assist_applied": False,
     }
     assert "positive prompt was not applied" in caplog.text
     # Nothing was sent, so nothing is unplaced: only the popup needs telling.

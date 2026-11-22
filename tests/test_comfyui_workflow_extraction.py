@@ -834,6 +834,40 @@ def test_an_edit_encoder_keeps_its_prompt_in_a_field_of_its_own():
     assert extract_recipe_extras(graph)["negative_prompt"] == "daylight"
 
 
+# A model with no negative prompt, wired as the MiniMax H3 Image graphs are: the
+# guider's negative is a ConditioningZeroOut of the positive encoder's output.
+_ZEROED_NEGATIVE = {
+    "1": {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "encoder.safetensors", "type": "minimax"},
+    },
+    "2": {"class_type": "VAELoader", "inputs": {"vae_name": "vae.safetensors"}},
+    "3": {
+        "class_type": "MiniMaxH3ImageConditioning",
+        "inputs": {"clip": ["1", 0], "vae": ["2", 0], "prompt": "a red fox"},
+    },
+    "4": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["3", 0]}},
+    "5": {
+        "class_type": "CFGGuider",
+        "inputs": {"positive": ["3", 0], "negative": ["4", 0], "cfg": 1.0},
+    },
+}
+
+
+def test_a_zeroed_negative_reads_no_negative_prompt():
+    """A negative that is ConditioningZeroOut is no negative prompt.
+
+    The walk used to pass through the zeroing node, which takes the positive
+    encoder's output, and report the positive text as the negative. The
+    positive side reads as it did, and the run's own detection agrees that the
+    graph has no negative prompt to write into.
+    """
+    graph = json.loads(json.dumps(_ZEROED_NEGATIVE))
+    assert extract_generation_info(graph)["positive_prompt"] == "a red fox"
+    assert extract_recipe_extras(graph)["negative_prompt"] is None
+    assert detect_workflow_io(graph).negative_prompts == ()
+
+
 def test_a_node_that_takes_clip_and_conditioning_is_walked_through_not_read():
     graph = {
         "3": {"class_type": "KSampler", "inputs": {"positive": ["8", 0]}},

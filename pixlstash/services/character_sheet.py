@@ -416,6 +416,7 @@ def sheet_prompt(
     reference: bool = False,
     layout: Layout = "moss",
     photo_look: bool = True,
+    look_added_by_run: bool = False,
 ) -> str:
     """The prompt for one grid sheet of the character described.
 
@@ -444,7 +445,9 @@ def sheet_prompt(
     *photo_look* adds :data:`PHOTO_LOOK` to a prose prompt and drops
     "photorealistic", render vocabulary. A prose prompt also names the eye
     colour among what every photo shares. The MOSS and regions layouts are
-    the probed ones and stay as they are.
+    the probed ones and stay as they are. *look_added_by_run* says the run's
+    prompt assist adds the look (backend §25): a prose prompt drops
+    "photorealistic" and appends nothing, whatever *photo_look* says.
     """
     scale = SIZES[size][0] / SHEET_WIDTH
     p, cap_p = _PRONOUN[subject]
@@ -525,10 +528,11 @@ def sheet_prompt(
         else "on a plain light-grey studio background, soft even studio lighting"
     )
     prose = layout == "prose"
-    look = prose and photo_look
+    look = prose and photo_look and not look_added_by_run
+    unrendered = prose and (photo_look or look_added_by_run)
     summary = (
         f"Character reference sheet of one and the same {subject} {setting}, "
-        f"{'' if look else 'photorealistic '}photographs. On the left half, "
+        f"{'' if unrendered else 'photorealistic '}photographs. On the left half, "
         "four passport-style head-and-shoulders "
         f"photos in two rows of two: {views}. On the right half, two tall "
         f"{_FRAMING_SUMMARY[framing]}: (5) standing, front view at eye level, "

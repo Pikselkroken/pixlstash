@@ -33,7 +33,11 @@ from pixlstash.services.workflow_hash import (
     reduce_api_graph,
     reduce_ui_graph,
 )
-from pixlstash.utils.comfyui_utilities import PROMPT_FIELDS, is_api_format
+from pixlstash.utils.comfyui_utilities import (
+    PROMPT_FIELDS,
+    ZEROED_CONDITIONING_CLASSES,
+    is_api_format,
+)
 
 _PROMPT_SIDES = ("positive", "negative")
 
@@ -288,7 +292,7 @@ def _prompts_for(
         if "TextEncode" in node.class_type or _encodes_text(node):
             found.add(key)
             continue
-        if node.class_type == "ConditioningZeroOut":
+        if node.class_type in ZEROED_CONDITIONING_CLASSES:
             continue
         by_name = {name: (source, s) for name, source, s in node.inputs}
         if "positive" in by_name and "negative" in by_name:

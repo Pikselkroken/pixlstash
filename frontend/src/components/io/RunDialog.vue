@@ -374,9 +374,22 @@
               </template>
             </Tooltip>
           </p>
+          <!-- Photo look: camera, light and skin sentences the server adds
+               after this prompt, wherever the pre-flight offers them. Never
+               written into the box above. -->
+          <PromptAssistGroup
+            v-if="!promptUnset"
+            :assist="graphPrompt?.assist || null"
+            :model="photoLook"
+            :words="prompt"
+            :disabled="submitting"
+            @change="runPreflight()"
+          />
           <!-- A language model rewrites this prompt before the encoder reads
                it (`prompt.enhancer`). Per run and never remembered, like the
-               stack and the stages; off is `enhance_prompt: false`. -->
+               stack and the stages. Its default is the server's
+               (`prompt.enhancer_on`: off while Photo look adds lines), and a
+               touched box is sent either way. -->
           <template v-if="graphPrompt?.enhancer">
             <div class="rund-f rund-check">
               <input
@@ -392,8 +405,11 @@
               <label :for="enhanceId">Enhance prompt</label>
             </div>
             <p :id="`${enhanceId}-hint`" class="rund-note">
-              Rewrites your prompt with a language model first. Off sends your
-              words as written and skips loading that model.
+              {{
+                photoLook.on.value && !enhancePrompt && enhanceChoice === null
+                  ? "Off because Photo look is on: the enhancer would rewrite the photo look lines. You can still turn it on."
+                  : "Rewrites your prompt with a language model first. Off sends your words as written and skips loading that model."
+              }}
             </p>
           </template>
         </div>
@@ -1295,6 +1311,7 @@ import {
 } from "../../api/workflows";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
 import { useModelPickUp } from "../../composables/useModelPickUp";
+import { usePromptAssist } from "../../composables/usePromptAssist";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -1353,6 +1370,7 @@ import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunReasonNotice from "./RunReasonNotice.vue";
+import PromptAssistGroup from "./PromptAssistGroup.vue";
 import RunResetChip from "./RunResetChip.vue";
 import UpscaleChoice from "./UpscaleChoice.vue";
 
@@ -1481,6 +1499,11 @@ const fellBack = ref([]);
 const prompt = ref("");
 /** `RunGroup.prompt` of the last pre-flight: the graph's own prompt facts. */
 const graphPrompt = ref(null);
+/** Photo look's remembered choices for the Run dialog. */
+const photoLook = usePromptAssist(
+  computed(() => graphPrompt.value?.assist || null),
+  "photo",
+);
 const negative = ref("");
 const count = ref(1);
 const seedMode = ref("new");
@@ -2264,6 +2287,8 @@ async function setStage(name, on) {
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
   addedUpscale.value = false;
+  // Per run like the stages: a tick on one workflow says nothing about another.
+  enhanceChoice.value = null;
 }
 
 const upscale = useUpscaleStore();
@@ -2287,11 +2312,14 @@ async function setAddedUpscale(on) {
   await runPreflight();
 }
 
-/** The "Enhance prompt" box; off is sent as `enhance_prompt: false`. */
-const enhancePrompt = ref(true);
+/** The "Enhance prompt" box: the owner's tick, else the server's default. */
+const enhanceChoice = ref(null);
+const enhancePrompt = computed(
+  () => enhanceChoice.value ?? graphPrompt.value?.enhancer_on ?? true,
+);
 
 async function setEnhancePrompt(on) {
-  enhancePrompt.value = on;
+  enhanceChoice.value = on;
   // Off, the enhancer's model is no longer one the run needs.
   await runPreflight();
 }
@@ -4264,10 +4292,14 @@ function runBody() {
   if (addedUpscale.value && addedUpscaleOffered.value) {
     body.upscale = upscale.body();
   }
-  // Only off is sent. Not gated on the box being drawn: a pre-flight that
-  // failed hides it, and the run must still go as the owner left it. On a
-  // graph with no enhancer the server ignores it.
-  if (!enhancePrompt.value) body.enhance_prompt = false;
+  // Only a touched box is sent; untouched, the server decides (off while
+  // Photo look adds lines). Not gated on the box being drawn: a pre-flight
+  // that failed hides it, and the run must still go as the owner left it. On
+  // a graph with no enhancer the server ignores it.
+  if (enhanceChoice.value !== null) body.enhance_prompt = enhanceChoice.value;
+  // Absent is off: only a family with presets, and the group on, sends it.
+  const assist = photoLook.request();
+  if (assist) body.prompt_assist = assist;
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {
@@ -4966,7 +4998,8 @@ async function runPreflight() {
   preflightError.value = "";
   const askedFor = activeKey.value;
   try {
-    const answer = await preflightWorkflowRun(runBody());
+    const body = runBody();
+    const answer = await preflightWorkflowRun(body);
     // The popup has moved to another card since this was asked: its answer is
     // about a card nobody is looking at, and its rows must not become the set
     // a pin on the new card is written from.
@@ -5017,8 +5050,15 @@ async function runPreflight() {
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    const hadAssist = Boolean(graphPrompt.value?.assist);
     graphPrompt.value = answer?.groups?.[0]?.prompt || null;
     inputsKey.value = askedFor;
+    // The first answer on a family with presets was asked without them: ask
+    // again with Photo look, so its lines and the enhancer's default are the
+    // run's. Only when presets have just appeared, so never more than once.
+    if (!hadAssist && !body.prompt_assist && photoLook.request()) {
+      await runPreflight();
+    }
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
     // the two never disagree" - so a 4xx is this body being refused and is
@@ -5333,6 +5373,8 @@ async function submit() {
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
+    // Typed Photo look texts become entries once a run is sent with them.
+    photoLook.recordRun();
     if (props.source?.fromEditTab) {
       runDialog.editRun = {
         prompts,
