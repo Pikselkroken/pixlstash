@@ -1096,8 +1096,9 @@ them: a ComfyUI workflow draws **character sheets**, one picture with four
 passport photos and two body photos of the same person, and the sheets you keep
 are cut into six pictures each. The Sheets step has two modes, **Text** and
 **Reference and text**, and each lists only the workflows that can draw a sheet
-in it. PixlStash ships five that can: `Sheet-Qwen-Image-2.1` and
-`Sheet-Flux2-Klein-9B`, each with a `-Reference` twin, and
+in it. PixlStash ships seven that can: `Qwen-Image 2.1 Sheet` and
+`FLUX.2 Klein 9B Sheet`, each with a `from Reference` twin;
+`MiniMax H3 Image Sheet (PixlStash)` with its `from Reference` twin; and
 `Sheet-MiniMax-H3-Reference`. Your own workflow is listed too once it meets the
 rules below. Add it from Workflows (drop the `.json` on the screen) first.
 Only MOSS-Image's text sheets have been probed for how well they hold the
@@ -1134,8 +1135,8 @@ different person.
 - **A text-to-image graph:** every sampler starts from an empty latent, and no
   picture feeds the model's reference input. A workflow that reads a picture
   as a reference is not listed here.
-- **Sizes:** MiniMax H3 and H3 Image draw at Large or 4K and the other models at Small,
-  Medium or Large; the rest are greyed out.
+- **Sizes:** MiniMax H3 and H3 Image draw at Large or 4K, 4K by default; the other
+  models at Small, Medium or Large, Large by default. The rest are greyed out.
 - **Prompt:** MOSS-Image is sent a layout prompt (the JSON
   `MOSSImageLayoutPrompt` emits, with a box per photo). Every other model is
   sent the sheet in plain sentences. The workflow needs a positive prompt
