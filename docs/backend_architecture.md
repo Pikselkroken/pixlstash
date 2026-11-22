@@ -10602,8 +10602,8 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
 #### A run without the blank picture
 
 A MiniMax H3 Image text workflow feeds its conditioning encoder a blank picture
-(`images.image_1` from an `EmptyImage`, no `vae`), which calms the colour and
-narrows the variety between seeds. `comfyui_utilities.blank_picture_inputs`
+(`images.image_1` from an `EmptyImage`, no `vae`), which gives less crunch in
+skin and hair but narrows the variety between seeds. `comfyui_utilities.blank_picture_inputs`
 finds it by structure, not by node id or workflow name: an `EmptyImage` every
 reader of which takes it on an image input of a conditioning encoder (a node
 with a `clip` and no conditioning input of its own, the rule the prompt walk

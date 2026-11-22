@@ -413,7 +413,8 @@
               <label :for="blankId">Blank picture</label>
             </div>
             <p :id="`${blankId}-hint`" class="rund-note">
-              Calmer colour, less variety between seeds. Off draws without it.
+              Less crunch, but different seeds draw more alike people. Off draws
+              without it.
             </p>
           </template>
         </div>
