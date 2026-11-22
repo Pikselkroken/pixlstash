@@ -912,3 +912,22 @@ def test_the_editor_view_of_a_video_graph_reads_the_same_prompt():
     }
     info = extract_generation_info(ui_only)
     assert info["positive_prompt"] == "a lighthouse turning in fog"
+
+
+def test_a_sampler_node_names_the_sampler_in_the_recipe_settings():
+    """SamplerLCM has no `sampler_name` input: the class is the sampler, so a
+    SamplerCustomAdvanced graph has to be read for it, or the recipe's Settings
+    list shows no sampler (MiniMax H3 Image's built-ins)."""
+    graph = json.loads(json.dumps(_ZEROED_NEGATIVE))
+    graph["6"] = {
+        "class_type": "SamplerLCM",
+        "inputs": {"s_noise": 1.1, "s_noise_end": 0.9, "noise_clip_std": 0.0},
+    }
+    graph["7"] = {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {"guider": ["5", 0], "sampler": ["6", 0]},
+    }
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "lcm"
+    # A KSamplerSelect still names its own choice.
+    graph["6"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}}
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "euler"
