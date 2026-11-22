@@ -6446,17 +6446,29 @@ def test_a_built_in_the_owner_edited_keeps_its_graph_through_the_rename(
     ]
 
 
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "MiniMax-H3-Image-Edit.json",
+        "MiniMax-H3-Image-Edit-nvfp4-TE.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+    ],
+)
 def test_a_retired_built_in_is_hidden_once_and_an_unhide_sticks(
-    workflow_env, tmp_path, monkeypatch
+    workflow_env, tmp_path, monkeypatch, retired
 ):
     """A retired built-in the owner never edited is hidden when a release stops
-    shipping it. Wrong if a later start hides it again over the owner's choice
-    to show it, or if it is hidden before the release retires it."""
+    shipping it: the Edit and the NVFP4 text-encoder twins. Wrong if a later
+    start hides it again over the owner's choice to show it, or if it is hidden
+    before the release retires it."""
     hub, owner = workflow_env.server.hub, workflow_env.owner
     builtin = _builtin_folder(
         tmp_path,
         monkeypatch,
-        {"MiniMax-H3-Image-Edit.json": "MiniMax H3 Image T2I (PixlStash).json"},
+        {retired: "MiniMax H3 Image T2I (PixlStash).json"},
     )
     (wid,) = comfyui_module.list_builtin_workflows(hub)
     assert _detail(owner, wid)["hidden"] is False
@@ -6519,6 +6531,29 @@ def test_a_built_in_whose_store_fails_on_the_hub_is_logged_and_the_rest_listed(
         (filed,) = comfyui_module.list_builtin_workflows(hub)
     assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "B-listed"
     assert [r for r in caplog.records if "A-broken.json" in r.getMessage()]
+
+
+def test_a_rename_that_fails_on_the_hub_is_logged_and_the_built_ins_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """Moving a renamed built-in's record can raise sqlite3.Error. Wrong if
+    that ends the start-up pass, so no built-in is listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    old = next(iter(comfyui_module.BUILTIN_RENAMES))
+
+    def rename(hub_, old_, new_):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "_rename_builtin", rename)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "FLUX.2 Klein 9B Edit"
+    assert [r for r in caplog.records if old in r.getMessage()]
 
 
 def test_a_built_in_whose_refresh_fails_on_the_hub_is_logged_and_the_rest_listed(

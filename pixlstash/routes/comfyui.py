@@ -207,7 +207,18 @@ BUILTIN_RENAMES: dict[str, str] = {
 }
 # Built-ins a release took out. A live copy the owner did not edit is hidden;
 # one they edited is left on the Workflows page.
-BUILTIN_RETIRED: frozenset[str] = frozenset({"MiniMax-H3-Image-Edit.json"})
+BUILTIN_RETIRED: frozenset[str] = frozenset(
+    {
+        "MiniMax-H3-Image-Edit.json",
+        # The NVFP4 text-encoder twins: every MiniMax H3 Image built-in now
+        # loads the template's int8 encoder.
+        "MiniMax-H3-Image-Edit-nvfp4-TE.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+    }
+)
 # Prefix on a retired built-in's origin row once it has been handled, so the
 # hide happens once and an owner who shows it again is not overruled.
 _RETIRED_PREFIX = "retired:"
@@ -1021,10 +1032,30 @@ def _migrate_builtin_names(hub) -> None:
     a renamed row is found under its new name, and a retired one is re-keyed.
     Callers hold ``workflow_inbox.INBOX_LOCK``.
     """
+    # Each is guarded on its own, as the store and the refresh are: a hub write
+    # that fails must not end the start-up pass for every built-in after it.
+    # Both are idempotent, so the next start tries again.
     for old, new in BUILTIN_RENAMES.items():
-        _rename_builtin(hub, old, new)
+        try:
+            _rename_builtin(hub, old, new)
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Built-in workflow %s could not be renamed to %s; the next "
+                "start tries again: %s",
+                old,
+                new,
+                exc,
+            )
     for name in sorted(BUILTIN_RETIRED):
-        _retire_builtin(hub, name)
+        try:
+            _retire_builtin(hub, name)
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Built-in workflow %s could not be retired; the next start "
+                "tries again: %s",
+                name,
+                exc,
+            )
 
 
 def list_builtin_workflows(hub) -> list[str]:
