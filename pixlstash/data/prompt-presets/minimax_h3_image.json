@@ -1,6 +1,6 @@
 {
   "family": "minimax_h3_image",
-  "version": 1,
+  "version": 2,
   "contexts": {
     "photo": {
       "default_on": true,
@@ -17,6 +17,41 @@
               "finish": "It looks like an ordinary unedited iPhone photo: natural colours, true-to-life skin tones, the slight HDR flatness phones give a bright window, a touch of sensor noise in the shadows, and sharpness that falls off softly rather than looking crisp or retouched.",
               "evidence": "tested",
               "note": "Text and finish are the tested camera and closing-look lines; the finish goes last."
+            },
+            {
+              "id": "pro_dslr",
+              "label": "Professional DSLR",
+              "text": "Taken by a professional photographer on a full-frame DSLR with an 85 mm lens at f/2: sharp eyes, soft background blur.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "mirrorless",
+              "label": "Mirrorless",
+              "text": "Taken on a modern mirrorless camera with a 35 mm lens: natural perspective, crisp but not over-sharpened.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "film_slr",
+              "label": "35 mm film",
+              "text": "Shot on 35 mm colour film with a manual SLR: fine grain, soft warm colours, gentle highlights.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "disposable",
+              "label": "Disposable camera",
+              "text": "Taken with a cheap disposable film camera and its flash: grainy, slightly soft, washed-out colours.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "older_phone",
+              "label": "Older phone",
+              "text": "Taken on a mid-2010s smartphone: slightly soft, limited dynamic range, blown highlights and smudgy shadow noise.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
             }
           ]
         },
@@ -31,6 +66,55 @@
               "text": "Window daylight from one side, gentle shadows under the jaw, small window catchlights in the eyes.",
               "evidence": "tested",
               "note": "The content document's tested phrase, capitalised and closed with a full stop."
+            },
+            {
+              "id": "overcast",
+              "label": "Overcast",
+              "text": "Overcast daylight, soft and even, with no hard shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "golden_hour",
+              "label": "Golden hour",
+              "text": "Low golden-hour sun from one side, warm light and long shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "winter_daylight",
+              "label": "Winter daylight",
+              "text": "Pale winter daylight, cool and low, from a white sky.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "dusk",
+              "label": "Dusk",
+              "text": "Blue-hour dusk light after sunset, cool and dim.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "street_night",
+              "label": "Street light at night",
+              "text": "Night, lit only by orange street lights from above, with deep shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "flash",
+              "label": "On-camera flash",
+              "text": "Lit by a single direct on-camera flash, with a faint shadow on the wall behind.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "office",
+              "label": "Office",
+              "text": "Flat overhead office fluorescent lighting, slightly cool.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
             }
           ]
         },
