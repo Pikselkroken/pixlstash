@@ -1332,7 +1332,9 @@ def sheet_cells(
         return cells
 
     step, sure = "colour gutters", True
-    cells = _colour_cells(gutter) if gutter is not None else []
+    # The white frame some models draw round each photo goes too, as in the
+    # other two steps.
+    cells = trimmed(_colour_cells(gutter)) if gutter is not None else []
     if not _laid_out(cells, width, height):
         if gutter is not None:
             gray = np.where(gutter, 255, gray).astype(np.int16)
