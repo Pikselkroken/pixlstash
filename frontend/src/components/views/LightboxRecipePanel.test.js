@@ -305,6 +305,15 @@ describe("LightboxRecipePanel", () => {
       const clamp = wrapper.find(".recipe-clamp--prompt");
       expect(promptToggle(wrapper).text()).toBe("Show full prompt");
       expect(promptToggle(wrapper).attributes("aria-expanded")).toBe("false");
+      expect(promptToggle(wrapper).attributes("aria-controls")).toBe(
+        clamp.attributes("id"),
+      );
+      expect(negativeToggle(wrapper).attributes("aria-controls")).toBe(
+        wrapper.find(".recipe-clamp--negative").attributes("id"),
+      );
+      expect(clamp.attributes("id")).not.toBe(
+        wrapper.find(".recipe-clamp--negative").attributes("id"),
+      );
       expect(clamp.classes()).not.toContain("recipe-clamp--open");
 
       await promptToggle(wrapper).trigger("click");

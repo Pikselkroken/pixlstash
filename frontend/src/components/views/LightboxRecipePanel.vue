@@ -84,6 +84,7 @@
                or a paste into ComfyUI needs. Cut at 15 lines so a long prompt
                does not push Models and Settings out of reach. -->
           <div
+            :id="promptClamp.id"
             :ref="promptClamp.bind"
             class="recipe-clamp recipe-clamp--prompt"
             :class="{ 'recipe-clamp--open': promptClamp.expanded }"
@@ -112,6 +113,7 @@
             v-if="promptClamp.overflows"
             class="recipe-sec-act recipe-clamp-toggle"
             type="button"
+            :aria-controls="promptClamp.id"
             :aria-expanded="promptClamp.expanded"
             @click="promptClamp.toggle"
           >
@@ -194,6 +196,7 @@
                      at 15. -->
                 <template v-if="row.clamp">
                   <div
+                    :id="negativeClamp.id"
                     :ref="negativeClamp.bind"
                     class="recipe-clamp recipe-clamp--negative"
                     :class="{ 'recipe-clamp--open': negativeClamp.expanded }"
@@ -204,6 +207,7 @@
                     v-if="negativeClamp.overflows"
                     class="recipe-sec-act recipe-clamp-toggle"
                     type="button"
+                    :aria-controls="negativeClamp.id"
                     :aria-expanded="negativeClamp.expanded"
                     @click="negativeClamp.toggle"
                   >
@@ -662,7 +666,7 @@ const promptRows = computed(() => promptOutline(props.recipe?.positive_prompt));
  * re-created as the filmstrip walks.
  */
 function useLineClamp() {
-  const state = reactive({ expanded: false, overflows: false });
+  const state = reactive({ id: useId(), expanded: false, overflows: false });
   let el = null;
   const measure = () => {
     if (el && !state.expanded) {
@@ -1272,7 +1276,10 @@ async function copyPrompt() {
   overflow-wrap: anywhere;
 }
 
-/* `lh` is the block's own line height, so the cut lands between two lines. */
+/* `lh` is the block's own line height, so plain text is cut between two lines.
+   A JSON prompt's fields mix in smaller keys and gaps, so there the cut is
+   15 lines' height rather than an exact count. The 1.45 matches
+   `.recipe-prompt`, which it must for `lh` to be that text's line. */
 .recipe-clamp {
   overflow: hidden;
 }
