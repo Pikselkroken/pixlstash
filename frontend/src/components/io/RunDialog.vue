@@ -2264,7 +2264,6 @@ async function setStage(name, on) {
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
   addedUpscale.value = false;
-  enhancePrompt.value = true;
 }
 
 const upscale = useUpscaleStore();

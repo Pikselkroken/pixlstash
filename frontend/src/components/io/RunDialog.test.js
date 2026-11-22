@@ -6261,21 +6261,6 @@ describe("the prompt enhancer", () => {
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0].enhance_prompt).toBe(false);
   });
-
-  it("is on again for the next workflow, whatever the last one was set to", async () => {
-    preflightWorkflowRun.mockResolvedValue(answer(true));
-    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    await box(wrapper).setValue(false);
-    await flushPromises();
-    wrapper.vm.workflowId = OTHER;
-    await flushPromises();
-    expect(box(wrapper).element.checked).toBe(true);
-    runWorkflowCard.mockClear();
-    await wrapper.vm.submit();
-    await flushPromises();
-    expect(runWorkflowCard).toHaveBeenCalledTimes(1);
-    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("enhance_prompt");
-  });
 });
 
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
