@@ -6609,6 +6609,20 @@ describe("the blank picture", () => {
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0].blank_picture).toBe(false);
   });
+
+  it("off on one workflow is on again on the next, and is not sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(false);
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("blank_picture");
+  });
 });
 
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
