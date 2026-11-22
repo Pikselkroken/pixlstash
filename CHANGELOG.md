@@ -21,8 +21,8 @@
 - *Photo look* adds tested camera, light and skin lines after your prompt, on
   by default for MiniMax H3 Image. Your own words stay first, and the recipe
   shows them apart from what was added.
-- The bundled ComfyUI-PixlStash nodes (1.9.3) add these workflows to
-  ComfyUI's template list, with and without PixlStash's nodes.
+- ComfyUI-PixlStash 1.9.3, installed from ComfyUI Manager, adds these
+  workflows to ComfyUI's template list, with and without PixlStash's nodes.
 
 ## Character sheets and training sets
 
