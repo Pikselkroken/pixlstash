@@ -57,6 +57,7 @@ from pixlstash.utils.comfyui_utilities import (
     is_api_format,
     is_comfy_workflow,
     loaded_model_widgets,
+    rewritten_prompt_input,
 )
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY, stamp_workflow_id
 
@@ -827,6 +828,20 @@ def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, False)
     assert (report["enhancer"], json.dumps(graph)) == (False, before)
+
+
+def test_a_string_replace_whose_find_is_a_link_is_not_the_rewritten_prompt():
+    """An enhancer's StringReplace takes ``find`` from a link as well as a
+    literal. Wrong if the walk compares a link with the string (a TypeError at
+    every start of the run) or reads the replace node as the prompt: the
+    TextGenerate's own ``prompt`` is what the run writes."""
+    graph = {
+        "9": _node("CLIPTextEncode", text=["5", 0]),
+        "5": _node("TextGenerate", prompt=["3", 0]),
+        "3": _node("StringReplace", string="Rewrite: <p>", find=["12", 0], replace="x"),
+        "12": _node("PrimitiveString", value="<p>"),
+    }
+    assert rewritten_prompt_input(graph, "9", "text") == ("5", "prompt")
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
