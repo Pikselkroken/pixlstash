@@ -15378,8 +15378,6 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "blank_picture": False,
         "sampler_choice": False,
         "sampler": None,
-        "sampler_choice": False,
-        "sampler": None,
         "recorded": None,
         "assist_applied": False,
     }
