@@ -1167,6 +1167,27 @@ def test_magenta_gutters_are_cut_away_whatever_their_shade():
         assert all(abs(a - b) <= 3 for a, b in zip(cell, photo)), (cell, photo)
 
 
+def test_a_white_frame_inside_a_magenta_gutter_is_trimmed_too():
+    """A photo framed in white on a magenta sheet: the panel is the photo, not
+    its frame, as the seam and size steps already cut it."""
+    pixels = _magenta()
+    frame = 24
+    for left, top, right, bottom in _ON_MAGENTA:
+        pixels[top : top + frame, left:right] = 250
+        pixels[bottom - frame : bottom, left:right] = 250
+        pixels[top:bottom, left : left + frame] = 250
+        pixels[top:bottom, right - frame : right] = 250
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    assert clean
+    for cell, (left, top, right, bottom) in zip(cells, _ON_MAGENTA):
+        assert cell[0] >= left + frame and cell[1] >= top + frame, (cell, left, top)
+        assert cell[2] <= right - frame and cell[3] <= bottom - frame, (
+            cell,
+            right,
+            bottom,
+        )
+
+
 def test_a_pink_garment_at_a_panel_edge_stays_in_its_panel():
     """A sleeve in the gutter's own pink, reaching the photo's bottom edge:
     it is the photo's, so the panel loses no more than the gutter's edge."""
