@@ -1138,6 +1138,130 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  describe("picked by hand while the step is still restoring", () => {
+    const H3_CARD = {
+      id: "manual:h3",
+      name: "MiniMax H3 sheet",
+      type: "txt2img",
+      last_used: "2026-11-12T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "minimax_h3" }],
+    };
+    const CACHE_KEY = "pixlstash:sheetWorkflowCards:v1";
+    /** Open once to fill the card cache, then open again with every workflow
+     * check held until the returned `release` is called. */
+    async function secondOpen({ keepChoices, firstOpen = async () => {} }) {
+      api.fetchCharacterSetSuggestion.mockResolvedValue(
+        suggestion({ stillsGroup: emptyGroup() }),
+      );
+      sheetsWorld({ description: "Adult woman, copper bob" });
+      gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, H3_CARD] });
+      let wrapper = mountDialog();
+      await flushPromises();
+      await firstOpen(wrapper);
+      wrapper.unmount();
+      if (!keepChoices) {
+        const cache = localStorage.getItem(CACHE_KEY);
+        localStorage.clear();
+        localStorage.setItem(CACHE_KEY, cache);
+      }
+      let release;
+      const held = new Promise((r) => (release = r));
+      gen.preflightWorkflowRun.mockImplementation(() =>
+        held.then(() => ({ ok: true, groups: [{ reasons: [] }] })),
+      );
+      wrapper = mountDialog();
+      await flushPromises();
+      return { wrapper, release };
+    }
+
+    it("a size picked before the checks land is still the size after", async () => {
+      const { wrapper, release } = await secondOpen({ keepChoices: false });
+      const size = (label) =>
+        wrapper.findAll('[data-testid="cs-size"] button').find((b) => b.text() === label);
+      await size("Large").trigger("click");
+      release();
+      await flushPromises();
+      // H3 starts at 4K, but not over the owner's Large.
+      expect(size("Large").attributes("aria-checked")).toBe("true");
+      expect(size("4K").attributes("aria-checked")).toBe("false");
+      wrapper.unmount();
+    });
+
+    it("a workflow picked in the toolbar survives the restore of the remembered one", async () => {
+      const workflowSelect = (wrapper) =>
+        wrapper
+          .findAllComponents({ name: "AppSelect" })
+          .find((c) => c.props("label") === "Sheet workflow");
+      const { wrapper, release } = await secondOpen({
+        keepChoices: true,
+        // The first open picks MOSS, then H3: H3 is remembered.
+        firstOpen: async (first) => {
+          for (const id of [MOSS_CARD.id, H3_CARD.id]) {
+            workflowSelect(first).vm.$emit("update:modelValue", id);
+            await flushPromises();
+          }
+        },
+      });
+      const select = () => workflowSelect(wrapper);
+      expect(select().props("modelValue")).toBe(H3_CARD.id);
+      select().vm.$emit("update:modelValue", MOSS_CARD.id);
+      await flushPromises();
+      release();
+      await flushPromises();
+      expect(select().props("modelValue")).toBe(MOSS_CARD.id);
+      wrapper.unmount();
+    });
+  });
+
+  it("the Photo look on a sheet says what it adds after the sheet prompt", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = (parts) => ({
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts,
+    });
+    // As the server does: the look's lines are added only to a prompt with words.
+    gen.preflightWorkflowRun.mockImplementation(async (body) => ({
+      ok: true,
+      groups: [
+        {
+          reasons: [],
+          prompt: {
+            assist: assist(
+              body.prompt?.trim()
+                ? [{ category: "look", id: "agency", text: "Agency digitals." }]
+                : [],
+            ),
+          },
+        },
+      ],
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"] .pa-foot').text()).toBe(
+      "Adds 2 words after the sheet prompt.",
+    );
+    await wrapper.find('[data-testid="pa-show-full"]').trigger("click");
+    const lines = wrapper.findAll('[data-testid="pa-full"] .pa-line').map((l) => l.text());
+    expect(lines[0]).toMatch(/^Sheet prompt ?Written from the choices above/);
+    expect(lines[0]).not.toContain("copper bob");
+    expect(lines[1]).toContain("Agency digitals.");
+    wrapper.unmount();
+  });
+
   it("a first open holds the Photo look's place and the workflow select until the checks answer", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -1189,6 +1313,72 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
     expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("a check that throws is not remembered for the next open", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    gen.getWorkflowCard.mockRejectedValue(new Error("502 Bad Gateway"));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(localStorage.getItem("pixlstash:sheetWorkflowCards:v1")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("a sheet copy still being checked holds no Photo look place", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman" });
+    const sdxl = {
+      id: "auto:sdxl",
+      name: "SDXL",
+      type: "txt2img",
+      models: [{ base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    const flux = {
+      id: "auto:flux",
+      name: "Flux",
+      type: "txt2img",
+      models: [{ base_model_family: "flux" }],
+    };
+    const copy = {
+      id: "manual:sdxl-sheet",
+      name: "SDXL (sheet)",
+      type: "txt2img",
+      sheet_layout: true,
+      models: [{ kind: "checkpoint", base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    gen.listWorkflowCards
+      .mockResolvedValueOnce({ cards: [MOSS_CARD, sdxl, flux] })
+      .mockResolvedValue({ cards: [MOSS_CARD, sdxl, flux, copy] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    // The copy's check is out for the rest of the test: it is chosen first.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    gen.getWorkflowCard.mockImplementation((id) =>
+      id === copy.id ? new Promise(() => {}) : answer(id),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Copy")
+      .vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-convert-text"] button').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .props("modelValue"),
+    ).toBe(copy.id);
+    // A regions sheet never shows a Photo look, so nothing holds its place.
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

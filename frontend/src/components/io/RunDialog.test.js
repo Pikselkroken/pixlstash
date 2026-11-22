@@ -6526,6 +6526,19 @@ describe("Photo look", () => {
     expect(field(wrapper, "camera").props("modelValue")).toBe("");
   });
 
+  it("with no prompt yet, the foot says the lines come with words, never that nothing is added", async () => {
+    // As the server does: the look's lines are added only to a prompt with words.
+    preflightWorkflowRun.mockImplementation(async (body) =>
+      answer({ ...ASSIST, parts: body.prompt?.trim() ? ASSIST.parts : [] }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const foot = () => group(wrapper).find(".pa-foot > span").text();
+    expect(foot()).toBe("Adds its lines once your prompt has words.");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    expect(foot()).toBe("Nothing added to your prompt.");
+  });
+
   it("Show full prompt reads your words, then each added line marked + and named", async () => {
     preflightWorkflowRun.mockResolvedValue(answer());
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
