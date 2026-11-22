@@ -1,6 +1,6 @@
 // The lightbox's Recipe section (#1313): what it draws, and where it sends you.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -271,6 +271,76 @@ describe("LightboxRecipePanel", () => {
       .find((sec) => sec.text().startsWith("Prompt"));
     await promptHeading.find(".recipe-sec-act").trigger("click");
     expect(copyText).toHaveBeenCalledWith(json);
+  });
+
+  // The prompt is cut at 15 lines and the negative at 10 (CSS, which jsdom
+  // does not lay out). What is tested is the toggle: offered only when the
+  // text is taller than its box, which jsdom never is unless told.
+  it("offers no toggle when nothing is cut", async () => {
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.find(".recipe-clamp--prompt").exists()).toBe(true);
+    expect(wrapper.find(".recipe-clamp--negative").exists()).toBe(true);
+    expect(wrapper.find(".recipe-clamp-toggle").exists()).toBe(false);
+  });
+
+  describe("a prompt taller than its lines", () => {
+    let spies = [];
+    beforeEach(() => {
+      spies = [
+        vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(900),
+        vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(300),
+      ];
+    });
+    afterEach(() => spies.forEach((spy) => spy.mockRestore()));
+
+    const promptToggle = (wrapper) =>
+      wrapper.find(".recipe-clamp--prompt + .recipe-clamp-toggle");
+    const negativeToggle = (wrapper) =>
+      wrapper.find(".recipe-clamp--negative + .recipe-clamp-toggle");
+
+    it("opens the full prompt in place, and closes it again", async () => {
+      const wrapper = render();
+      await flushPromises(); // the measure lands as the ref is set
+      const clamp = wrapper.find(".recipe-clamp--prompt");
+      expect(promptToggle(wrapper).text()).toBe("Show full prompt");
+      expect(promptToggle(wrapper).attributes("aria-expanded")).toBe("false");
+      expect(clamp.classes()).not.toContain("recipe-clamp--open");
+
+      await promptToggle(wrapper).trigger("click");
+      expect(clamp.classes()).toContain("recipe-clamp--open");
+      expect(promptToggle(wrapper).text()).toBe("Show less");
+      expect(promptToggle(wrapper).attributes("aria-expanded")).toBe("true");
+
+      await promptToggle(wrapper).trigger("click");
+      expect(clamp.classes()).not.toContain("recipe-clamp--open");
+    });
+
+    it("gives the negative prompt its own toggle", async () => {
+      const wrapper = render();
+      await flushPromises(); // the measure lands as the ref is set
+      await negativeToggle(wrapper).trigger("click");
+      expect(wrapper.find(".recipe-clamp--negative").classes()).toContain(
+        "recipe-clamp--open",
+      );
+      expect(wrapper.find(".recipe-clamp--prompt").classes()).not.toContain(
+        "recipe-clamp--open",
+      );
+    });
+
+    // The panel outlives the picture as the filmstrip walks.
+    it("starts the next picture closed", async () => {
+      const wrapper = render();
+      await flushPromises(); // the measure lands as the ref is set
+      await promptToggle(wrapper).trigger("click");
+      await negativeToggle(wrapper).trigger("click");
+      await wrapper.setProps({
+        recipe: { ...RECIPE, positive_prompt: "another prompt" },
+      });
+      await flushPromises();
+      expect(wrapper.find(".recipe-clamp--open").exists()).toBe(false);
+      expect(promptToggle(wrapper).text()).toBe("Show full prompt");
+    });
   });
 
   // The v1.12 design drops the raw graph; it is kept because pasting a

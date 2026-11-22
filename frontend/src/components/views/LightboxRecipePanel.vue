@@ -81,26 +81,45 @@
           </div>
           <!-- A JSON prompt is drawn as its fields, not its braces. The copy
                button above still copies the raw text, which is what a re-run
-               or a paste into ComfyUI needs. -->
-          <div v-if="promptRows" class="recipe-prompt recipe-prompt--fields">
-            <p
-              v-for="(row, index) in promptRows"
-              :key="index"
-              class="recipe-prompt-row"
-              :class="{ 'recipe-prompt-row--divider': row.divider }"
-              :style="{ '--prompt-depth': Math.min(row.depth, 3) }"
-            >
-              <span v-if="row.key" class="recipe-prompt-key">{{
-                row.key
-              }}</span>
-              <span
-                v-if="row.text"
-                :class="{ 'recipe-prompt-numbers': row.numeric }"
-                >{{ row.text }}</span
+               or a paste into ComfyUI needs. Cut at 15 lines so a long prompt
+               does not push Models and Settings out of reach. -->
+          <div
+            :ref="promptClamp.bind"
+            class="recipe-clamp recipe-clamp--prompt"
+            :class="{ 'recipe-clamp--open': promptClamp.expanded }"
+          >
+            <div v-if="promptRows" class="recipe-prompt recipe-prompt--fields">
+              <p
+                v-for="(row, index) in promptRows"
+                :key="index"
+                class="recipe-prompt-row"
+                :class="{ 'recipe-prompt-row--divider': row.divider }"
+                :style="{ '--prompt-depth': Math.min(row.depth, 3) }"
               >
-            </p>
+                <span v-if="row.key" class="recipe-prompt-key">{{
+                  row.key
+                }}</span>
+                <span
+                  v-if="row.text"
+                  :class="{ 'recipe-prompt-numbers': row.numeric }"
+                  >{{ row.text }}</span
+                >
+              </p>
+            </div>
+            <p v-else class="recipe-prompt">{{ recipe.positive_prompt }}</p>
           </div>
-          <p v-else class="recipe-prompt">{{ recipe.positive_prompt }}</p>
+          <button
+            v-if="promptClamp.overflows"
+            class="recipe-sec-act recipe-clamp-toggle"
+            type="button"
+            :aria-expanded="promptClamp.expanded"
+            @click="promptClamp.toggle"
+          >
+            {{ promptClamp.expanded ? "Show less" : "Show full prompt" }}
+            <v-icon size="14">{{
+              promptClamp.expanded ? "mdi-chevron-up" : "mdi-chevron-down"
+            }}</v-icon>
+          </button>
         </template>
 
         <!-- Models. A chip that reached a shelf row is a link to it; one that
@@ -171,7 +190,34 @@
                   'recipe-kv-mono': row.mono,
                 }"
               >
-                {{ row.value }}
+                <!-- The negative prompt is cut at 10 lines, like the prompt
+                     at 15. -->
+                <template v-if="row.clamp">
+                  <div
+                    :ref="negativeClamp.bind"
+                    class="recipe-clamp recipe-clamp--negative"
+                    :class="{ 'recipe-clamp--open': negativeClamp.expanded }"
+                  >
+                    {{ row.value }}
+                  </div>
+                  <button
+                    v-if="negativeClamp.overflows"
+                    class="recipe-sec-act recipe-clamp-toggle"
+                    type="button"
+                    :aria-expanded="negativeClamp.expanded"
+                    @click="negativeClamp.toggle"
+                  >
+                    {{
+                      negativeClamp.expanded ? "Show less" : "Show full prompt"
+                    }}
+                    <v-icon size="14">{{
+                      negativeClamp.expanded
+                        ? "mdi-chevron-up"
+                        : "mdi-chevron-down"
+                    }}</v-icon>
+                  </button>
+                </template>
+                <template v-else>{{ row.value }}</template>
               </dd>
             </div>
           </dl>
@@ -392,7 +438,15 @@
  * the Run popup (F5, #1407), and the "Matches your saved recipe X" banner and
  * the Save button are live (F6, #1408).
  */
-import { computed, reactive, ref, useId, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  reactive,
+  ref,
+  useId,
+  watch,
+} from "vue";
 import { useRouter } from "vue-router";
 import SaveRecipeDialog from "../io/SaveRecipeDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -597,6 +651,52 @@ watch(
 
 const models = computed(() => props.recipe?.modelSlots || []);
 const promptRows = computed(() => promptOutline(props.recipe?.positive_prompt));
+
+/**
+ * Whether a clamped block has more than its lines, and whether it is open.
+ *
+ * The cut itself is CSS (`max-height` in `lh`, see `.recipe-clamp`); only a
+ * measurement can say whether anything was cut, so the toggle is offered only
+ * then. Re-measured when the panel resizes and when the lightbox moves to
+ * another picture, which also closes it again: this component is not
+ * re-created as the filmstrip walks.
+ */
+function useLineClamp() {
+  const state = reactive({ expanded: false, overflows: false });
+  let el = null;
+  const measure = () => {
+    if (el && !state.expanded) {
+      state.overflows = el.scrollHeight > el.clientHeight + 1;
+    }
+  };
+  const observer = new ResizeObserver(measure);
+  state.bind = (node) => {
+    if (node === el) return;
+    if (el) observer.unobserve(el);
+    el = node;
+    if (el) {
+      observer.observe(el);
+      measure();
+    } else {
+      state.overflows = false;
+    }
+  };
+  state.toggle = () => {
+    state.expanded = !state.expanded;
+  };
+  watch(
+    () => props.recipe,
+    () => {
+      state.expanded = false;
+      nextTick(measure);
+    },
+  );
+  onBeforeUnmount(() => observer.disconnect());
+  return state;
+}
+
+const promptClamp = useLineClamp();
+const negativeClamp = useLineClamp();
 
 // ── Saved recipes: does one of them already keep this look? ─────────────────
 //
@@ -908,6 +1008,7 @@ const settingRows = computed(() => {
           label: "Negative",
           value: recipe.negativePrompt || "none",
           absent: !recipe.negativePrompt,
+          clamp: Boolean(recipe.negativePrompt),
           note: recipe.negativePrompt || null,
         },
   );
@@ -1169,6 +1270,31 @@ async function copyPrompt() {
   line-height: 1.45;
   color: rgb(var(--v-theme-on-dark-surface));
   overflow-wrap: anywhere;
+}
+
+/* `lh` is the block's own line height, so the cut lands between two lines. */
+.recipe-clamp {
+  overflow: hidden;
+}
+
+.recipe-clamp--prompt {
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  max-height: 15lh;
+}
+
+.recipe-clamp--negative {
+  max-height: 10lh;
+}
+
+.recipe-clamp--open {
+  max-height: none;
+}
+
+/* Pulled left by its own padding, so its words line up with the text above. */
+.recipe-clamp-toggle {
+  margin-top: var(--space-1);
+  margin-left: calc(-1 * var(--space-2));
 }
 
 .recipe-prompt--fields {
