@@ -101,6 +101,8 @@ def _camera(document: dict) -> dict:
             lambda d: _camera(d)["options"][0].update(finish="no full stop"),
             "finish is not",
         ),
+        (lambda d: _camera(d)["options"].append("Phone"), "not an object"),
+        (lambda d: _camera(d)["options"][0].pop("id"), "reserved"),
     ],
 )
 def test_a_presets_file_that_breaks_a_rule_is_refused(break_it, complaint):

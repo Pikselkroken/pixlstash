@@ -409,6 +409,10 @@ def apply_prompts(
                     written.append((str(node_id), name))
         if side == "positive" and len(held) == 1:
             report["positive_text"] = held.pop()
+        elif side == "positive" and len(held) > 1:
+            # Prompt nodes that disagree hold no one set of owner's words, so
+            # no stamp can be said to belong to them either.
+            report["recorded"] = None
         if text is not None and not report[f"{side}_settable"]:
             logger.warning(
                 "The run's %s prompt was not applied: the graph has no prompt "

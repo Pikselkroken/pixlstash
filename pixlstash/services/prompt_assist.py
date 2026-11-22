@@ -133,9 +133,16 @@ def validate(document: dict, family: str) -> dict:
                 continue
             option_ids: set[str] = set()
             for option in options:
+                if not isinstance(option, dict):
+                    problems.append(f"{where}: an option is not an object")
+                    continue
                 problems += _option_problems(option, option_ids, where)
             default = category.get("default")
-            tested = {o["id"] for o in options if o.get("evidence") == "tested"}
+            tested = {
+                o.get("id")
+                for o in options
+                if isinstance(o, dict) and o.get("evidence") == "tested"
+            }
             if default != NONE and default not in tested:
                 problems.append(
                     f"{where}: default {default!r} is neither none nor a tested option"

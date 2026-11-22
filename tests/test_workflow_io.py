@@ -898,6 +898,36 @@ def _assisted(prompt: str, context: str = "photo") -> dict:
     return assemble(H3, context, {}, prompt)
 
 
+def test_prompt_nodes_that_disagree_report_neither_words_nor_a_stamp():
+    """Two positive encoders combined, one carrying a stamp: no one set of
+    owner's words, so the stamp is not reported as theirs either."""
+    stamp = _assisted("A woman.")
+    tail = " " + " ".join(part["text"] for part in stamp["parts"])
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "A woman." + tail, "clip": ["1", 1]},
+            "_meta": {PROMPT_ASSIST_META: stamp},
+        },
+        "4": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "A man.", "clip": ["1", 1]},
+        },
+        "5": {
+            "class_type": "ConditioningCombine",
+            "inputs": {"conditioning_1": ["2", 0], "conditioning_2": ["4", 0]},
+        },
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["1", 1]}},
+        "7": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 1, "model": ["1", 0], "positive": ["5", 0]},
+        },
+    }
+    report = run_service.apply_prompts(graph, None, None)
+    assert (report["positive_text"], report["recorded"]) == (None, None)
+
+
 def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
     graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
     stamp = _assisted("A woman.")
