@@ -93,25 +93,27 @@ def _t2i_graph() -> dict:
 @pytest.mark.parametrize(
     "name, expected",
     [
-        ("Flux2-Klein-Image-Edit.json", (("9",), ("76",), ("75:74",), ())),
-        ("Flux2-Klein-t2i.json", (("9",), (), ("75:74",), ("75:67",))),
+        ("FLUX.2 Klein 9B Edit.json", (("9",), ("76",), ("75:74",), ())),
+        ("FLUX.2 Klein 9B T2I.json", (("9",), (), ("75:74",), ("75:67",))),
         # The negative is ConditioningZeroOut of the positive: no prompt.
-        ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
-        ("Inpaint-MiniMax-H3-Image.json", (("11",), ("1",), ("6",), ())),
-        ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
-        ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
-        ("MiniMax-H3-Image-Edit.json", (("11",), ("1",), ("6",), ())),
-        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("6",), ())),
+        ("FLUX.2 Klein 9B Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax H3 Image Inpaint (PixlStash).json", (("11",), ("1",), ("6",), ())),
+        ("Qwen-Image 2.1 Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("Qwen-Image-Edit 2511 Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax H3 Image T2I (PixlStash).json", (("11",), (), ("6",), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
-        ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
-        ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
-        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("6",), ())),
-        ("Sheet-MiniMax-H3-Image-Reference.json", (("11",), ("1",), ("6",), ())),
+        ("FLUX.2 Klein 9B Sheet.json", (("18",), (), ("6",), ())),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", (("18",), ("1",), ("6",), ())),
+        ("MiniMax H3 Image Sheet (PixlStash).json", (("11",), (), ("6",), ())),
+        (
+            "MiniMax H3 Image Sheet from Reference (PixlStash).json",
+            (("11",), ("1",), ("6",), ()),
+        ),
         # MiniMax H3 guides with BasicGuider: no negative at all.
         ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
-        ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
-        ("Sheet-Qwen-Image-2.1-Reference.json", (("18",), ("1",), ("9",), ())),
-        ("Upscale-2x-RealESRGAN.json", (("4",), ("3",), (), ())),
+        ("Qwen-Image 2.1 Sheet.json", (("18",), (), ("9",), ())),
+        ("Qwen-Image 2.1 Sheet from Reference.json", (("18",), ("1",), ("9",), ())),
+        ("RealESRGAN Upscale 2x.json", (("4",), ("3",), (), ())),
     ],
 )
 def test_built_in_api_workflows(name, expected):
@@ -721,49 +723,43 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
     [
         # Exactly where the shipped files carried their tokens.
         (
-            "Flux2-Klein-Image-Edit.json",
+            "FLUX.2 Klein 9B Edit.json",
             [["76", "inputs", "image"]],
             [["75:74", "inputs", "text"]],
         ),
         # The encoder's text is wired from a primitive; the run fills that.
-        ("Flux2-Klein-t2i.json", [], [["76", "inputs", "value"]]),
+        ("FLUX.2 Klein 9B T2I.json", [], [["76", "inputs", "value"]]),
         (
-            "Inpaint-Flux2-Klein-9B.json",
+            "FLUX.2 Klein 9B Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "text"]],
         ),
         (
-            "Inpaint-MiniMax-H3-Image.json",
+            "MiniMax H3 Image Inpaint (PixlStash).json",
             [["1", "inputs", "image"]],
             # The words its prompt enhancer rewrites, not the encoder's wire.
             [["21", "inputs", "replace"]],
         ),
         (
-            "Inpaint-Qwen-Image-2.1.json",
+            "Qwen-Image 2.1 Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
         (
-            "Inpaint-Qwen-Image-Edit-2511.json",
+            "Qwen-Image-Edit 2511 Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
-        ("Sheet-Flux2-Klein-9B.json", [], [["6", "inputs", "text"]]),
+        ("FLUX.2 Klein 9B Sheet.json", [], [["6", "inputs", "text"]]),
         (
-            "Sheet-Flux2-Klein-9B-Reference.json",
+            "FLUX.2 Klein 9B Sheet from Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
         ),
+        ("MiniMax H3 Image T2I (PixlStash).json", [], [["6", "inputs", "prompt"]]),
+        ("MiniMax H3 Image Sheet (PixlStash).json", [], [["6", "inputs", "prompt"]]),
         (
-            "MiniMax-H3-Image-Edit.json",
-            [["1", "inputs", "image"]],
-            # The words its prompt enhancer rewrites, not the encoder's wire.
-            [["21", "inputs", "replace"]],
-        ),
-        ("MiniMax-H3-Image-t2i.json", [], [["6", "inputs", "prompt"]]),
-        ("Sheet-MiniMax-H3-Image.json", [], [["6", "inputs", "prompt"]]),
-        (
-            "Sheet-MiniMax-H3-Image-Reference.json",
+            "MiniMax H3 Image Sheet from Reference (PixlStash).json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "prompt"]],
         ),
@@ -772,13 +768,13 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             [["1", "inputs", "image"]],
             [["6", "inputs", "prompt"]],
         ),
-        ("Sheet-Qwen-Image-2.1.json", [], [["9", "inputs", "prompt"]]),
+        ("Qwen-Image 2.1 Sheet.json", [], [["9", "inputs", "prompt"]]),
         (
-            "Sheet-Qwen-Image-2.1-Reference.json",
+            "Qwen-Image 2.1 Sheet from Reference.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
-        ("Upscale-2x-RealESRGAN.json", [["3", "inputs", "image"]], []),
+        ("RealESRGAN Upscale 2x.json", [["3", "inputs", "image"]], []),
     ],
 )
 def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, caption):
@@ -790,60 +786,10 @@ def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, capti
     assert paths == {"image": image, "caption": caption}
 
 
-# MiniMax H3 Image's text encoder, as ComfyUI's template ships it and as the
-# smaller NVFP4 quantization each built-in's "-nvfp4-TE" twin loads instead.
-H3_TE_INT8 = "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
-H3_TE_NVFP4 = "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
-NVFP4_TE = "-nvfp4-TE"
-
-
-def _h3_te_pairs() -> list[tuple[str, str]]:
-    """Every built-in loading the int8 encoder, with its nvfp4 twin's name."""
-    return [
-        (path.name, f"{path.stem}{NVFP4_TE}.json")
-        for path in sorted(BUILT_IN.glob("*.json"))
-        if f'"clip_sha256": "{H3_TE_INT8}"' in path.read_text(encoding="utf-8")
-    ]
-
-
-def test_every_int8_text_encoder_built_in_has_its_nvfp4_twin():
-    """Wrong if a MiniMax H3 Image built-in ships without its nvfp4 TE twin,
-    or a twin is left behind by a regular file that was renamed."""
-    pairs = _h3_te_pairs()
-    assert len(pairs) == 5, pairs
-    twins = sorted(path.name for path in BUILT_IN.glob(f"*{NVFP4_TE}.json"))
-    assert twins == sorted(twin for _, twin in pairs)
-
-
-@pytest.mark.parametrize("regular, twin", _h3_te_pairs())
-def test_an_nvfp4_te_twin_is_its_regular_built_in_but_for_the_encoder(regular, twin):
-    """The twin may differ from its regular file in the main text encoder's
-    digest and its saved pictures' name, nothing else: the prompt enhancer's
-    own encoder, the sampler and every size stay the regular file's. So
-    PixlStash reads it the same way, prompt targets and all."""
-    graph, other = _load(BUILT_IN / regular), _load(BUILT_IN / twin)
-    (encoder,) = [
-        key
-        for key, node in other.items()
-        if node["inputs"].get("clip_sha256") == H3_TE_NVFP4
-    ]
-    other[encoder]["inputs"]["clip_sha256"] = H3_TE_INT8
-    (save,) = [key for key, node in other.items() if node["class_type"] == "SaveImage"]
-    prefix = graph[save]["inputs"]["filename_prefix"]
-    assert other[save]["inputs"]["filename_prefix"] == prefix + NVFP4_TE
-    other[save]["inputs"]["filename_prefix"] = prefix
-    assert other == graph
-    assert detect_workflow_io(_load(BUILT_IN / twin)) == detect_workflow_io(graph)
-    assert run_targets(_load(BUILT_IN / twin)) == run_targets(graph)
-    # The Workflows page shows the twin with its regular file's thumbnail.
-    thumbnails = [(BUILT_IN / name).with_suffix(".webp") for name in (regular, twin)]
-    assert [p.is_file() for p in thumbnails] == [thumbnails[0].is_file()] * 2
-
-
 def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     """Wrong if the run cuts the enhancer out (the encoder's wire replaced by the
     words) or the recipe reads its 38 KB instructions as the prompt."""
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
     report = run_service.apply_prompts(graph, "Make the hat purple.", None)
     assert report["unplaced"] == []
     assert graph["6"]["inputs"]["prompt"] == ["23", 0]
@@ -852,9 +798,7 @@ def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     assert recipe["positive_prompt"] == "Make the hat purple."
 
 
-@pytest.mark.parametrize(
-    "name", ["MiniMax-H3-Image-Edit.json", "Inpaint-MiniMax-H3-Image.json"]
-)
+@pytest.mark.parametrize("name", ["MiniMax H3 Image Inpaint (PixlStash).json"])
 def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
     """Off: the encoder reads the prompt and the enhancer's nodes are gone, its
     9B loader with them. On, or not asked: the graph runs as it is."""
@@ -879,7 +823,7 @@ def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
         == _load(BUILT_IN / name)["21"]["inputs"]["replace"]
     )
     # A graph with no enhancer says so, and is left alone.
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, False)
     assert (report["enhancer"], json.dumps(graph)) == (False, before)

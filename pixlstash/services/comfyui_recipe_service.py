@@ -51,7 +51,7 @@ _object_info_inflight_lock = threading.Lock()
 
 # ComfyUI's own seed ceiling for the core sampler nodes. Note this is 64-bit,
 # NOT the 32-bit limit the t2i endpoint validates against: the shipped
-# Flux2-Klein-Image-Edit template ships noise_seed 432262096973502, which a
+# FLUX.2 Klein 9B Edit template ships noise_seed 432262096973502, which a
 # 32-bit check would reject as invalid on our own built-in.
 MAX_SEED_64 = 2**64 - 1
 
@@ -1194,7 +1194,7 @@ def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     by following a link from a real seed consumer. ``PrimitiveInt`` carries
     ``control_after_generate`` unconditionally, including when it is driving
     width or height - scanning it directly would randomize the image
-    dimensions, which the shipped ``Flux2-Klein-t2i`` template would hit.
+    dimensions, which the shipped ``FLUX.2 Klein 9B T2I`` template would hit.
 
     Args:
         prompt_graph: The API-format graph.

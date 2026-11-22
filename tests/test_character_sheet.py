@@ -461,15 +461,13 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
 @pytest.mark.parametrize(
     ("name", "references"),
     [
-        ("Sheet-Flux2-Klein-9B.json", 0),
-        ("Sheet-Flux2-Klein-9B-Reference.json", 1),
-        ("Sheet-MiniMax-H3-Image.json", 0),
-        ("Sheet-MiniMax-H3-Image-nvfp4-TE.json", 0),
-        ("Sheet-MiniMax-H3-Image-Reference.json", 1),
-        ("Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json", 1),
+        ("FLUX.2 Klein 9B Sheet.json", 0),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", 1),
+        ("MiniMax H3 Image Sheet (PixlStash).json", 0),
+        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1),
         ("Sheet-MiniMax-H3-Reference.json", 1),
-        ("Sheet-Qwen-Image-2.1.json", 0),
-        ("Sheet-Qwen-Image-2.1-Reference.json", 1),
+        ("Qwen-Image 2.1 Sheet.json", 0),
+        ("Qwen-Image 2.1 Sheet from Reference.json", 1),
     ],
 )
 def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
@@ -509,12 +507,9 @@ _H3_IMAGE_OUTPUTS = {
 @pytest.mark.parametrize(
     "name",
     [
-        "MiniMax-H3-Image-t2i.json",
-        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
-        "Sheet-MiniMax-H3-Image.json",
-        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
-        "Sheet-MiniMax-H3-Image-Reference.json",
-        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
+        "MiniMax H3 Image Sheet from Reference (PixlStash).json",
     ],
 )
 def test_the_h3_image_sheets_and_t2i_draw_with_lcm_and_a_run_still_reaches_them(
@@ -548,10 +543,8 @@ def test_the_h3_image_sheets_and_t2i_draw_with_lcm_and_a_run_still_reaches_them(
 @pytest.mark.parametrize(
     "name",
     [
-        "MiniMax-H3-Image-t2i.json",
-        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
-        "Sheet-MiniMax-H3-Image.json",
-        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
     ],
 )
 def test_the_h3_image_text_workflows_condition_on_a_blank_picture_never_drawn_from(

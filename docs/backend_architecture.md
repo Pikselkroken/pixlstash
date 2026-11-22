@@ -556,7 +556,7 @@ Stack placement for these graphs therefore does **not** come from `build_stack_f
 
 The exception's text is cut at `MAX_FAILURE_REASON` (300 characters): a state_dict size mismatch runs to kilobytes, and the sentence is drawn on a card and spoken as part of its name. **PixlStash's own Abort is noticed at once**: `_comfyui_abort` bumps `_queue_cleared` once ComfyUI has cleared its queue (not when the clear was refused or never arrived), and every poller asks the queue on its next pass instead of at its next thirty-second check, so the runs Abort took off the queue are said to have stopped before the owner starts the next one. `ComfyUIRunStopped` (a `RuntimeError`) is what the wait raises for the two stopped endings, and `stopped: true` is how the event tells a run somebody stopped from one a node failed in. The event also carries `workflow_id`, the workflow the run was of (manual or automatic; `run_workflow_id` is only the manual one, for filing pictures), so the failure is shown on that workflow. **Every ending is also kept in memory** (`record_run_outcome`, the newest `MAX_RUN_OUTCOMES` = 500, lost on restart): `running` from the moment `_submit_every` queues the prompt, then `completed` with the picture ids it added, or `failed` with the message. A run still going is the last to be dropped, and each outcome keeps the `library_uuid` it was queued under. `GET /workflows/runs/{prompt_id}` (owner-only, and under the workflow reads' transport rule, `ensure_secure_when_required`) reads it and answers 404 for a prompt nobody queued here and for a run of another library, whose picture ids would name other pictures; it exists because the MCP server is another process and hears no WebSocket event.
 
-**A fixed seed takes the full 64-bit range** ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and the 32-bit check the retired `run_t2i` / `run_i2i` applied would reject reproducing our own built-in's default.
+**A fixed seed takes the full 64-bit range** ComfyUI's core samplers declare, because the shipped `FLUX.2 Klein 9B Edit` template's own `noise_seed` is `432262096973502` and the 32-bit check the retired `run_t2i` / `run_i2i` applied would reject reproducing our own built-in's default.
 
 ### `insights.py`
 `GET /insights` — the v1.11 "About your library" screen. One route, no writes
@@ -3188,7 +3188,13 @@ start-up (`routes.comfyui.list_builtin_workflows`, after the inbox reconcile;
 built-in with no `builtin` origin row at all, and deleting one keeps its row,
 `dismissed`, so it is never listed again; the card route is the explicit way
 back, and its upsert clears `dismissed`. A built-in deleted before this kept
-no row and is listed once more. **A release that changes a built-in's file updates
+no row and is listed once more. **A built-in a release renames** is moved,
+not filed again: `BUILTIN_RENAMES` (old file name to new) re-keys its origin row
+(`_rename_builtin`), and renames the copy when its name still says the old stem.
+**A built-in a release retires** (`BUILTIN_RETIRED`) is hidden once, if the
+owner never edited it, and its row is re-keyed `retired:<name>` so a copy the
+owner shows again stays shown (`_retire_builtin`). Both run first in
+`list_builtin_workflows`, under `INBOX_LOCK`. **A release that changes a built-in's file updates
 the copy the owner never edited** (`refresh_builtin_workflow`, from the same
 start-up pass, for each live one): the origin row's `content_hash` is the file
 as last filed, so a file that still hashes so costs one read and a hash. One
@@ -12924,12 +12930,12 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
-  (PixlStash ships nine, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
-  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
+  (PixlStash ships seven, #2700: `data/comfyui-workflows/built-in/Qwen-Image 2.1 Sheet*.json` and
+  `FLUX.2 Klein 9B Sheet*.json`, a text and a `from Reference` one of each, and
   `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
   own H3 text-to-image template can draw sheets: its size is wired from a
   `ResolutionSelector`, and the card offers that as a size a run sets; and
-  `Sheet-MiniMax-H3-Image*.json`, a text and a reference one for MiniMax H3
+  `MiniMax H3 Image Sheet (PixlStash).json` with its `from Reference` twin, a text and a reference one for MiniMax H3
   Image, whose `MiniMaxH3ImageConditioning` takes the picture as
   `<Picture 1>`, and which draw with `SamplerLCM` (`s_noise` 1.1 easing to
   0.9) through `SamplerCustomAdvanced`, not the template's euler, which draws
@@ -12939,14 +12945,9 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   tokens ahead of the prompt draw cleaner. It stays text to image with no
   reference input, and a blank picture's size is no card default unless it
   sizes the run (`workflow_parameters.BLANK_PICTURE_CLASSES`), so the sheet
-  step does not grow it. `MiniMax-H3-Image-t2i.json` draws the same way.
-  Every MiniMax H3 Image built-in (these two sheets, and text to image, edit
-  and inpaint) ships an `-nvfp4-TE` twin that loads the NVFP4 quantization
-  of the main text encoder instead of the template's int8 one (the prompt
-  enhancer's encoder and the diffusion model stay): the same graph otherwise,
-  so it reads, lists and offers its downloads alike, and both versions are candidates
-  in the sheet step. `tests/test_workflow_io.py` fails on a twin that drifts
-  from its regular file. In every shipped sheet workflow each
+  step does not grow it. `MiniMax H3 Image T2I (PixlStash).json` draws the same way.
+  The MiniMax H3 Image built-ins all load the template's int8 text encoder; no
+  NVFP4 twin ships. In every shipped sheet workflow each
   size but that blank's is a literal 2560×1536 and the encoder and VAE loaded by digest; they
   are cards from start-up, like every built-in) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
