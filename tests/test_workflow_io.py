@@ -62,6 +62,7 @@ from pixlstash.utils.comfyui_utilities import (
     is_api_format,
     is_comfy_workflow,
     loaded_model_widgets,
+    rewritten_prompt_input,
 )
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY, stamp_workflow_id
 
@@ -98,25 +99,27 @@ def _t2i_graph() -> dict:
 @pytest.mark.parametrize(
     "name, expected",
     [
-        ("Flux2-Klein-Image-Edit.json", (("9",), ("76",), ("75:74",), ())),
-        ("Flux2-Klein-t2i.json", (("9",), (), ("75:74",), ("75:67",))),
+        ("FLUX.2 Klein 9B Edit.json", (("9",), ("76",), ("75:74",), ())),
+        ("FLUX.2 Klein 9B T2I.json", (("9",), (), ("75:74",), ("75:67",))),
         # The negative is ConditioningZeroOut of the positive: no prompt.
-        ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
-        ("Inpaint-MiniMax-H3-Image.json", (("11",), ("1",), ("6",), ())),
-        ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
-        ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
-        ("MiniMax-H3-Image-Edit.json", (("11",), ("1",), ("6",), ())),
-        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("22", "6"), ())),
+        ("FLUX.2 Klein 9B Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax H3 Image Inpaint (PixlStash).json", (("11",), ("1",), ("6",), ())),
+        ("Qwen-Image 2.1 Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("Qwen-Image-Edit 2511 Inpaint.json", (("16",), ("1",), ("9",), ())),
+        ("MiniMax H3 Image T2I (PixlStash).json", (("11",), (), ("22", "6"), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
-        ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
-        ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
-        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("22", "6"), ())),
-        ("Sheet-MiniMax-H3-Image-Reference.json", (("11",), ("1",), ("6",), ())),
+        ("FLUX.2 Klein 9B Sheet.json", (("18",), (), ("6",), ())),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", (("18",), ("1",), ("6",), ())),
+        ("MiniMax H3 Image Sheet (PixlStash).json", (("11",), (), ("22", "6"), ())),
+        (
+            "MiniMax H3 Image Sheet from Reference (PixlStash).json",
+            (("11",), ("1",), ("6",), ()),
+        ),
         # MiniMax H3 guides with BasicGuider: no negative at all.
         ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
-        ("Sheet-Qwen-Image-2.1.json", (("18",), (), ("9",), ())),
-        ("Sheet-Qwen-Image-2.1-Reference.json", (("18",), ("1",), ("9",), ())),
-        ("Upscale-2x-RealESRGAN.json", (("4",), ("3",), (), ())),
+        ("Qwen-Image 2.1 Sheet.json", (("18",), (), ("9",), ())),
+        ("Qwen-Image 2.1 Sheet from Reference.json", (("18",), ("1",), ("9",), ())),
+        ("RealESRGAN Upscale 2x.json", (("4",), ("3",), (), ())),
     ],
 )
 def test_built_in_api_workflows(name, expected):
@@ -726,50 +729,44 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
     [
         # Exactly where the shipped files carried their tokens.
         (
-            "Flux2-Klein-Image-Edit.json",
+            "FLUX.2 Klein 9B Edit.json",
             [["76", "inputs", "image"]],
             [["75:74", "inputs", "text"]],
         ),
         # The encoder's text is wired from a primitive; the run fills that.
-        ("Flux2-Klein-t2i.json", [], [["76", "inputs", "value"]]),
+        ("FLUX.2 Klein 9B T2I.json", [], [["76", "inputs", "value"]]),
         (
-            "Inpaint-Flux2-Klein-9B.json",
+            "FLUX.2 Klein 9B Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "text"]],
         ),
         (
-            "Inpaint-MiniMax-H3-Image.json",
+            "MiniMax H3 Image Inpaint (PixlStash).json",
             [["1", "inputs", "image"]],
             # The words its prompt enhancer rewrites, not the encoder's wire.
             [["21", "inputs", "replace"]],
         ),
         (
-            "Inpaint-Qwen-Image-2.1.json",
+            "Qwen-Image 2.1 Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
         (
-            "Inpaint-Qwen-Image-Edit-2511.json",
+            "Qwen-Image-Edit 2511 Inpaint.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
-        ("Sheet-Flux2-Klein-9B.json", [], [["6", "inputs", "text"]]),
+        ("FLUX.2 Klein 9B Sheet.json", [], [["6", "inputs", "text"]]),
         (
-            "Sheet-Flux2-Klein-9B-Reference.json",
+            "FLUX.2 Klein 9B Sheet from Reference.json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "text"]],
         ),
-        (
-            "MiniMax-H3-Image-Edit.json",
-            [["1", "inputs", "image"]],
-            # The words its prompt enhancer rewrites, not the encoder's wire.
-            [["21", "inputs", "replace"]],
-        ),
         # Both encoders read the one prompt node.
-        ("MiniMax-H3-Image-t2i.json", [], [["21", "inputs", "value"]]),
-        ("Sheet-MiniMax-H3-Image.json", [], [["21", "inputs", "value"]]),
+        ("MiniMax H3 Image T2I (PixlStash).json", [], [["21", "inputs", "value"]]),
+        ("MiniMax H3 Image Sheet (PixlStash).json", [], [["21", "inputs", "value"]]),
         (
-            "Sheet-MiniMax-H3-Image-Reference.json",
+            "MiniMax H3 Image Sheet from Reference (PixlStash).json",
             [["1", "inputs", "image"]],
             [["6", "inputs", "prompt"]],
         ),
@@ -778,13 +775,13 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             [["1", "inputs", "image"]],
             [["6", "inputs", "prompt"]],
         ),
-        ("Sheet-Qwen-Image-2.1.json", [], [["9", "inputs", "prompt"]]),
+        ("Qwen-Image 2.1 Sheet.json", [], [["9", "inputs", "prompt"]]),
         (
-            "Sheet-Qwen-Image-2.1-Reference.json",
+            "Qwen-Image 2.1 Sheet from Reference.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "prompt"]],
         ),
-        ("Upscale-2x-RealESRGAN.json", [["3", "inputs", "image"]], []),
+        ("RealESRGAN Upscale 2x.json", [["3", "inputs", "image"]], []),
     ],
 )
 def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, caption):
@@ -796,60 +793,10 @@ def test_built_ins_carry_no_token_and_are_filled_by_detection(name, image, capti
     assert paths == {"image": image, "caption": caption}
 
 
-# MiniMax H3 Image's text encoder, as ComfyUI's template ships it and as the
-# smaller NVFP4 quantization each built-in's "-nvfp4-TE" twin loads instead.
-H3_TE_INT8 = "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
-H3_TE_NVFP4 = "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
-NVFP4_TE = "-nvfp4-TE"
-
-
-def _h3_te_pairs() -> list[tuple[str, str]]:
-    """Every built-in loading the int8 encoder, with its nvfp4 twin's name."""
-    return [
-        (path.name, f"{path.stem}{NVFP4_TE}.json")
-        for path in sorted(BUILT_IN.glob("*.json"))
-        if f'"clip_sha256": "{H3_TE_INT8}"' in path.read_text(encoding="utf-8")
-    ]
-
-
-def test_every_int8_text_encoder_built_in_has_its_nvfp4_twin():
-    """Wrong if a MiniMax H3 Image built-in ships without its nvfp4 TE twin,
-    or a twin is left behind by a regular file that was renamed."""
-    pairs = _h3_te_pairs()
-    assert len(pairs) == 5, pairs
-    twins = sorted(path.name for path in BUILT_IN.glob(f"*{NVFP4_TE}.json"))
-    assert twins == sorted(twin for _, twin in pairs)
-
-
-@pytest.mark.parametrize("regular, twin", _h3_te_pairs())
-def test_an_nvfp4_te_twin_is_its_regular_built_in_but_for_the_encoder(regular, twin):
-    """The twin may differ from its regular file in the main text encoder's
-    digest and its saved pictures' name, nothing else: the prompt enhancer's
-    own encoder, the sampler and every size stay the regular file's. So
-    PixlStash reads it the same way, prompt targets and all."""
-    graph, other = _load(BUILT_IN / regular), _load(BUILT_IN / twin)
-    (encoder,) = [
-        key
-        for key, node in other.items()
-        if node["inputs"].get("clip_sha256") == H3_TE_NVFP4
-    ]
-    other[encoder]["inputs"]["clip_sha256"] = H3_TE_INT8
-    (save,) = [key for key, node in other.items() if node["class_type"] == "SaveImage"]
-    prefix = graph[save]["inputs"]["filename_prefix"]
-    assert other[save]["inputs"]["filename_prefix"] == prefix + NVFP4_TE
-    other[save]["inputs"]["filename_prefix"] = prefix
-    assert other == graph
-    assert detect_workflow_io(_load(BUILT_IN / twin)) == detect_workflow_io(graph)
-    assert run_targets(_load(BUILT_IN / twin)) == run_targets(graph)
-    # The Workflows page shows the twin with its regular file's thumbnail.
-    thumbnails = [(BUILT_IN / name).with_suffix(".webp") for name in (regular, twin)]
-    assert [p.is_file() for p in thumbnails] == [thumbnails[0].is_file()] * 2
-
-
 def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     """Wrong if the run cuts the enhancer out (the encoder's wire replaced by the
     words) or the recipe reads its 38 KB instructions as the prompt."""
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
     report = run_service.apply_prompts(graph, "Make the hat purple.", None)
     assert report["unplaced"] == []
     assert graph["6"]["inputs"]["prompt"] == ["23", 0]
@@ -858,9 +805,7 @@ def test_a_run_prompt_is_what_the_prompt_enhancer_rewrites():
     assert recipe["positive_prompt"] == "Make the hat purple."
 
 
-@pytest.mark.parametrize(
-    "name", ["MiniMax-H3-Image-Edit.json", "Inpaint-MiniMax-H3-Image.json"]
-)
+@pytest.mark.parametrize("name", ["MiniMax H3 Image Inpaint (PixlStash).json"])
 def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
     """Off: the encoder reads the prompt and the enhancer's nodes are gone, its
     9B loader with them. On, or not asked: the graph runs as it is."""
@@ -885,10 +830,24 @@ def test_a_run_without_the_prompt_enhancer_sends_the_words_as_written(name):
         == _load(BUILT_IN / name)["21"]["inputs"]["replace"]
     )
     # A graph with no enhancer says so, and is left alone.
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, False)
     assert (report["enhancer"], json.dumps(graph)) == (False, before)
+
+
+def test_a_string_replace_whose_find_is_a_link_is_not_the_rewritten_prompt():
+    """An enhancer's StringReplace takes ``find`` from a link as well as a
+    literal. Wrong if the walk compares a link with the string (a TypeError at
+    every start of the run) or reads the replace node as the prompt: the
+    TextGenerate's own ``prompt`` is what the run writes."""
+    graph = {
+        "9": _node("CLIPTextEncode", text=["5", 0]),
+        "5": _node("TextGenerate", prompt=["3", 0]),
+        "3": _node("StringReplace", string="Rewrite: <p>", find=["12", 0], replace="x"),
+        "12": _node("PrimitiveString", value="<p>"),
+    }
+    assert rewritten_prompt_input(graph, "9", "text") == ("5", "prompt")
 
 
 # The prompt assist (backend §25): one writer, `apply_prompts`, one reader,
@@ -931,7 +890,7 @@ def test_prompt_nodes_that_disagree_report_neither_words_nor_a_stamp():
 
 
 def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     stamp = _assisted("A woman.")
     report = run_service.apply_prompts(graph, "A woman.", None, None, stamp)
     assert report["assist_applied"] is True
@@ -960,7 +919,7 @@ def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
 
 def test_a_stale_stamp_on_the_encoder_goes_when_the_enhancer_takes_the_words():
     """Words written to the enhancer's input drop the encoder's old stamp."""
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
     graph["6"].setdefault("_meta", {})[PROMPT_ASSIST_META] = _assisted("Old.")
     run_service.apply_prompts(graph, "Make the hat purple.", None, True)
     assert "21" in graph
@@ -974,7 +933,7 @@ def _set_prompt(graph: dict, text: str) -> None:
 
 
 def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     stamp = _assisted("A woman.")
     run_service.apply_prompts(graph, "A woman.", None, None, stamp)
     _set_prompt(graph, graph["6"]["inputs"]["prompt"] + " Edited elsewhere.")
@@ -988,8 +947,8 @@ def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
 
 @pytest.mark.parametrize("prompt", [None, "", "   "])
 def test_the_prompt_assist_adds_nothing_where_the_run_writes_no_words(prompt):
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
-    before = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
+    before = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     report = run_service.apply_prompts(graph, prompt, None, None, _assisted("x"))
     assert report["assist_applied"] is False
     if prompt is None:
@@ -1003,7 +962,7 @@ def test_with_the_enhancer_cut_the_stamp_is_on_the_encoder():
     """The assist turns a not-asked enhancer off, and the stamp goes where
     the literal is after the cut; an explicit true keeps the enhancer, which
     then rewrites the assisted words, stamped where it reads them."""
-    name = BUILT_IN / "MiniMax-H3-Image-Edit.json"
+    name = BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json"
     words = "Make the hat purple."
     graph = _load(name)
     report = run_service.apply_prompts(graph, words, None, None, _assisted(words))
@@ -1030,7 +989,7 @@ def test_the_assist_cuts_only_the_positive_enhancer():
     words = "Make the hat purple."
 
     def with_negative_enhancer():
-        graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+        graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
         for at, was in (("31", "21"), ("32", "22"), ("33", "23")):
             graph[at] = json.loads(json.dumps(graph[was]))
         graph["31"]["inputs"]["replace"] = "blurry, low quality"
@@ -1058,7 +1017,7 @@ def test_the_assist_cuts_only_the_positive_enhancer():
 
 def test_a_stamp_on_another_node_is_not_this_prompts():
     """The run reads only the stamp on the node holding the literal."""
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     stamp = _assisted("A woman.")
     tail = " " + " ".join(part["text"] for part in stamp["parts"])
     graph["21"]["inputs"]["value"] = "A woman." + tail
@@ -1069,8 +1028,8 @@ def test_a_stamp_on_another_node_is_not_this_prompts():
 
 
 def test_the_prompt_assist_moves_no_workflow_identity():
-    plain = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
-    assisted = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    plain = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
+    assisted = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     run_service.apply_prompts(plain, "A woman.", None)
     run_service.apply_prompts(assisted, "A woman.", None, None, _assisted("A woman."))
     assert plain != assisted
@@ -1134,7 +1093,7 @@ def test_a_run_without_the_blank_picture_draws_without_it():
     """Off: the encoder's image input is taken off and the prompt goes in as
     written, and nothing else in the graph changes. On, or not asked: the graph
     runs as saved. A graph with no blank picture reports none and is left alone."""
-    name = "MiniMax-H3-Image-t2i.json"
+    name = "MiniMax H3 Image T2I (PixlStash).json"
     saved = _load(BUILT_IN / name)
     for blank in (None, True):
         graph = _load(BUILT_IN / name)
@@ -1161,7 +1120,7 @@ def test_a_run_without_the_blank_picture_draws_without_it():
     assert graph == expected
     # The blank picture's own node is left in place, reading nothing.
     assert "20" in graph
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image Inpaint (PixlStash).json")
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, None, blank_picture=False)
     assert (report["blank_picture"], json.dumps(graph)) == (False, before)
@@ -1171,14 +1130,14 @@ def test_a_sampler_choice_is_offered_only_where_lcm_meets_a_picture_input():
     """Wrong if the text-to-image graph is offered Euler (it brings the crunch
     back there), a graph with a picture input but no LCM is offered anything, or
     a graph not offered is changed by a request for Euler."""
-    t2i = "MiniMax-H3-Image-t2i.json"
+    t2i = "MiniMax H3 Image T2I (PixlStash).json"
     graph = _load(BUILT_IN / t2i)
     before = json.dumps(graph)
     report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
     assert (report["sampler_choice"], report["sampler"]) == (False, None)
     assert json.dumps(graph) == before
     # Offered on the reference sheet: LCM as saved, and Euler on request.
-    name = "Sheet-MiniMax-H3-Image-Reference.json"
+    name = "MiniMax H3 Image Sheet from Reference (PixlStash).json"
     graph = _load(BUILT_IN / name)
     report = run_service.apply_prompts(graph, None, None, None)
     assert (report["sampler_choice"], report["sampler"]) == (True, "lcm")
@@ -1199,7 +1158,7 @@ def test_a_euler_run_changes_only_the_sampler_of_an_lcm_graph_with_a_picture():
     """The KSampler shape: a KSampler on lcm takes euler in place and nothing
     else in the graph moves. A graph on euler already, or with no picture
     input, has nothing to offer and is left alone."""
-    name = "Inpaint-MiniMax-H3-Image.json"
+    name = "MiniMax H3 Image Inpaint (PixlStash).json"
     graph = _load(BUILT_IN / name)
     graph["9"]["inputs"]["sampler_name"] = "lcm"
     saved = json.loads(json.dumps(graph))
@@ -1216,7 +1175,7 @@ def test_a_euler_run_changes_only_the_sampler_of_an_lcm_graph_with_a_picture():
     assert (report["sampler_choice"], report["sampler"]) == (False, None)
     assert json.dumps(graph) == before
     # LCM with no picture input: not offered.
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     graph["9"]["inputs"]["sampler"] = ["14", 0]
     graph["14"]["class_type"] = "SamplerLCM"
     report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
@@ -2467,7 +2426,7 @@ def test_a_writer_fills_every_encoder_of_one_prompt_and_keeps_it_one():
 
 def test_a_built_in_t2i_run_keeps_its_one_prompt_after_it_is_written():
     """Step 1 (blank picture) and steps 2 to 6 (text only) share one prompt."""
-    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph = _load(BUILT_IN / "MiniMax H3 Image T2I (PixlStash).json")
     report = run_service.apply_prompts(graph, "A woman in a red coat.", None)
     assert report["positive_text"] is not None
     assert report["unplaced"] == []
@@ -2482,7 +2441,10 @@ def test_a_built_in_t2i_run_keeps_its_one_prompt_after_it_is_written():
 def test_the_built_in_blank_picture_is_read_as_no_picture():
     """EmptyImage feeds the blank step's encoder and nothing else, so the
     workflow is text to image with no picture input to fill."""
-    for name in ("MiniMax-H3-Image-t2i.json", "Sheet-MiniMax-H3-Image.json"):
+    for name in (
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
+    ):
         graph = _load(BUILT_IN / name)
         found = detect_workflow_io(graph)
         assert found.picture_inputs == ()

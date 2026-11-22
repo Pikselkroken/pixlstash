@@ -64,8 +64,8 @@ def test_the_klein_edit_graph_converts_to_the_klein_inpaint_built_in():
     crop) rather than a literal, and ``DifferentialDiffusion`` sits on the
     model, which the built-in omits.
     """
-    converted = _edges(convert_to_inpaint(_built_in("Flux2-Klein-Image-Edit.json")))
-    expected = _edges(_built_in("Inpaint-Flux2-Klein-9B.json"))
+    converted = _edges(convert_to_inpaint(_built_in("FLUX.2 Klein 9B Edit.json")))
+    expected = _edges(_built_in("FLUX.2 Klein 9B Inpaint.json"))
     expected -= Counter(
         {
             ("UNETLoader", 0, "CFGGuider", "model"): 1,
@@ -88,8 +88,8 @@ def test_the_klein_edit_graph_converts_to_the_klein_inpaint_built_in():
 
 
 def test_the_klein_crop_node_takes_the_built_ins_settings():
-    converted = convert_to_inpaint(_built_in("Flux2-Klein-Image-Edit.json"))
-    reference = _built_in("Inpaint-Flux2-Klein-9B.json")
+    converted = convert_to_inpaint(_built_in("FLUX.2 Klein 9B Edit.json"))
+    reference = _built_in("FLUX.2 Klein 9B Inpaint.json")
     crop = converted[_one(converted, "InpaintCropImproved")]["inputs"]
     want = reference[_one(reference, "InpaintCropImproved")]["inputs"]
     assert {k: v for k, v in crop.items() if k not in ("image", "mask")} == {
@@ -99,22 +99,6 @@ def test_the_klein_crop_node_takes_the_built_ins_settings():
     assert not _of(converted, "EmptyFlux2LatentImage")
     assert len(_of(converted, "VAEEncode")) == 1
     assert converted["9"]["inputs"]["filename_prefix"] == "Inpaint-Flux2-Klein"
-
-
-@pytest.mark.parametrize("twin", ["", "-nvfp4-TE"])
-def test_the_minimax_h3_image_edit_converts_to_its_inpaint_built_in(twin):
-    """MiniMax H3 Image's edit reads the picture twice, as its canvas's latent
-    and as <Picture 1>: both take the crop, and the built-in is exactly that,
-    for the twin with the nvfp4 text encoder as well."""
-    converted = convert_to_inpaint(_built_in(f"MiniMax-H3-Image-Edit{twin}.json"))
-    assert converted == _built_in(f"Inpaint-MiniMax-H3-Image{twin}.json")
-    crop = _one(converted, "InpaintCropImproved")
-    conditioning = converted[_one(converted, "MiniMaxH3ImageConditioning")]
-    assert conditioning["inputs"]["images.image_1"] == [crop, 1]
-    assert converted[_one(converted, "VAEEncode")]["inputs"]["pixels"] == [crop, 1]
-    # 4 MP at H3's multiple of 32, the edit's own working size.
-    size = converted[crop]["inputs"]
-    assert (size["output_target_width"], size["output_target_height"]) == (2048, 2048)
 
 
 def _moss_edit() -> dict:
@@ -363,7 +347,7 @@ def test_the_last_resize_in_a_chain_sets_the_target():
 
 
 def test_the_input_is_untouched_and_the_output_is_the_same_every_time():
-    graph = _built_in("Flux2-Klein-Image-Edit.json")
+    graph = _built_in("FLUX.2 Klein 9B Edit.json")
     before = copy.deepcopy(graph)
     first = convert_to_inpaint(graph)
     assert graph == before
@@ -419,7 +403,7 @@ def _mask_loader() -> dict:
 
 
 def _already_inpaint() -> dict:
-    return _built_in("Inpaint-Flux2-Klein-9B.json")
+    return _built_in("FLUX.2 Klein 9B Inpaint.json")
 
 
 def _outpaint() -> dict:
@@ -439,7 +423,7 @@ def _video() -> dict:
 
 
 def _upscale() -> dict:
-    return _built_in("Upscale-2x-RealESRGAN.json")
+    return _built_in("RealESRGAN Upscale 2x.json")
 
 
 def _no_save() -> dict:

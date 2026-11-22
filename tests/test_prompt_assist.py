@@ -226,7 +226,7 @@ def test_a_json_layout_prompt_is_told_from_prose():
     assert not is_layout_prompt(None)
 
 
-def _graph(name: str = "MiniMax-H3-Image-t2i.json") -> dict:
+def _graph(name: str = "MiniMax H3 Image T2I (PixlStash).json") -> dict:
     return json.loads((BUILT_IN / name).read_text(encoding="utf-8"))
 
 

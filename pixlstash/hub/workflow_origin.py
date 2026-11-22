@@ -81,6 +81,18 @@ def upsert(
     )
 
 
+def move(conn, origin: str, remote_path: str, new_path: str) -> None:
+    """Re-key *remote_path*'s row at *origin* to *new_path*.
+
+    The workflow, hash and dismissed flag stay as they are. Inside the caller's
+    transaction; the caller checks *new_path* has no row yet.
+    """
+    conn.execute(
+        "UPDATE workflow_origin SET remote_path = ? WHERE origin = ? AND remote_path = ?",
+        (new_path, origin, remote_path),
+    )
+
+
 def stored_as(hub: HubDatabase, content_hash: Optional[str]) -> Optional[str]:
     """The live manual workflow some origin already stored this content as.
 

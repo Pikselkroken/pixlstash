@@ -37,7 +37,7 @@ CROP_CLASS = "InpaintCropImproved"
 STITCH_CLASS = "InpaintStitchImproved"
 
 # The crop node's settings, copied from the built-in
-# ``Inpaint-Flux2-Klein-9B.json``. The target size is the graph's own.
+# ``FLUX.2 Klein 9B Inpaint.json``. The target size is the graph's own.
 CROP_WIDGETS = {
     "downscale_algorithm": "bilinear",
     "upscale_algorithm": "bicubic",

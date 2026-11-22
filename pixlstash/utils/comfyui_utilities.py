@@ -549,7 +549,8 @@ def rewritten_prompt_input(workflow: dict, node_id: str, field: str) -> tuple[st
             class_type == "StringReplace"
             and rewritten
             and isinstance(inputs.get("string"), str)
-            and inputs.get("find")
+            and isinstance(inputs.get("find"), str)
+            and inputs["find"]
             and inputs["find"] in inputs["string"]
         ):
             at = (str(value[0]), "replace")

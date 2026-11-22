@@ -45,7 +45,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from types import SimpleNamespace
 
 import numpy as np
@@ -119,6 +119,7 @@ from pixlstash.services.workflow_hash import (
     structural_document,
     topology_hash,
 )
+from pixlstash.hub import workflow_origin
 from pixlstash.hub import workflow_versions
 from pixlstash.hub import workflow_thumbnails
 from pixlstash.services import (
@@ -6077,24 +6078,27 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
         lambda: [("user", str(tmp_path)), ("built-in", builtin)],
     )
     owner = workflow_env.owner
-    path = f"{API}/comfyui/workflows/Flux2-Klein-Image-Edit.json/card"
+    path = f"{API}/comfyui/workflows/{quote('FLUX.2 Klein 9B Edit.json')}/card"
 
     r = owner.post(path)
     assert r.status_code == 200, r.text
     key = r.json()["workflow_id"]
     assert key.startswith("manual:")
-    assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
+    assert r.json()["name"] == "FLUX.2 Klein 9B Edit.json"
     # Idempotent: the second ask answers the same workflow.
     assert owner.post(path).json()["workflow_id"] == key
     card = _by_key(_cards(owner))[key]
-    assert (card["manual"], card["name"]) == (True, "Flux2-Klein-Image-Edit")
+    assert (card["manual"], card["name"]) == (True, "FLUX.2 Klein 9B Edit")
 
     r = owner.get(f"{API}/workflows/{key}/graph")
     assert r.status_code == 200, r.text
     assert r.json()["source"] == "file"
     assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
 
-    assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
+    assert (
+        owner.post(f"{API}/comfyui/workflows/{quote('nope.json')}/card").status_code
+        == 404
+    )
 
 
 def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
@@ -6107,9 +6111,9 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     builtin = tmp_path / "built-in"
     builtin.mkdir()
     for name in (
-        "Flux2-Klein-Image-Edit.json",
-        "MiniMax-H3-Image-t2i.json",
-        "MiniMax-H3-Image-t2i.webp",
+        "FLUX.2 Klein 9B Edit.json",
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image T2I (PixlStash).webp",
     ):
         shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
     monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
@@ -6122,14 +6126,14 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
 
     klein, h3 = comfyui_module.list_builtin_workflows(hub)
     cards = _by_key(_cards(owner))
-    assert cards[klein]["name"] == "Flux2-Klein-Image-Edit"
-    assert cards[h3]["name"] == "MiniMax-H3-Image-t2i"
+    assert cards[klein]["name"] == "FLUX.2 Klein 9B Edit"
+    assert cards[h3]["name"] == "MiniMax H3 Image T2I (PixlStash)"
     # The picture shipped beside a built-in is its thumbnail, unpinned.
     shipped = workflow_thumbnails.thumbnails(hub)
     assert klein not in shipped
     assert shipped[h3] == workflow_thumbnails.Thumbnail(
         hashlib.sha256(
-            (builtin / "MiniMax-H3-Image-t2i.webp").read_bytes()
+            (builtin / "MiniMax H3 Image T2I (PixlStash).webp").read_bytes()
         ).hexdigest(),
         False,
     )
@@ -6142,10 +6146,12 @@ def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
     assert relisted == []
     assert h3 not in _by_key(_cards(owner))
 
-    r = owner.post(f"{API}/comfyui/workflows/MiniMax-H3-Image-t2i.json/card")
+    r = owner.post(
+        f"{API}/comfyui/workflows/{quote('MiniMax H3 Image T2I (PixlStash).json')}/card"
+    )
     assert r.status_code == 200, r.text
     back = r.json()["workflow_id"]
-    assert _by_key(_cards(owner))[back]["name"] == "MiniMax-H3-Image-t2i"
+    assert _by_key(_cards(owner))[back]["name"] == "MiniMax H3 Image T2I (PixlStash)"
     relisted = comfyui_module.list_builtin_workflows(hub)
     assert relisted == []
 
@@ -6164,7 +6170,9 @@ def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
         lambda: [("user", str(tmp_path)), ("built-in", builtin)],
     )
     owner = workflow_env.owner
-    r = owner.post(f"{API}/comfyui/workflows/Sheet-MiniMax-H3-Image.json/card")
+    r = owner.post(
+        f"{API}/comfyui/workflows/{quote('MiniMax H3 Image Sheet (PixlStash).json')}/card"
+    )
     assert r.status_code == 200, r.text
     sizes = {
         (row["input_name"], row["value"])
@@ -6175,55 +6183,6 @@ def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
     assert sizes == {("width", 2560), ("height", 1536)}
 
 
-def test_an_nvfp4_te_twin_reads_as_its_regular_built_in(
-    workflow_env, tmp_path, monkeypatch
-):
-    """Each MiniMax H3 Image built-in ships a twin loading the NVFP4 text
-    encoder. Wrong if the twin's card differs in anything but its name (type,
-    reference inputs, models, size defaults: what the sheet step picks by),
-    or if it names the int8 encoder, which a machine without it is offered."""
-    _isolate_workflow_folders(tmp_path, monkeypatch)
-    builtin = comfyui_module.WORKFLOW_BUILTIN_DIR
-    monkeypatch.setattr(
-        comfyui_module,
-        "_workflow_dirs",
-        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
-    )
-    owner = workflow_env.owner
-    int8 = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
-    nvfp4 = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
-    twins = sorted(
-        name for name in os.listdir(builtin) if name.endswith("-nvfp4-TE.json")
-    )
-    assert len(twins) == 5, twins
-    for twin in twins:
-        regular = twin.replace("-nvfp4-TE", "")
-        ids = []
-        for name in (regular, twin):
-            r = owner.post(f"{API}/comfyui/workflows/{name}/card")
-            assert r.status_code == 200, r.text
-            ids.append(r.json()["workflow_id"])
-        cards = _by_key(_cards(owner))
-        own = {"id", "name", "version_at", "created_at", "changed_at"}
-        a, b = ({k: v for k, v in cards[i].items() if k not in own} for i in ids)
-        assert a == b, twin
-        assert cards[ids[1]]["name"] == twin.removesuffix(".json")
-        details = [_detail(owner, i)["card"] for i in ids]
-        files = [
-            [(m["kind"], m["filename"]) for m in card["default_recipe"]["models"]]
-            for card in details
-        ]
-        assert ("text_encoder", int8) in files[0], twin
-        assert ("text_encoder", nvfp4) in files[1], twin
-        swapped = sorted((kind, int8 if f == nvfp4 else f) for kind, f in files[1])
-        assert swapped == sorted(files[0]), twin
-        defaults = [
-            sorted((r["input_name"], json.dumps(r["value"])) for r in card["defaults"])
-            for card in details
-        ]
-        assert defaults[0] == defaults[1], twin
-
-
 def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     workflow_env, tmp_path, monkeypatch
 ):
@@ -6232,7 +6191,9 @@ def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     builtin = tmp_path / "built-in"
     builtin.mkdir()
     shutil.copy(
-        os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, "MiniMax-H3-Image-t2i.json"),
+        os.path.join(
+            comfyui_module.WORKFLOW_BUILTIN_DIR, "MiniMax H3 Image T2I (PixlStash).json"
+        ),
         builtin,
     )
     (builtin / "A-unreadable.json").write_text("{}")
@@ -6253,9 +6214,14 @@ def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
     hub = workflow_env.server.hub
 
     (h3,) = comfyui_module.list_builtin_workflows(hub)
-    assert _by_key(_cards(workflow_env.owner))[h3]["name"] == "MiniMax-H3-Image-t2i"
+    assert (
+        _by_key(_cards(workflow_env.owner))[h3]["name"]
+        == "MiniMax H3 Image T2I (PixlStash)"
+    )
     # The card route answers it as a file it could not store, not a 500.
-    card = workflow_env.owner.post(f"{API}/comfyui/workflows/A-unreadable.json/card")
+    card = workflow_env.owner.post(
+        f"{API}/comfyui/workflows/{quote('A-unreadable.json')}/card"
+    )
     assert card.status_code == 409, card.text
 
 
@@ -6288,7 +6254,7 @@ def test_a_built_in_a_release_changed_is_updated_as_a_new_version(
     """Wrong if a copy the owner never edited keeps the old graph after a
     release changed the file, or gets it as a new workflow rather than a
     version, or the graph it replaced cannot be gone back to."""
-    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    path = _shipped_builtin(tmp_path, monkeypatch, "FLUX.2 Klein 9B Edit.json")
     hub = workflow_env.server.hub
     (key,) = comfyui_module.list_builtin_workflows(hub)
     filed_steps = manual_document(hub, key)["75:62"]["inputs"]["steps"]
@@ -6304,7 +6270,7 @@ def test_a_built_in_a_release_changed_is_updated_as_a_new_version(
     assert versions[0]["reason"] == "updated with PixlStash"
     earlier = workflow_versions.document_of(hub, key, 1)
     assert earlier["75:62"]["inputs"]["steps"] == filed_steps
-    assert _by_key(_cards(workflow_env.owner))[key]["name"] == "Flux2-Klein-Image-Edit"
+    assert _by_key(_cards(workflow_env.owner))[key]["name"] == "FLUX.2 Klein 9B Edit"
 
     # Idempotent: the next start finds the copy holding the file.
     comfyui_module.list_builtin_workflows(hub)
@@ -6316,7 +6282,7 @@ def test_a_built_in_the_owner_edited_keeps_their_graph_after_a_release(
 ):
     """Wrong if a release's file is stored over a copy the owner saved over:
     their graph must stay the one that runs."""
-    path = _shipped_builtin(tmp_path, monkeypatch, "Flux2-Klein-Image-Edit.json")
+    path = _shipped_builtin(tmp_path, monkeypatch, "FLUX.2 Klein 9B Edit.json")
     hub = workflow_env.server.hub
     (key,) = comfyui_module.list_builtin_workflows(hub)
     edited = manual_document(hub, key)
@@ -6332,10 +6298,300 @@ def test_a_built_in_the_owner_edited_keeps_their_graph_after_a_release(
     ]
 
 
+# The shipped built-in folder, read before a test points the route at a copy.
+REAL_BUILTIN_DIR = comfyui_module.WORKFLOW_BUILTIN_DIR
+
+
+def _fill_builtin_folder(builtin: Path, copies: dict[str, str]) -> None:
+    """Make *builtin* hold a copy of each shipped file in *copies*, and nothing else.
+
+    *copies* maps the name a file has in the folder to the shipped built-in it
+    is copied from, so one folder can hold a v2.0.1 name over a v2.0.2 graph.
+    """
+    for entry in builtin.iterdir():
+        entry.unlink()
+    for name, shipped in copies.items():
+        shutil.copy(os.path.join(REAL_BUILTIN_DIR, shipped), builtin / name)
+
+
+def _builtin_folder(tmp_path, monkeypatch, copies: dict[str, str]) -> Path:
+    """A built-in folder the routes read, filled from *copies*."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir(exist_ok=True)
+    _fill_builtin_folder(builtin, copies)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    return builtin
+
+
+def _v201_folder() -> dict[str, str]:
+    """The built-ins a v2.0.1 library filed: the renamed ones under their old
+    names, and the Edit that release shipped. The Edit's graph is stood in for
+    by the t2i one, since the retired file is no longer shipped to copy."""
+    copies = {old: new for old, new in comfyui_module.BUILTIN_RENAMES.items()}
+    copies["MiniMax-H3-Image-Edit.json"] = "MiniMax H3 Image T2I (PixlStash).json"
+    return copies
+
+
+def _v202_folder() -> dict[str, str]:
+    """The built-ins v2.0.2 ships that a v2.0.1 library had under other names."""
+    return {new: new for new in comfyui_module.BUILTIN_RENAMES.values()}
+
+
+def test_a_renamed_built_in_is_one_copy_under_its_new_name(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A library that filed the v2.0.1 names gets each built-in once, under its
+    new name, with the same workflow. Wrong if a rename files a second copy,
+    if the old name's card survives, or if a second start files anything."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    filed = comfyui_module.list_builtin_workflows(hub)
+    cards = _by_key(_cards(owner))
+    before = {cards[wid]["name"]: wid for wid in filed}
+    assert set(before) == {
+        comfyui_module._stem(old)
+        for old in [*comfyui_module.BUILTIN_RENAMES, "MiniMax-H3-Image-Edit.json"]
+    }
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    cards = _by_key(_cards(owner))
+    names = [card["name"] for card in cards.values()]
+    for old, new in comfyui_module.BUILTIN_RENAMES.items():
+        wid = before[comfyui_module._stem(old)]
+        assert cards[wid]["name"] == comfyui_module._stem(new)
+        assert names.count(comfyui_module._stem(new)) == 1
+        assert comfyui_module._stem(old) not in names
+    # The second start changes nothing.
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _by_key(_cards(owner)) == cards
+
+
+def test_a_built_in_removed_before_the_rename_stays_removed(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The owner took a built-in off the page in v2.0.1. Its record is dismissed,
+    and the rename must not bring it back under the new name. Wrong if the new
+    name gets a live card."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    filed = comfyui_module.list_builtin_workflows(hub)
+    wid = next(
+        w
+        for w in filed
+        if _by_key(_cards(owner))[w]["name"] == "Sheet-MiniMax-H3-Image"
+    )
+    assert owner.delete(f"{API}/workflows/{wid}").status_code == 200
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert wid not in _by_key(_cards(owner))
+    assert not any(
+        card["name"] == "MiniMax H3 Image Sheet (PixlStash)"
+        for card in _cards(owner)["cards"]
+    )
+
+
+def test_a_built_in_the_owner_renamed_keeps_their_name(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if the rename overwrites a name the owner chose."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    (wid,) = [
+        w
+        for w in comfyui_module.list_builtin_workflows(hub)
+        if _by_key(_cards(owner))[w]["name"] == "Flux2-Klein-Image-Edit"
+    ]
+    assert (
+        owner.patch(f"{API}/workflows/{wid}", json={"name": "My klein"}).status_code
+        == 200
+    )
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _by_key(_cards(owner))[wid]["name"] == "My klein"
+    assert workflow_origin.stored_at(hub, "builtin", "FLUX.2 Klein 9B Edit.json") == wid
+
+
+def test_a_built_in_the_owner_edited_keeps_its_graph_through_the_rename(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if the rename or the refresh that follows it replaces the owner's
+    graph. Its name still says the old stem, so the name does move."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    (wid,) = [
+        w
+        for w in comfyui_module.list_builtin_workflows(hub)
+        if _by_key(_cards(owner))[w]["name"] == "Flux2-Klein-Image-Edit"
+    ]
+    edited = manual_document(hub, wid)
+    edited["75:62"]["inputs"]["steps"] = 41
+    comfyui_module.store_over_workflow(hub, wid, edited, "mcp", expected_version=1)
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert manual_document(hub, wid)["75:62"]["inputs"]["steps"] == 41
+    assert _by_key(_cards(owner))[wid]["name"] == "FLUX.2 Klein 9B Edit"
+    assert [v["source"] for v in workflow_versions.list_versions(hub, wid)] == [
+        "mcp",
+        "builtin",
+    ]
+
+
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "MiniMax-H3-Image-Edit.json",
+        "MiniMax-H3-Image-Edit-nvfp4-TE.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+    ],
+)
+def test_a_retired_built_in_is_hidden_once_and_an_unhide_sticks(
+    workflow_env, tmp_path, monkeypatch, retired
+):
+    """A retired built-in the owner never edited is hidden when a release stops
+    shipping it: the Edit and the NVFP4 text-encoder twins. Wrong if a later
+    start hides it again over the owner's choice to show it, or if it is hidden
+    before the release retires it."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {retired: "MiniMax H3 Image T2I (PixlStash).json"},
+    )
+    (wid,) = comfyui_module.list_builtin_workflows(hub)
+    assert _detail(owner, wid)["hidden"] is False
+
+    _fill_builtin_folder(builtin, {})
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is True
+
+    assert (
+        owner.patch(f"{API}/workflows/{wid}", json={"hidden": False}).status_code == 200
+    )
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is False
+
+
+def test_a_retired_built_in_the_owner_edited_is_left_on_the_page(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if an edited copy is hidden: its graph is the owner's work."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"MiniMax-H3-Image-Edit.json": "MiniMax H3 Image T2I (PixlStash).json"},
+    )
+    (wid,) = comfyui_module.list_builtin_workflows(hub)
+    edited = manual_document(hub, wid)
+    edited["6"]["inputs"]["prompt"] = "the owner's words"
+    comfyui_module.store_over_workflow(hub, wid, edited, "mcp", expected_version=1)
+
+    _fill_builtin_folder(builtin, {})
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is False
+    assert manual_document(hub, wid)["6"]["inputs"]["prompt"] == "the owner's words"
+
+
+def test_a_built_in_whose_store_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """A hub write can raise sqlite3.Error. Wrong if that one built-in ends the
+    start-up pass, so every one after it is never listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {
+            "A-broken.json": "MiniMax H3 Image T2I (PixlStash).json",
+            "B-listed.json": "FLUX.2 Klein 9B Edit.json",
+        },
+    )
+    real_store = comfyui_module.store_builtin_workflow
+
+    def store(hub_, name, path):
+        if name == "A-broken.json":
+            raise sqlite3.OperationalError("database is locked")
+        return real_store(hub_, name, path)
+
+    monkeypatch.setattr(comfyui_module, "store_builtin_workflow", store)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "B-listed"
+    assert [r for r in caplog.records if "A-broken.json" in r.getMessage()]
+
+
+def test_a_rename_that_fails_on_the_hub_is_logged_and_the_built_ins_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """Moving a renamed built-in's record can raise sqlite3.Error. Wrong if
+    that ends the start-up pass, so no built-in is listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    old = next(iter(comfyui_module.BUILTIN_RENAMES))
+
+    def rename(hub_, old_, new_):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "_rename_builtin", rename)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "FLUX.2 Klein 9B Edit"
+    assert [r for r in caplog.records if old in r.getMessage()]
+
+
+def test_a_built_in_whose_refresh_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """The refresh of a filed built-in can raise sqlite3.Error too. Wrong if
+    the next built-in in the folder is never filed."""
+    hub = workflow_env.server.hub
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    comfyui_module.list_builtin_workflows(hub)
+    _fill_builtin_folder(
+        builtin,
+        {
+            "FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json",
+            "MiniMax H3 Image T2I (PixlStash).json": "MiniMax H3 Image T2I (PixlStash).json",
+        },
+    )
+
+    def refresh(hub_, name, path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "refresh_builtin_workflow", refresh)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == (
+        "MiniMax H3 Image T2I (PixlStash)"
+    )
+    assert [r for r in caplog.records if "FLUX.2 Klein 9B Edit.json" in r.getMessage()]
+
+
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(
-        comfyui_module.WORKFLOW_BUILTIN_DIR, "Flux2-Klein-Image-Edit.json"
+        comfyui_module.WORKFLOW_BUILTIN_DIR, "FLUX.2 Klein 9B Edit.json"
     )
     with open(path, encoding="utf-8") as handle:
         graph = json.load(handle)
