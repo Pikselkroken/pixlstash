@@ -409,10 +409,15 @@ def apply_prompts(
             if target is not None:
                 graph[target[0]]["inputs"][target[1]] = text
                 if side == "positive":
-                    # A stamp can sit on another node than the one written
-                    # (an enhancer's input), and it read the old words only.
-                    for node in graph.values():
-                        meta = node.get("_meta") if isinstance(node, dict) else None
+                    # The stamp read the old words, and it can sit on another
+                    # node of this prompt's chain than the one written (the
+                    # encoder, when the words now go to an enhancer's input).
+                    # Other prompt nodes keep theirs: their words stay.
+                    chain = {str(node_id), str(target[0])}
+                    if literal:
+                        chain.add(str(literal[0]))
+                    for at in chain:
+                        meta = (graph.get(at) or {}).get("_meta")
                         if isinstance(meta, dict):
                             meta.pop(PROMPT_ASSIST_META, None)
                     written.append((str(node_id), name))

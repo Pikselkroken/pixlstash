@@ -949,10 +949,20 @@ def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
     # A fresh run's prompt carries no old stamp, so none is reported.
     assert fresh["recorded"] is None
     assert PROMPT_ASSIST_META not in replay["6"].get("_meta", {})
-    # Nor does a stamp left on a node other than the one written survive.
+    # A node outside the written prompt's chain keeps its stamp.
     replay["3"].setdefault("_meta", {})[PROMPT_ASSIST_META] = stamp
     run_service.apply_prompts(replay, "A child.", None)
-    assert all(PROMPT_ASSIST_META not in n.get("_meta", {}) for n in replay.values())
+    assert PROMPT_ASSIST_META in replay["3"]["_meta"]
+    assert PROMPT_ASSIST_META not in replay["6"].get("_meta", {})
+
+
+def test_a_stale_stamp_on_the_encoder_goes_when_the_enhancer_takes_the_words():
+    """Words written to the enhancer's input drop the encoder's old stamp."""
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    graph["6"].setdefault("_meta", {})[PROMPT_ASSIST_META] = _assisted("Old.")
+    run_service.apply_prompts(graph, "Make the hat purple.", None, True)
+    assert "21" in graph
+    assert PROMPT_ASSIST_META not in graph["6"].get("_meta", {})
 
 
 def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
