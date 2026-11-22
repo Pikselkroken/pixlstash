@@ -85,7 +85,7 @@ def test_every_box_lands_inside_its_own_panel(framing, proportions):
     assert all("an adult woman" in i["caption"] for i in characters)
 
 
-@pytest.mark.parametrize("size", ["small", "medium", "4k", "5k"])
+@pytest.mark.parametrize("size", ["small", "medium", "4k", "5k", "6k"])
 def test_another_sheet_size_scales_the_layout_with_its_canvas(size):
     width, height = character_sheet.SIZES[size]
     assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
@@ -1344,7 +1344,11 @@ def test_prompt_route_hands_out_the_canvas(client):
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
     # MiniMax H3's sizes: the route takes them like any other.
-    for size, canvas in (("4k", (3840, 2304)), ("5k", (5280, 3168))):
+    for size, canvas in (
+        ("4k", (3840, 2304)),
+        ("5k", (5280, 3168)),
+        ("6k", (6240, 3744)),
+    ):
         drawn = client.post(
             f"{API_PREFIX}/character-sheets/prompt",
             json={"description": "x", "size": size, "layout": "prose"},

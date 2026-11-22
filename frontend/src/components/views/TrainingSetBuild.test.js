@@ -1438,6 +1438,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ["Large", false, "false"],
       ["4K", true, "false"],
       ["5K", false, "true"],
+      ["6K", true, "false"],
     ]);
     // Another model greys 4K and 5K out and goes back to Large.
     select("Sheet workflow").vm.$emit("update:modelValue", "manual:moss");
@@ -1448,6 +1449,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ["Large", false, "true"],
       ["4K", true, "false"],
       ["5K", true, "false"],
+      ["6K", true, "false"],
     ]);
     select("Sheet workflow").vm.$emit("update:modelValue", "manual:h3-t2i");
     await flushPromises();
@@ -1516,8 +1518,9 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ["Large", true, "false"],
       ["4K", false, "true"],
       ["5K", false, "false"],
+      ["6K", false, "false"],
     ]);
-    expect(wrapper.text()).toContain("MiniMax H3 Image needs 4K or 5K.");
+    expect(wrapper.text()).toContain("MiniMax H3 Image needs 4K, 5K or 6K.");
     wrapper.unmount();
   });
 

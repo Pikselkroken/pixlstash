@@ -103,10 +103,13 @@ SIZES = {
     # large and keep a face close only from 4K up (the 2026-11-22 probe).
     "4k": (3840, 2304),
     "5k": (5280, 3168),
+    # The nearest 5:3 to 6K on the 16-pixel grid; MiniMax H3 Image only,
+    # about 40 s a sheet on a 32 GB card and no closer a face than 5K.
+    "6k": (6240, 3744),
 }
 # MiniMax H3's own size joins the three every model has (a nested ``Literal``
 # flattens to all four).
-Size = Literal[Size, "4k", "5k"]
+Size = Literal[Size, "4k", "5k", "6k"]
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.

@@ -1112,7 +1112,7 @@ Both modes need:
   below. FLUX.2 counts only as Klein (Klein in its base model or file name);
   FLUX.2 dev does not.
 - **A size PixlStash can set.** Every sheet is drawn at 5:3 (1280×768,
-  1840×1104 or 2560×1536, and 3840×2304 or 5280×3168 for MiniMax H3), so the workflow's
+  1840×1104 or 2560×1536, and 3840×2304, 5280×3168 or 6240×3744 for MiniMax H3), so the workflow's
   empty latent needs a `width` and `height` that are plain numbers, or are
   wired from a `ResolutionSelector` or a `PrimitiveInt`. A workflow whose size
   comes from its input picture cannot be listed as it is.
@@ -1135,8 +1135,9 @@ different person.
 - **A text-to-image graph:** every sampler starts from an empty latent, and no
   picture feeds the model's reference input. A workflow that reads a picture
   as a reference is not listed here.
-- **Sizes:** MiniMax H3 Image draws at 4K or 5K, 4K by default: below 4K its
-  faces turn waxy and drift from the reference. MiniMax H3 draws at Large or
+- **Sizes:** MiniMax H3 Image draws at 4K, 5K or 6K, 4K by default: below 4K
+  its faces turn waxy and drift from the reference, and 6K takes about twice
+  as long as 5K for no closer a face. MiniMax H3 draws at Large or
   5K, 5K by default. The other models draw at Small, Medium or Large, Large by
   default. The rest are greyed out.
 - **Prompt:** MOSS-Image is sent a layout prompt (the JSON
