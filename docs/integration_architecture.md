@@ -990,6 +990,33 @@ Seven rules the client must not re-derive:
    run's copy, so the pre-flight does not ask for that model and ComfyUI
    never loads it. Null or true runs the graph as it is. Per run only: no
    recipe, saved recipe or workflow default stores it.
+   `prompt.enhancer_on` is the effective answer for this request: false
+   where `enhance_prompt: false`, or `null` with the prompt assist applied,
+   cut it; the checkbox draws from it.
+   **The prompt assist** (backend §25.31), offered on every graph.
+   `prompt.assist` is `{family, presets, context, preset_version,
+   default_on, applied, categories, parts, recorded}`: `family` the graph's
+   one base-model family or null, `presets` the file used (the family's own,
+   else `_default`), `default_on` the file's answer for the context
+   (`photo`: MiniMax H3 Image only; `sheet`: everywhere, as #2776's look is)
+   with a settable prompt, and for `photo` a graph that takes no picture; the catalogue rides in the
+   pre-flight, so no route of its own exists. `categories[].options[]` are
+   `{id, label, text, finish}`, and `parts` are `{category, kind, id,
+   text}`: a `kind: "choice"` per category, then `kind: "finish"` for a
+   chosen option's closing sentence. The body's `prompt_assist:
+   {context: "photo" | "sheet", on: true, choices: {<category>: "none" |
+   {"id": <option>} | {"text": <typed>}}}` asks for it; **absent is off**,
+   so every existing caller, a JSON layout prompt and a `prompt: null`
+   replay are unchanged. A category left out takes the shipped default (`{}`
+   is the defaults); `on: false` names the context to report and adds
+   nothing. The parts are written after the request's `prompt`, only where
+   it has words; `prompt` and `positive_text` stay the owner's words
+   everywhere, and "Show full prompt" is `prompt` plus `parts`. A choice the
+   family lacks is a 422 whose `loc` names it. Flags, never refusals:
+   `prompt_assist_not_applied` with `why` (`layout_prompt`, a JSON layout
+   that prose would break; `no_prompt`; `not_settable`; `no_presets`, a
+   context no file has) and `prompt_assist_render_words` with `category` and
+   `words` for typed text holding render vocabulary.
    `prompt.blank_picture` is the same kind of cue for a blank picture a
    conditioning encoder reads (MiniMax H3 Image's `images.image_1`): true
    wherever one is found. `blank_picture: false` on the body takes its input

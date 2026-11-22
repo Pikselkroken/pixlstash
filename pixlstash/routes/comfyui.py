@@ -2482,7 +2482,13 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     # every other answer. Read by the Recipe tab, which prints them under its
     # refusal to run.
     conversion_problems: list[str] = []
+    # The owner's words: what a run's prompt assist added is in
+    # `prompt_assist` instead (backend §25).
     positive_prompt: Optional[str] = None
+    # The prompt assist stamp on the picture's prompt, `{v, family, context,
+    # preset_version, joiner, parts: [{category, id, text}]}`: what was added
+    # after `positive_prompt`, exactly as sent. Null where nothing was.
+    prompt_assist: Optional[dict] = None
     negative_prompt: Optional[str] = None
     seed: Optional[int] = None
     # The seed as text as well as a number: ComfyUI draws seeds up to 2**64-1
@@ -3901,6 +3907,7 @@ def create_router(server) -> APIRouter:
             ),
             "converted_from_editor_graph": from_editor_graph,
             "positive_prompt": gen_info["positive_prompt"],
+            "prompt_assist": gen_info.get("prompt_assist"),
             "negative_prompt": extras["negative_prompt"],
             "settings": extras["settings"],
             # The workflow this picture's variant is in, in a form the

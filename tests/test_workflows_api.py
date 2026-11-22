@@ -147,7 +147,7 @@ from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import MAX_PROMPT_LENGTH, RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_templates import load_templates
@@ -14110,11 +14110,15 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
     )
     group = r.json()["groups"][0]
+    # Every graph is offered the generic prompt assist, off by default.
+    assist = group["prompt"].pop("assist")
+    assert (assist["presets"], assist["default_on"]) == ("_default", False)
     assert group["prompt"] == {
         "positive_settable": True,
         "negative_settable": False,
         "positive_text": "the saved prompt",
         "enhancer": False,
+        "enhancer_on": False,
         "blank_picture": False,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
@@ -14198,6 +14202,207 @@ def test_a_run_can_go_without_the_prompt_enhancer(runnable):
     )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["reasons"] == []
+
+
+def _assist_runnable(runnable, family):
+    """RUN_DOCUMENT with a literal prompt, read as a graph of *family*."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document["5"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "the saved prompt"},
+    }
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CLIPTextEncode"] = {"input": {"required": {}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    if family is not None:
+        # Which family a graph is, is `run_family`'s (test_prompt_assist.py).
+        runnable.monkeypatch.setattr(
+            workflows_routes, "run_family", lambda hub, graph: family
+        )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+
+
+def test_the_prompt_assist_is_off_unless_asked_and_on_by_default_only_for_h3(runnable):
+    """Absent is off: the prompt goes byte for byte. Every graph is offered
+    it: SDXL (no file of its own; an unknown or mixed family reads the same)
+    gets the generic presets, off by default; MiniMax H3 Image its own, on."""
+    _assist_runnable(runnable, None)
+    asked = {
+        "workflow_id": RUN_WF,
+        "prompt": "A woman.",
+        "seed_mode": "fixed",
+        "seed": 1,
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "_default",
+        False,
+        False,
+    )
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman."
+    assert "_meta" not in sent["5"]
+    # Asked for, the generic presets apply like any other.
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "prompt_assist": {}})
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is True
+    runnable.submitted.pop()
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "minimax_h3_image",
+        True,
+        False,
+    )
+    assert assist["parts"] == []
+    assert [c["id"] for c in assist["categories"]] == ["camera", "light", "skin"]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == "A woman."
+
+
+def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    layout = '{"summary": {"caption": "a sheet"}}'
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "prompt": layout, "prompt_assist": {}},
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert group["prompt"]["assist"]["applied"] is False
+    assert {"code": "prompt_assist_not_applied", "why": "layout_prompt"} in group[
+        "flags"
+    ]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == layout
+    # The choices are still checked: a bad one is refused as on a prose prompt.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": layout,
+            "prompt_assist": {"choices": {"lens": "none"}},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_blank_prompt_near_the_limit_is_not_refused_for_lines_it_never_gets(runnable):
+    """The tail is only written after words, so a blank prompt counts as is."""
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": " " * (MAX_PROMPT_LENGTH - 5),
+            "prompt_assist": {},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is False
+    runnable.submitted.pop()
+
+
+def test_the_prompt_assist_writes_its_parts_after_the_words_and_stamps_them(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    asked = {"workflow_id": RUN_WF, "seed_mode": "fixed", "seed": 1}
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            **asked,
+            "prompt": "A woman.",
+            "prompt_assist": {
+                "choices": {"skin": "none", "light": {"text": "a photorealistic lamp"}}
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assist = group["prompt"]["assist"]
+    assert assist["applied"] is True
+    assert [(p["category"], p["kind"], p["id"]) for p in assist["parts"]] == [
+        ("camera", "choice", "phone_snapshot"),
+        ("light", "choice", None),
+        ("camera", "finish", "phone_snapshot"),
+    ]
+    assert assist["parts"][1]["text"] == "a photorealistic lamp."
+    assert group["prompt"]["positive_text"] == "the saved prompt"
+    assert {
+        "code": "prompt_assist_render_words",
+        "category": "light",
+        "words": ["photorealistic"],
+    } in group["flags"]
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman. " + " ".join(
+        p["text"] for p in assist["parts"]
+    )
+    assert sent["5"]["_meta"]["pixlstash_prompt_assist"]["parts"] == assist["parts"]
+    assert extract_generation_info(sent)["positive_prompt"] == "A woman."
+    # No words to add to: nothing is written, byte for byte, and it is said.
+    graphs = []
+    for extra in ({}, {"prompt_assist": {}}):
+        r = runnable.owner.post(f"{API}/workflows/run", json={**asked, **extra})
+        assert r.status_code == 200, r.text
+        graphs.append(runnable.submitted.pop()["graph"])
+    assert graphs[0] == graphs[1]
+    assert {"code": "prompt_assist_not_applied", "why": "no_prompt"} in r.json()[
+        "groups"
+    ][0]["flags"]
+    # Off, in the sheet context: that context's catalogue, nothing added.
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            **asked,
+            "prompt": "x",
+            "prompt_assist": {"context": "sheet", "on": False},
+        },
+    )
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["context"], assist["applied"]) == ("sheet", False)
+    assert assist["categories"][0]["options"][0]["id"] == "agency_digitals"
+    assert r.json()["groups"][0]["flags"] == []
+
+
+@pytest.mark.parametrize(
+    "prompt_assist, loc",
+    [
+        ({"choices": {"lens": "none"}}, ["body", "prompt_assist", "choices", "lens"]),
+        (
+            {"choices": {"camera": {"id": "webcam"}}},
+            ["body", "prompt_assist", "choices", "camera"],
+        ),
+    ],
+)
+def test_a_prompt_assist_choice_the_family_lacks_is_a_422(runnable, prompt_assist, loc):
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": prompt_assist},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"][0]["loc"] == loc
+
+
+def test_a_prompt_assist_body_is_checked_at_the_door(runnable):
+    for body in (
+        {"choices": {"camera": {"text": "x" * 401}}},
+        {"choices": {"camera": {"id": "a", "text": "b"}}},
+        {"choices": {"Camera!": "none"}},
+        {"context": "video"},
+    ):
+        r = runnable.owner.post(
+            f"{API}/workflows/run/preflight",
+            json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": body},
+        )
+        assert r.status_code == 422, body
 
 
 def test_a_run_can_go_without_the_blank_picture(runnable):
@@ -15129,7 +15334,10 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "positive_text": "the saved prompt",
         "unplaced": [],
         "enhancer": False,
+        "enhancer_on": False,
         "blank_picture": False,
+        "recorded": None,
+        "assist_applied": False,
     }
 
 
@@ -15161,7 +15369,10 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "positive_text": None,
         "unplaced": ["positive"],
         "enhancer": False,
+        "enhancer_on": False,
         "blank_picture": False,
+        "recorded": None,
+        "assist_applied": False,
     }
     assert "positive prompt was not applied" in caplog.text
     # Nothing was sent, so nothing is unplaced: only the popup needs telling.
