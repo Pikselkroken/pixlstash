@@ -1,3 +1,80 @@
+# [2.0.2] [Security:Moderate]
+
+## Security
+
+- The desktop app moves to Electron 45 for Chromium security fixes. It now
+  needs macOS 13 or newer.
+- Updated accelerate for CVE-2026-69112 (a crafted model checkpoint could read
+  files outside its folder).
+
+## MiniMax H3 Image
+
+- Workflows for MiniMax H3 Image: text to image, inpaint, and character sheets
+  from words or from a reference picture. They sample with LCM, and text to
+  image adds a blank picture for the first step, so skin and hair come out
+  clean instead of over-sharpened. How it was tested:
+  pixlstash.dev/minimax-h3-image.html.
+- Run popup: a *Blank picture* switch (off draws more varied people between
+  seeds), a *Sampler* switch on the workflows that take a picture (Euler
+  keeps a little more skin detail, LCM keeps the person closer), and an
+  *Enhance prompt* box to send your words as written.
+- *Photo look* adds tested camera, light and skin lines after your prompt, on
+  by default for MiniMax H3 Image. Your own words stay first, and the recipe
+  shows them apart from what was added.
+- ComfyUI-PixlStash 1.9.3, installed from ComfyUI Manager, adds these
+  workflows to ComfyUI's template list, with and without PixlStash's nodes.
+
+## Character sheets and training sets
+
+- **Sheets from more models:** Krea 2, Qwen-Image, FLUX.2 Klein and MiniMax
+  H3, from words or from a reference picture. *Make a sheet workflow from …*
+  adapts most text-to-image workflows. MiniMax H3 Image draws sheets at 4K by
+  default, with 5K and 6K to choose from: below 4K its faces turn waxy.
+- Sheets ask for plain, unedited photos with the same eye colour in every
+  photo, and take a *Background* and a *Proportions* (little person, cartoon)
+  setting. They no longer ask for a man or a woman: your description or
+  reference picture says who.
+- **Cutting:** sheets are cut where the photos meet, even when the model drew
+  them touching, with no sliver of the next photo. Each sheet shows its cut as
+  soon as it is drawn; drag a box to adjust it, or *Reset to automatic*. A cut
+  the cutter is unsure of is marked on the sheet's card.
+- *Create a training set…* builds on the set's own screen, so you can leave
+  and come back while sheets draw. *Generate character sheets…* on a person's
+  menu draws sheets without making a training set.
+
+## Workflows
+
+- Built-in workflows have plainer names and update with each release as a new
+  version of the same workflow; a copy you edited keeps your graph. All of
+  them are on the Workflows page from the start, and one you remove stays
+  removed.
+- The Recipe tab folds a long prompt behind *Show full prompt*, and shows each
+  parallel node's own settings and the sampler of a SamplerLCM-style node.
+- The built-in *Sheet-MiniMax-H3-Reference* is retired: the MiniMax H3 Image
+  reference sheet draws the same sheet several times faster. A copy you edited
+  stays.
+
+## People
+
+- Face clusters: *Save as set…*, a *Likeness* filter in a person's view, and
+  cluster picking in the picture picker.
+
+## Fixes
+
+- Tagging and search embeddings use far less memory on large photos; a big
+  batch could get the server killed.
+- GPU background work (faces, embeddings, tagging) could stop for good after
+  hours of ComfyUI holding the card.
+- The GPU Docker image runs face detection and the WD14 tagger on the GPU
+  again.
+- The stop button on a ComfyUI run stopped every run, not just that one.
+- Tagging and captioning on the CPU ignored the models chosen in Settings.
+- A run larger than any before (a 6K sheet after 5K ones) could wait for ever
+  for GPU memory; it now asks for no more than an earlier run had.
+- The character sheet step opens with its workflows and choices in place, and
+  long suggestion lists scroll instead of drawing entries on top of each
+  other.
+
 # [2.0.1]
 
 ## Training sets
