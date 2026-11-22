@@ -17,7 +17,9 @@ from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.services import workflow_run_service
 from pixlstash.services.comfyui_recipe_service import plan_lora_insertion
+from pixlstash.services.prompt_assist import assemble
 from pixlstash.services.workflow_hash import reduce_api_graph
 from pixlstash.services.workflow_identity import (
     SHEET_LAYOUT_ENCODER,
@@ -271,6 +273,32 @@ def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
         )
         text = sheet_prompt(description="x", layout=layout)
         assert "digitals" not in text and "eye colour" not in text
+
+
+def test_the_sheet_look_the_run_adds_is_the_photo_look_prompt_byte_for_byte():
+    """`look_added_by_run` hands the look to the run's prompt assist; its sheet
+    default then sends the model exactly what #2776's photo look did."""
+    words = sheet_prompt(description="x", layout="prose", look_added_by_run=True)
+    assert "photorealistic" not in words and PHOTO_LOOK not in words
+    graph = json.loads(
+        (
+            pathlib.Path(character_sheet.__file__).parent.parent
+            / "data/comfyui-workflows/built-in/MiniMax-H3-Image-t2i.json"
+        ).read_text(encoding="utf-8")
+    )
+    stamp = assemble("minimax_h3_image", "sheet", {}, words)
+    workflow_run_service.apply_prompts(graph, words, None, None, stamp)
+    assert graph["6"]["inputs"]["prompt"] == sheet_prompt(
+        description="x", layout="prose"
+    )
+    # Whatever photo_look says, and the layouts never see it.
+    assert words == sheet_prompt(
+        description="x", layout="prose", photo_look=False, look_added_by_run=True
+    )
+    for layout in ("moss", "regions"):
+        assert sheet_prompt(
+            description="x", layout=layout, look_added_by_run=True
+        ) == sheet_prompt(description="x", layout=layout)
 
 
 def _edit_graph(latent: str) -> dict:
@@ -1323,6 +1351,11 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "layout": "prose", "photo_look": False},
     ).json()["prompt"]
     assert "digitals" not in plain
+    by_run = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "layout": "prose", "look_added_by_run": True},
+    ).json()["prompt"]
+    assert "digitals" not in by_run and "photorealistic" not in by_run
     giant = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "giant"},

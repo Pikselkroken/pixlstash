@@ -142,6 +142,7 @@ pixlstash = [
     "data/workflow_templates/*.json",
     "data/comfyui-pack/**/*",
     "data/training-presets/*.json",
+    "data/prompt-presets/*.json",
     "data/ai-toolkit-jobs/built-in/*.json",
 ]
 
