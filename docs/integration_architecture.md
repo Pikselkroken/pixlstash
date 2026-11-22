@@ -2110,6 +2110,23 @@ clients see the effect, through `GET /characters/{id}/reference_pictures` and
 the training-set suggestion's likeness. Backend: §25.30 of the backend
 document.
 
+### 2.10 The character sheets contract
+
+`POST /characters/{id}/sheets/rank` with `{picture_ids, reference_picture_ids?}`
+answers `{sheets, references}`; each sheet carries its `cells` (the six photos
+it would cut to, `[left, top, right, bottom]` fractions) and `cuts_cleanly`
+from the moment the sheet has a readable file, before its `faces_read` turns
+true. `POST /characters/{id}/sheets/use` with `{picture_ids, boxes?}` answers
+`{picture_ids}`, the six panels of each sheet, passport photos first. `boxes`
+is an object keyed by sheet picture id (JSON keys are strings), each value six
+`[left, top, right, bottom]` fractions of that sheet in panel order: the
+photos are cropped at exactly those boxes. A sheet with no entry is cut
+automatically, and `boxes` may be left out altogether. A 422 whose `detail`
+names the reason refuses the whole request, filing nothing, when a sheet's
+boxes are not six, not inside the sheet, inverted, under 32 px a side on the
+sheet, or keyed by a picture not among `picture_ids`. Both routes are
+owner-only. Backend: §25.29 of the backend document.
+
 ---
 
 
