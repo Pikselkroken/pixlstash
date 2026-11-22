@@ -4109,9 +4109,14 @@ def _fake_pack(root: Path) -> Path:
     pack = root / "bundled" / "ComfyUI-PixlStash"
     (pack / "nodes").mkdir(parents=True)
     (pack / "tests").mkdir()
+    (pack / "examples").mkdir()
+    (pack / "screenshots").mkdir()
     (pack / "__init__.py").write_text("# the bundled nodes\n")
     (pack / "nodes" / "picture_saver.py").write_text("# saver\n")
     (pack / "tests" / "test_x.py").write_text("# not shipped\n")
+    (pack / "examples" / "Example.json").write_text("{}\n")
+    (pack / "examples" / "Example.jpg").write_bytes(b"\xff\xd8")
+    (pack / "screenshots" / "shot.png").write_bytes(b"\x89PNG")
     (pack / "pyproject.toml").write_text(
         '[project]\nname = "pixlstash"\nversion = "9.9.9"\n'
     )
@@ -4211,6 +4216,10 @@ def test_installing_copies_the_nodes_and_trashes_an_older_copy(install_env):
     assert install_env.trashed == [str(older)]
     assert (target / "nodes" / "picture_saver.py").is_file()
     assert not (target / "tests").exists(), "the pack's own tests are not installed"
+    assert not (target / "screenshots").exists()
+    # ComfyUI lists a pack's examples folder as templates (#2799).
+    assert (target / "examples" / "Example.json").is_file()
+    assert (target / "examples" / "Example.jpg").is_file()
     assert unrelated.is_dir(), "another node pack must never be touched"
     assert fake.asked[-1] == "POST v2/manager/reboot"
 

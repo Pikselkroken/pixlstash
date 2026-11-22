@@ -83,7 +83,8 @@ def _build_frontend() -> None:
 
 # The ComfyUI-PixlStash nodes ride in the wheel, copied from the pinned
 # submodule, so PixlStash can install the exact version it is tested with.
-# Only what ComfyUI loads is copied; the pack's own tests and media stay out.
+# Only what ComfyUI loads is copied, examples included (ComfyUI lists them as
+# templates); the pack's own tests and screenshots stay out.
 _ROOT = Path(__file__).resolve().parent
 _PACK_SOURCE = _ROOT / "integrations" / "ComfyUI-PixlStash"
 _PACK_STAGED = _ROOT / "pixlstash" / "data" / "comfyui-pack" / "ComfyUI-PixlStash"
@@ -95,7 +96,6 @@ _PACK_LEFT_OUT = (
     ".ruff_cache",
     ".pytest_cache",
     "tests",
-    "examples",
     "screenshots",
     "__pycache__",
 )
