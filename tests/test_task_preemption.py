@@ -613,3 +613,88 @@ def test_a_task_nobody_waits_for_any_more_leaves_the_gpu_backoff():
         assert task.status.value == "cancelled"
     finally:
         runner.stop()
+
+
+def test_a_requeue_count_past_the_float_limit_gets_the_capped_delay():
+    """A task waiting out a long GPU run must not overflow the backoff."""
+
+    class _Refusing(ResourceArbiter):
+        def try_light(self, *args, **kwargs):
+            return None
+
+    runner = TaskRunner(
+        name="requeue-cap", resource_arbiter=_Refusing(_NoCard(), usage=lambda: None)
+    )
+    task = _QuickGpuTask()
+    runner._requeue_counts[task.id] = 1100
+    try:
+        run_now, lease = runner._admit(task, queue.PriorityQueue())
+        assert (run_now, lease) == (False, None)
+        timer, _ = runner._requeued[task.id]
+        assert timer.interval == runner.VRAM_REQUEUE_MAX_S
+    finally:
+        runner._take_requeued(task.id)
+
+
+def test_an_error_while_handling_a_task_does_not_end_the_worker():
+    """The GPU worker survives a task whose admission raises, and runs the next."""
+
+    class _RefuseFirst(ResourceArbiter):
+        refused = False
+
+        def try_light(self, *args, **kwargs):
+            if not self.refused:
+                self.refused = True
+                return None
+            return super().try_light(*args, **kwargs)
+
+    class _BrokenHook(_QuickGpuTask):
+        def allow_cpu_spillover(self):
+            raise RuntimeError("test-broken-hook")
+
+    runner = TaskRunner(
+        name="hook-raises", resource_arbiter=_RefuseFirst(_NoCard(), usage=lambda: None)
+    )
+    endings = {}
+    runner.add_task_complete_callback(
+        lambda task, error: endings.__setitem__(task.id, error)
+    )
+    runner.start()
+    try:
+        broken = _BrokenHook()
+        survivor = _QuickGpuTask()
+        runner.submit(broken)
+        runner.submit(survivor)
+        assert _until(lambda: survivor.id in endings), "the worker died on the error"
+        assert runner.gpu_worker_alive()
+        assert broken.status.value == "failed"
+        assert isinstance(endings[broken.id], RuntimeError)
+        assert survivor.status.value == "completed"
+    finally:
+        runner.stop()
+
+
+def test_a_lease_that_will_not_release_still_settles_the_task():
+    """The completion callbacks release the finder's claims, so they must fire."""
+
+    def _boom():
+        raise RuntimeError("test-lease-release-failure")
+
+    class _Granting(ResourceArbiter):
+        def try_light(self, *args, **kwargs):
+            return SimpleNamespace(on_cpu=False, release=_boom)
+
+    runner = TaskRunner(
+        name="release-raises", resource_arbiter=_Granting(_NoCard(), usage=lambda: None)
+    )
+    done = threading.Event()
+    runner.add_task_complete_callback(lambda task, error: done.set())
+    runner.start()
+    try:
+        task = _QuickGpuTask()
+        runner.submit(task)
+        assert done.wait(5), "the callbacks never fired after the release failed"
+        assert task.status.value == "completed"
+        assert runner.gpu_worker_alive()
+    finally:
+        runner.stop()
