@@ -1181,7 +1181,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       await size("Large").trigger("click");
       release();
       await flushPromises();
-      // H3 starts at 4K, but not over the owner's Large.
+      // H3 starts at 5K, but not over the owner's Large.
       expect(size("Large").attributes("aria-checked")).toBe("true");
       expect(size("4K").attributes("aria-checked")).toBe("false");
       wrapper.unmount();
