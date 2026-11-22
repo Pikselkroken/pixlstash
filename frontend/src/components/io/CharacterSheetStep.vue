@@ -645,7 +645,7 @@
               : `${panelName(i)}${boxEdited(zoomed, i) ? ', edited' : ''}`
           "
           :aria-hidden="cutLocked ? 'true' : undefined"
-          :title="cutLocked ? undefined : CUT_HINT"
+          :aria-describedby="cutLocked ? undefined : 'cs-cut-hint'"
           data-testid="cs-cell"
           @pointerdown="beginDrag($event, zoomed, i, null)"
           @pointermove="moveDrag"
@@ -667,6 +667,15 @@
         </div>
       </template>
       <template #actions>
+        <!-- How the boxes move, said once beside them rather than as a
+             hover tip on a box being dragged; each box points to it. -->
+        <span
+          v-if="zoomed && !cutLocked"
+          id="cs-cut-hint"
+          class="cs-cap"
+          data-testid="cs-cut-hint"
+          >{{ CUT_HINT }}</span
+        >
         <button
           v-if="zoomedEdited"
           type="button"
@@ -1707,9 +1716,8 @@ const cutLocked = computed(() => working.value || phase.value === "filing");
 const HANDLE_NAMES = Object.keys(HANDLES);
 const PANEL_COUNT = 6;
 const CUT_HINT =
-  "Drag an edge or corner to resize this photo, or inside it to move it. " +
-  "Keyboard: arrow keys move the box; Shift with an arrow pushes that edge " +
-  "out, Alt pulls it in.";
+  "Drag a box's edge or corner to resize it, or its middle to move it. " +
+  "Arrows move it; Shift or Alt with an arrow pushes or pulls that edge.";
 
 /** The photo a box is, for its label: the passports 1-4, then the bodies. */
 function panelName(index) {
@@ -1724,7 +1732,8 @@ let drag = null;
 /** A drag on a photo's box (`edges` null) or one of its handles. The zoom's
  * pan must not take it, so the event stops here. */
 function beginDrag(event, sheet, index, edges) {
-  if (cutLocked.value || event.button !== 0) return;
+  // A second finger on a touch screen is not a new drag: only the first moves.
+  if (cutLocked.value || event.button !== 0 || event.isPrimary === false) return;
   event.stopPropagation();
   const box = event.currentTarget.closest(".cs-cell");
   const overlay = box?.closest(".zp-over");

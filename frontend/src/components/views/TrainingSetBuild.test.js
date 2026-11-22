@@ -3974,8 +3974,11 @@ describe("TrainingSetBuild: cutting a sheet by hand", () => {
       agreement: null,
       agreement_words: "",
     };
-    await zoomFirstSheet([unread]);
+    const wrapper = await zoomFirstSheet([unread]);
     expect(marks()).toHaveLength(6);
+    // How to move them is said once beside them, and each box points to it.
+    expect(wrapper.find('[data-testid="cs-cut-hint"]').text()).toContain("Drag a box");
+    expect(marks()[0].getAttribute("aria-describedby")).toBe("cs-cut-hint");
     expect(percent(marks()[0].style.width)).toBeCloseTo(25, 5);
     expect(marks().some((m) => m.classList.contains("cs-cell--edited"))).toBe(false);
   });
@@ -3993,6 +3996,21 @@ describe("TrainingSetBuild: cutting a sheet by hand", () => {
     expect(marks()[1].classList.contains("cs-cell--edited")).toBe(false);
     expect(percent(marks()[1].style.left)).toBeCloseTo(25, 5);
     expect(wrapper.find('[data-testid="cs-cut-reset"]').exists()).toBe(true);
+  });
+
+  it("a second finger does not take over a box", async () => {
+    await zoomFirstSheet();
+    const second = (type, [x, y]) => {
+      const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y });
+      Object.defineProperty(event, "isPrimary", { value: false });
+      marks()[0].dispatchEvent(event);
+    };
+    second("pointerdown", [100, 100]);
+    second("pointermove", [300, 300]);
+    second("pointerup", [300, 300]);
+    await flushPromises();
+    expect(percent(marks()[0].style.left)).toBeCloseTo(0, 5);
+    expect(marks()[0].classList.contains("cs-cell--edited")).toBe(false);
   });
 
   it("drags the middle of a box to move it, and never past the sheet", async () => {
