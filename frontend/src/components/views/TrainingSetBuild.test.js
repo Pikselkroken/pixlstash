@@ -1192,6 +1192,72 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("a check that throws is not remembered for the next open", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    gen.getWorkflowCard.mockRejectedValue(new Error("502 Bad Gateway"));
+    const wrapper = mountDialog();
+    await flushPromises();
+    expect(localStorage.getItem("pixlstash:sheetWorkflowCards:v1")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("a sheet copy still being checked holds no Photo look place", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman" });
+    const sdxl = {
+      id: "auto:sdxl",
+      name: "SDXL",
+      type: "txt2img",
+      models: [{ base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    const flux = {
+      id: "auto:flux",
+      name: "Flux",
+      type: "txt2img",
+      models: [{ base_model_family: "flux" }],
+    };
+    const copy = {
+      id: "manual:sdxl-sheet",
+      name: "SDXL (sheet)",
+      type: "txt2img",
+      sheet_layout: true,
+      models: [{ kind: "checkpoint", base_model_family: "sdxl", base_model: "SDXL" }],
+    };
+    gen.listWorkflowCards
+      .mockResolvedValueOnce({ cards: [MOSS_CARD, sdxl, flux] })
+      .mockResolvedValue({ cards: [MOSS_CARD, sdxl, flux, copy] });
+    gen.sheetCopyWorkflow.mockResolvedValue({ workflow_id: copy.id });
+    // The copy's check is out for the rest of the test: it is chosen first.
+    const answer = gen.getWorkflowCard.getMockImplementation();
+    gen.getWorkflowCard.mockImplementation((id) =>
+      id === copy.id ? new Promise(() => {}) : answer(id),
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Copy")
+      .vm.$emit("update:modelValue", "auto:sdxl");
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-convert-text"] button').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .props("modelValue"),
+    ).toBe(copy.id);
+    // A regions sheet never shows a Photo look, so nothing holds its place.
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("a late Photo look for one workflow does not replace the one on show", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

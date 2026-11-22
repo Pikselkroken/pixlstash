@@ -1046,9 +1046,13 @@ const sheetAssist = computed(() =>
 );
 /** The Photo look is not known yet: the chosen workflow has not answered its
  * check (or, with none chosen, the list is not checked). Only then is its
- * place held, so a workflow that never answers does not hold it for good. */
+ * place held, so a workflow that never answers does not hold it for good. A
+ * chosen workflow holds it only on the prose layout, the one that can show a
+ * Photo look; with none chosen the layout is not known yet. */
 const sheetLookPending = computed(() =>
-  workflowId.value ? !checks.value[workflowId.value] : !workflowsLoaded.value,
+  workflowId.value
+    ? layout.value === "prose" && !checks.value[workflowId.value]
+    : !workflowsLoaded.value,
 );
 const sheetLook = usePromptAssist(sheetAssist, "sheet");
 /** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
@@ -1696,6 +1700,8 @@ async function checkCard(card, reference) {
       sizes: [],
       inputs: [],
       problem: `Couldn't check ${card.name || "this workflow"}: ${errorMessage(e)}`,
+      // Never answered, so not remembered: the next open checks it again.
+      failed: true,
       assist: null,
       samplerChoice: false,
     };
@@ -1745,8 +1751,9 @@ async function checkCards() {
   if (!usableCards.value.some((card) => card.id === workflowId.value)) {
     workflowId.value = usableCards.value[0]?.id || "";
   }
-  // An outage is not remembered: the next open checks again, as this one did.
-  if (!results.some((result) => result.down)) {
+  // An outage, or a check that threw, is not remembered: the next open checks
+  // again, as this one did.
+  if (!results.some((result) => result.down || result.failed)) {
     const faces = readCardCache()?.faces || {};
     writeCardCache({
       cards: cardRows,
