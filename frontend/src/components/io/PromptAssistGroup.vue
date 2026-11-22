@@ -194,7 +194,7 @@
  * prompt box is never written to: the full-prompt view is the pre-flight's
  * `parts` after `words`.
  */
-import { computed, reactive, ref, useId } from "vue";
+import { computed, reactive, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -219,6 +219,14 @@ const expanded = ref(false);
 const showFull = ref(false);
 // What each field shows while it is being typed in, until it is kept.
 const drafts = reactive({});
+// Half-typed text belongs to the rows it was typed in: another family's
+// presets (the dialog read another workflow) start from their own values.
+watch(
+  () => `${props.assist?.family || props.assist?.presets || ""}:${props.assist?.context || ""}`,
+  () => {
+    for (const id of Object.keys(drafts)) delete drafts[id];
+  },
+);
 const fields = {};
 
 function changed(act) {

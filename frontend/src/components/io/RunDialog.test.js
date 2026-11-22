@@ -6343,6 +6343,25 @@ describe("Photo look", () => {
 
   beforeEach(() => localStorage.clear());
 
+  it("half-typed text stays with its family when another workflow is read", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    field(wrapper, "camera").vm.$emit("update:modelValue", "Old Pentax");
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Old Pentax");
+    // The next workflow has no single family: the generic presets.
+    preflightWorkflowRun.mockResolvedValue(
+      answer({ ...ASSIST, family: null, presets: "_default" }),
+    );
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Phone snapshot");
+    // Leaving the field now keeps nothing for either family.
+    field(wrapper, "camera").vm.$emit("blur");
+    await flushPromises();
+    expect(JSON.stringify(localStorage)).not.toContain("Old Pentax");
+  });
+
   it("is not drawn, and sends nothing, without presets for the family", async () => {
     preflightWorkflowRun.mockResolvedValue(answer(null));
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
