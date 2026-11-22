@@ -1046,12 +1046,19 @@ const sheetAssist = computed(() =>
  * check (or, with none chosen, the list is not checked). Only then is its
  * place held, so a workflow that never answers does not hold it for good. A
  * chosen workflow holds it only on the prose layout, the one that can show a
- * Photo look; with none chosen the layout is not known yet. */
+ * Photo look; with none chosen, only while a listed workflow could show one. */
 const sheetLookPending = computed(() =>
   workflowId.value
     ? layout.value === "prose" && !checks.value[workflowId.value]
-    : !workflowsLoaded.value,
+    : !workflowsLoaded.value &&
+      (!modeCards.value.length || modeCards.value.some(drawsProse)),
 );
+/** Whether *card* draws its sheet in prose, the layout a Photo look rides on:
+ * every draw from a reference, and any text one but MOSS-Image's and a sheet
+ * copy's regions. */
+function drawsProse(card) {
+  return fromReference.value || (!card.sheet_layout && cardEngine(card) !== ENGINES.moss);
+}
 const sheetLook = usePromptAssist(sheetAssist, "sheet");
 /** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
 const sheetSamplerChoice = computed(
@@ -1746,9 +1753,20 @@ async function checkCards() {
   ].sort(([, a], [, b]) => Number(b === first) - Number(a === first));
   const results = await Promise.all(
     all.map(async ([card, ref]) => {
+      const askAt = sheetAssistAsk;
       const result = await checkCard(card, ref);
       if (alive && run === checkRun) {
-        checks.value = { ...checks.value, [card.id]: result };
+        // The check asked with the shipped look. Had the owner asked for their
+        // own while it was out, their answer stands for the chosen workflow.
+        const own = sheetAssistAsk !== askAt && card.id === workflowId.value;
+        const held = checks.value[card.id];
+        checks.value = {
+          ...checks.value,
+          [card.id]:
+            own && held
+              ? { ...result, assist: held.assist, samplerChoice: held.samplerChoice }
+              : result,
+        };
         if (!workflowId.value) workflowId.value = firstUsable();
       }
       return result;
@@ -1765,7 +1783,10 @@ async function checkCards() {
     const faces = readCardCache()?.faces || {};
     writeCardCache({
       cards: cardRows,
-      checks: checks.value,
+      // This run's answers only: `checks` also holds what `askSheetAssist`
+      // wrote for the owner's own look (or a failed ask's null), which is not
+      // what the workflow's check answered.
+      checks: Object.fromEntries(all.map(([card], i) => [card.id, results[i]])),
       // Whether this character has faces to draw from: the mode rule's input.
       faces: { ...faces, [props.character.id]: referenceIds.value.length > 0 },
     });
