@@ -10,11 +10,13 @@
   >
     <template #header-right>
       <AppSelect
-        v-if="step?.workflowOptions?.length"
+        v-if="step"
         v-model="step.workflowId"
         label="Sheet workflow"
         hide-label
         compact
+        :placeholder="step.workflowsPending ? 'Checking workflows…' : 'No sheet workflow'"
+        :disabled="!step.workflowOptions.length"
         :options="step.workflowOptions"
       />
     </template>

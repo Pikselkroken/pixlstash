@@ -1092,6 +1092,163 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("a second open shows the workflows and the Photo look before any answer comes back", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [MOSS_CARD, KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    };
+    gen.preflightWorkflowRun.mockImplementation(async () => ({
+      ok: true,
+      groups: [{ reasons: [], prompt: { assist } }],
+    }));
+    let wrapper = mountDialog();
+    await flushPromises();
+    wrapper.unmount();
+
+    // Nothing answers this time: the step is what the last open left.
+    const never = () => new Promise(() => {});
+    gen.listWorkflowCards.mockImplementation(never);
+    gen.getCharacter.mockImplementation(never);
+    gen.getWorkflowCard.mockImplementation(never);
+    gen.preflightWorkflowRun.mockImplementation(never);
+    wrapper = mountDialog();
+    await flushPromises();
+    const select = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow");
+    expect(select.props("options").map((o) => o.value)).toContain("manual:krea");
+    expect(select.props("disabled")).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("a first open holds the Photo look's place and the workflow select until the checks answer", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [
+        {
+          id: "look",
+          label: "Closing look",
+          default: "agency",
+          options: [{ id: "agency", label: "Agency digitals", text: "Agency digitals." }],
+        },
+      ],
+      parts: [{ category: "look", id: "agency", text: "Agency digitals." }],
+    };
+    // The card's pre-flight is out until the test answers it.
+    let cardAnswer;
+    gen.getWorkflowCard.mockImplementation(
+      () => new Promise((r) => (cardAnswer = r)),
+    );
+    gen.preflightWorkflowRun.mockImplementation(async () => ({
+      ok: true,
+      groups: [{ reasons: [], prompt: { assist } }],
+    }));
+    const wrapper = mountDialog();
+    await flushPromises();
+    const select = () =>
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow");
+    expect(select().props("disabled")).toBe(true);
+    expect(select().props("placeholder")).toBe("Checking workflows…");
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+
+    cardAnswer({ card: { name: "Krea sheet", defaults: [
+      { slot_label: "lat", input_name: "width", value: 1024 },
+      { slot_label: "lat", input_name: "height", value: 1024 },
+    ] } });
+    await flushPromises();
+    expect(select().props("disabled")).toBe(false);
+    expect(select().props("options").map((o) => o.value)).toEqual(["manual:krea"]);
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("a late Photo look for one workflow does not replace the one on show", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    const QWEN_CARD = {
+      id: "manual:qwen",
+      name: "Qwen sheet",
+      type: "txt2img",
+      last_used: "2026-11-08T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "qwen" }],
+    };
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD, QWEN_CARD] });
+    const look = (family, id, label, category) => ({
+      family,
+      context: "sheet",
+      default_on: true,
+      categories: [{ id, label: category, default: id, options: [{ id, label, text: `${label}.` }] }],
+      parts: [{ category: id, id, text: `${label}.` }],
+    });
+    const krea = look("krea2", "agency", "Agency digitals", "Closing look");
+    const qwen = look("qwen", "fine", "Fine grain", "Grain");
+    // Krea's answer to a change of its look is held back.
+    let lateKrea;
+    let holdKrea = false;
+    gen.preflightWorkflowRun.mockImplementation((body) => {
+      if (holdKrea && body.workflow_id === KREA_CARD.id) {
+        return new Promise((r) => (lateKrea = r));
+      }
+      const assist = body.workflow_id === QWEN_CARD.id ? qwen : krea;
+      return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
+    });
+    const wrapper = mountDialog();
+    await flushPromises();
+    const pick = async (id) => {
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .vm.$emit("update:modelValue", id);
+      await flushPromises();
+    };
+    const summary = () => wrapper.find('[data-testid="pa-summary"]').text();
+    await pick(KREA_CARD.id);
+    expect(summary()).toBe("Agency digitals");
+    // A change to Krea's look asks Krea, and the answer is still on its way...
+    holdKrea = true;
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await pick(QWEN_CARD.id);
+    expect(summary()).toContain("grain");
+    // ...when the owner has moved on to Qwen. Krea's answer lands: Qwen keeps its look.
+    lateKrea({ ok: true, groups: [{ reasons: [], prompt: { assist: krea } }] });
+    await flushPromises();
+    expect(summary()).toContain("grain");
+    expect(summary()).not.toContain("closing");
+    wrapper.unmount();
+  });
+
   it("Photo look off: no look at all, from the run or the sheet prompt", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -1127,7 +1284,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
-  it("a draw while the next workflow's look is still loading sends no old look", async () => {
+  it("a workflow whose pre-flight is still out shows no look, and draws with none", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
     );
@@ -1147,14 +1304,13 @@ describe("TrainingSetBuild: generating the pictures", () => {
       categories: [{ id: "look", label: "Closing look", default: "none", options: [] }],
       parts: [],
     };
-    // Krea's catalogue answers; Qwen's never does, so the draw happens in
-    // the window before it would.
+    // Krea's pre-flight answers its look; Qwen's is out until the test says so.
+    let answerQwen;
     gen.preflightWorkflowRun.mockImplementation((body) => {
-      if (!body.prompt_assist) return Promise.resolve({ ok: true, groups: [{ reasons: [] }] });
-      if (body.workflow_id === KREA_CARD.id) {
-        return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
+      if (body.workflow_id === QWEN_CARD.id) {
+        return new Promise((r) => (answerQwen = r));
       }
-      return new Promise(() => {});
+      return Promise.resolve({ ok: true, groups: [{ reasons: [], prompt: { assist } }] });
     });
     const wrapper = mountDialog();
     await flushPromises();
@@ -1164,7 +1320,12 @@ describe("TrainingSetBuild: generating the pictures", () => {
       .find((c) => c.props("label") === "Sheet workflow")
       .vm.$emit("update:modelValue", QWEN_CARD.id);
     await flushPromises();
+    // Krea's look is not kept for Qwen: its place is held until Qwen answers.
     expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(true);
+    answerQwen({ ok: true, groups: [{ reasons: [], prompt: {} }] });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="cs-look-pending"]').exists()).toBe(false);
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("prompt_assist");
@@ -3404,7 +3565,9 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     world(false);
     wrapper = mountDialog();
     await flushPromises();
-    expect(workflowSelect(wrapper)).toBeUndefined();
+    // The select stays where it is, empty and inert, rather than vanishing.
+    expect(workflowSelect(wrapper).props("options")).toEqual([]);
+    expect(workflowSelect(wrapper).props("disabled")).toBe(true);
     expect(wrapper.find('[data-testid="cs-workflow-problem"]').text()).toContain(
       "None of the 2 sheet workflows can draw a sheet. Unsized MOSS has no picture size",
     );
