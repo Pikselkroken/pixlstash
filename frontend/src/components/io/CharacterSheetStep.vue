@@ -1073,6 +1073,7 @@ async function askSheetAssist() {
 // one goes at once, or a draw before the answer would send the wrong look.
 watch([workflowId, layout], () => {
   sheetAssist.value = null;
+  sheetSamplerChoice.value = false;
   sampler.value = "lcm";
   askSheetAssist();
 });

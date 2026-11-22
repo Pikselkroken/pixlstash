@@ -1170,7 +1170,7 @@ def test_a_sampler_choice_is_offered_only_where_lcm_meets_a_picture_input():
     report = run_service.apply_prompts(graph, None, None, None)
     assert (report["sampler_choice"], report["sampler"]) == (True, "lcm")
     assert graph == _load(BUILT_IN / name)
-    report = run_service.apply_prompts(graph, None, None, None, sampler="lcm")
+    run_service.apply_prompts(graph, None, None, None, sampler="lcm")
     assert graph == _load(BUILT_IN / name)
     report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
     assert (report["sampler_choice"], report["sampler"]) == (True, "euler")

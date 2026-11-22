@@ -992,6 +992,15 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect(wrapper.find('[data-testid="cs-sampler-hint"]').text()).toContain(
       "Euler keeps a little more skin detail",
     );
+    // Another workflow's answer still on its way: the old offer goes at once,
+    // so Euler cannot be picked for a workflow that may not take it.
+    const answers = gen.preflightWorkflowRun.getMockImplementation();
+    gen.preflightWorkflowRun.mockImplementation(() => new Promise(() => {}));
+    await pick(wrapper, QWEN_CARD.id);
+    expect(control(wrapper).exists()).toBe(false);
+    gen.preflightWorkflowRun.mockImplementation(answers);
+    await pick(wrapper, "manual:krea");
+    expect(control(wrapper).exists()).toBe(true);
     // The default draws without naming a sampler.
     await generate(wrapper);
     expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("sampler");
