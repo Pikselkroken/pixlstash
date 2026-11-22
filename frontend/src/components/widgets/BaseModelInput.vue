@@ -70,7 +70,7 @@
           <!-- Hidden from the accessible name: it is a hint about the keyboard,
                and read out it turns every first option into "SDXL 1.0 TAB". -->
           <span
-            v-if="!openOnFocus && idx === (index >= 0 ? index : 0)"
+            v-if="!openOnFocus && idx === (shown >= 0 ? shown : 0)"
             class="bmi-hint"
             aria-hidden="true"
             >TAB</span
@@ -381,7 +381,8 @@ function onKeydown(event) {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    choose(list[index.value >= 0 ? index.value : 0]);
+    // The highlighted row, as Enter takes it; the first when none is.
+    choose(list[shown.value >= 0 ? shown.value : 0]);
   } else if (event.key === "Enter") {
     event.preventDefault();
     event.stopPropagation();

@@ -388,6 +388,27 @@ describe("a field that offers the typed text as its own option", () => {
     expect(wrapper.emitted("confirm")).toHaveLength(1);
   });
 
+  it("Tab and its hint take the highlighted row, as Enter does", async () => {
+    const wrapper = make({
+      props: {
+        modelValue: "",
+        options: ["Pentax film", "Pentax"],
+        ownText: true,
+        "onUpdate:modelValue": (next) => wrapper.setProps({ modelValue: next }),
+      },
+      attachTo: document.body,
+    });
+    const input = wrapper.find("input");
+    await input.trigger("focus");
+    await input.setValue("pentax");
+    await wrapper.vm.$nextTick();
+    const rows = [...document.querySelectorAll(".bmi-item")];
+    expect(rows.map((row) => row.textContent.includes("TAB"))).toEqual([false, true]);
+    await input.trigger("keydown", { key: "Tab" });
+    expect(wrapper.emitted("update:modelValue").at(-1)).toEqual(["Pentax"]);
+    wrapper.unmount();
+  });
+
   it("typed text equal to an option highlights it and offers no Use row", async () => {
     const wrapper = await typed("phone SNAPSHOT");
     const rows = [...document.querySelectorAll(".bmi-item")];
