@@ -209,6 +209,15 @@
                 data-testid="cs-photo-look"
               />
             </div>
+            <div v-if="sheetSamplerChoice" class="cs-opt">
+              <FieldLabel>Sampler</FieldLabel>
+              <Segmented
+                v-model="sampler"
+                aria-label="Sampler"
+                :options="samplerOptions"
+                data-testid="cs-sampler"
+              />
+            </div>
           </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
@@ -219,6 +228,12 @@
           <span v-if="layout === 'prose' && !sheetAssist" class="cs-hint"
             >Photo look asks for plain, unretouched photos rather than a
             polished render.</span
+          >
+          <span
+            v-if="sheetSamplerChoice"
+            class="cs-hint"
+            data-testid="cs-sampler-hint"
+            >{{ SAMPLER_HINT }}</span
           >
         </div>
       </template>
@@ -709,6 +724,7 @@ import { buildMediaUrl } from "../../utils/media";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import { SAMPLER_CHOICES, SAMPLER_HINT } from "../../utils/samplerChoice";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import RecentInput from "../widgets/RecentInput.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -1012,6 +1028,13 @@ const layout = computed(() => {
 /** The pre-flight's Photo look for sheets on the chosen workflow, or null. */
 const sheetAssist = ref(null);
 const sheetLook = usePromptAssist(sheetAssist, "sheet");
+/** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
+const sheetSamplerChoice = ref(false);
+/** The sampler of the draw: LCM as saved, or Euler on the run's copy. Per draw. */
+const sampler = ref("lcm");
+const samplerOptions = computed(() =>
+  SAMPLER_CHOICES.map((o) => ({ ...o, testid: `cs-sampler-${o.id}` })),
+);
 let sheetAssistAsk = 0;
 /**
  * Ask the chosen workflow for its sheet presets, and for the lines the
@@ -1023,6 +1046,7 @@ async function askSheetAssist() {
   const id = workflowId.value;
   if (!id || layout.value !== "prose") {
     sheetAssist.value = null;
+    sheetSamplerChoice.value = false;
     return;
   }
   try {
@@ -1033,17 +1057,24 @@ async function askSheetAssist() {
       prompt_assist: sheetLook.request() || { context: "sheet", on: false, choices: {} },
     });
     if (alive && ask === sheetAssistAsk) {
-      sheetAssist.value = answer?.groups?.[0]?.prompt?.assist || null;
+      const prompt = answer?.groups?.[0]?.prompt;
+      sheetAssist.value = prompt?.assist || null;
+      sheetSamplerChoice.value = prompt?.sampler_choice === true;
     }
   } catch (e) {
     console.warn("Couldn't ask for the photo look of sheet workflow", id, e);
-    if (ask === sheetAssistAsk) sheetAssist.value = null;
+    if (ask === sheetAssistAsk) {
+      sheetAssist.value = null;
+      sheetSamplerChoice.value = false;
+    }
   }
 }
 // Another workflow or layout: its catalogue is not the last one's, so the old
 // one goes at once, or a draw before the answer would send the wrong look.
 watch([workflowId, layout], () => {
   sheetAssist.value = null;
+  sheetSamplerChoice.value = false;
+  sampler.value = "lcm";
   askSheetAssist();
 });
 // #2776's remembered Off seeds the group's Off, once.
@@ -1844,6 +1875,8 @@ async function draw() {
   const grouped = Boolean(sheetAssist.value) && sheetLayout === "prose";
   const assist = grouped ? sheetLook.request() : null;
   const photoLook = grouped ? false : form.photo_look;
+  // LCM is the graph as saved, so only Euler is sent.
+  const euler = sheetSamplerChoice.value && sampler.value === "euler";
   rememberRecent();
   try {
     const description = form.description.trim();
@@ -1877,6 +1910,7 @@ async function draw() {
       weight,
       reference,
       assist,
+      euler,
     ]);
     const answer = await runWorkflowCard({
       workflow_id: workflow,
@@ -1913,6 +1947,7 @@ async function draw() {
       hold: true,
       label: `Character sheet · ${name.value}`,
       ...(assist ? { prompt_assist: assist } : {}),
+      ...(euler ? { sampler: "euler" } : {}),
     });
     const started = (answer?.prompts || []).filter((p) => runKey(p));
     if (!started.length) {

@@ -6609,6 +6609,86 @@ describe("the blank picture", () => {
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0].blank_picture).toBe(false);
   });
+
+  it("off on one workflow is on again on the next, and is not sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(false);
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("blank_picture");
+  });
+});
+
+// "Sampler": shown only where the graph samples with LCM and takes a picture,
+// LCM by default, and Euler is the one value sent. Per run, never remembered.
+describe("the sampler choice", () => {
+  const control = (wrapper) => wrapper.find('[data-testid="rund-sampler"]');
+  const option = (wrapper, id) =>
+    wrapper.find(`[data-testid="rund-sampler-${id}"]`);
+  const answer = (sampler_choice) => ({
+    ok: true,
+    runs: 1,
+    groups: [
+      { prompt: { positive_settable: true, sampler_choice, sampler: sampler_choice ? "lcm" : null } },
+    ],
+  });
+
+  it("is not offered where the graph does not sample with LCM over a picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Euler keeps");
+  });
+
+  it("is offered on LCM, and sends nothing for LCM", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(true);
+    expect(wrapper.text()).toContain("LCM keeps the person closest");
+    expect(control(wrapper).attributes("aria-label")).toBe("Sampler");
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("sampler");
+    }
+  });
+
+  it("Euler is asked on the pre-flight and sent with the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].sampler).toBe("euler");
+    expect(option(wrapper, "euler").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0].sampler).toBe("euler");
+  });
+
+  it("back on LCM after Euler, and back to LCM on the next workflow", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("sampler");
+  });
 });
 
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save

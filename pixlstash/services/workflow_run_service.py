@@ -75,6 +75,7 @@ from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
     detect_workflow_io,
+    is_picture_loader,
     prompt_field,
 )
 from pixlstash.services.workflow_parameters import is_picture_batch
@@ -86,6 +87,7 @@ from pixlstash.utils.comfyui_utilities import (
     blank_picture_inputs,
     collect_seed_inputs,
     iter_model_fields_api,
+    lcm_sampler_nodes,
     prompt_assist_tail,
     rewritten_prompt_input,
     split_prompt_assist,
@@ -331,6 +333,7 @@ def apply_prompts(
     enhance: Optional[bool] = None,
     assist: Optional[dict] = None,
     blank_picture: Optional[bool] = None,
+    sampler: Optional[str] = None,
 ) -> dict:
     """Put this run's prompts into the detected prompt nodes, and report on it.
 
@@ -350,7 +353,10 @@ def apply_prompts(
     rewrite the very sentences the assist adds; ``True`` and ``None``
     otherwise leave the graph as it is. With *blank_picture* ``False`` the
     blank picture is cut out of the conditioning it feeds
-    (:func:`blank_picture_inputs`); ``None`` and ``True`` leave it.
+    (:func:`blank_picture_inputs`); ``None`` and ``True`` leave it. With
+    *sampler* ``"euler"`` a graph that samples with LCM and takes a picture
+    input samples with Euler instead (:func:`_sample_with_euler`); ``"lcm"``,
+    ``None`` and a graph without that pair leave it.
 
     Returns:
         ``positive_settable`` / ``negative_settable``: whether the graph has
@@ -364,6 +370,9 @@ def apply_prompts(
         not; ``enhancer_on``: whether it still does. ``assist_applied``:
         whether *assist*'s parts were written. ``blank_picture``: whether
         the graph feeds a blank picture to a conditioning encoder, cut or not.
+        ``sampler_choice``: whether the sampler choice applies to this graph;
+        ``sampler``: the sampler the run's copy samples with, ``None`` where
+        the choice does not apply.
     """
     report = {
         "positive_settable": False,
@@ -375,6 +384,8 @@ def apply_prompts(
         "enhancer_on": False,
         "assist_applied": False,
         "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
     }
     tail = prompt_assist_tail(assist) if prompt and prompt.strip() else None
     enhanced: list[tuple[str, str, str]] = []
@@ -485,7 +496,37 @@ def apply_prompts(
     report["blank_picture"] = bool(blank)
     if blank_picture is False and blank:
         _cut_blank_picture(graph, blank)
+    lcm = lcm_sampler_nodes(graph)
+    # Offered only where the graph also takes a picture: a text-to-image graph
+    # keeps LCM, since Euler brings the crunch back there.
+    report["sampler_choice"] = bool(lcm) and any(
+        isinstance(node, dict) and is_picture_loader(str(node.get("class_type", "")))
+        for node in graph.values()
+    )
+    if report["sampler_choice"]:
+        report["sampler"] = "lcm"
+        if sampler == "euler":
+            _sample_with_euler(graph, lcm)
+            report["sampler"] = "euler"
     return report
+
+
+def _sample_with_euler(graph: dict, node_ids: list[str]) -> None:
+    """Sample with Euler wherever *node_ids* sample with LCM.
+
+    A ``SamplerLCM`` becomes a ``KSamplerSelect`` on ``euler`` under the same
+    node id, so every link to it still holds; a ``KSampler`` or
+    ``KSamplerAdvanced`` on ``lcm`` takes ``euler`` in place. Nothing else in
+    the graph changes.
+    """
+    for node_id in node_ids:
+        node = graph[node_id]
+        if node.get("class_type") == "SamplerLCM":
+            node["class_type"] = "KSamplerSelect"
+            node["inputs"] = {"sampler_name": "euler"}
+        else:
+            node["inputs"]["sampler_name"] = "euler"
+    logger.info("Sampler for this run: euler, in place of lcm at %s.", node_ids)
 
 
 def _cut_blank_picture(graph: dict, links: list[tuple[str, str]]) -> None:

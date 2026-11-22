@@ -1902,6 +1902,11 @@ class RunRequest(BaseModel):
     # takes it off the encoder's image input, so the run draws without it; null
     # and true run the graph as it is. Only a graph with one is changed.
     blank_picture: bool | None = None
+    # The sampler a MiniMax H3 Image graph with a picture input samples with
+    # (a group's `prompt.sampler_choice` says where the choice is offered).
+    # "lcm" and null run the graph as saved; "euler" samples the run's copy
+    # with Euler in place of LCM, and is a no-op on a graph without the choice.
+    sampler: Literal["lcm", "euler"] | None = None
     # Curated text for the model family added after the prompt (backend §25).
     # Absent is off, and that is load-bearing: a JSON layout prompt or a
     # `prompt: null` replay stays byte for byte what it was. With it applied,
@@ -2560,6 +2565,11 @@ class RunPrompt(BaseModel):
     # True where a conditioning encoder reads a blank picture, whether or not
     # this request's `blank_picture: false` took it off: the Run popup's switch.
     blank_picture: bool = False
+    # True where the sampler choice applies: the graph samples with LCM and
+    # takes a picture input. Null `sampler` is LCM; the Run popup's control.
+    sampler_choice: bool = False
+    # What the run's copy samples with, where the choice applies; else null.
+    sampler: Literal["lcm", "euler"] | None = None
     # Whether the enhancer rewrites this request's prompt: `enhancer` unless
     # `enhance_prompt: false`, or `null` with the prompt assist applied, cut it.
     enhancer_on: bool = False
@@ -7835,6 +7845,7 @@ def create_router(server) -> APIRouter:
                 body.enhance_prompt,
                 stamp,
                 blank_picture=body.blank_picture,
+                sampler=body.sampler,
             )
             group.prompt = RunPrompt(
                 positive_settable=placed["positive_settable"],
@@ -7842,6 +7853,8 @@ def create_router(server) -> APIRouter:
                 positive_text=placed["positive_text"],
                 enhancer=placed["enhancer"],
                 blank_picture=placed["blank_picture"],
+                sampler_choice=placed["sampler_choice"],
+                sampler=placed["sampler"],
                 enhancer_on=placed["enhancer_on"],
                 assist=offered
                 and RunPromptAssist(

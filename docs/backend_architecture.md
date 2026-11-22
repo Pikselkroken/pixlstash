@@ -10623,6 +10623,24 @@ the blank picture feeds only the step-1 encoder, and the text-only encoder that
 draws the other steps carries the same prompt, so the run's prompt is written
 into both (`apply_prompts`, one prompt everywhere it is written or read).
 
+#### A run that samples with Euler
+
+The MiniMax H3 Image sheet and edit graphs sample with LCM. Where the graph
+also takes a picture (a `LoadImage` or the PixlStash picture loader, the
+sheet-from-reference, edit and inpaint built-ins), a run may sample with Euler
+instead: `sampler: "euler"` on `RunRequest`. `comfyui_utilities.lcm_sampler_nodes`
+finds the LCM samplers by structure, a `SamplerLCM` and a `KSampler` or
+`KSamplerAdvanced` whose `sampler_name` is `lcm`; `SamplerLCMUpscale` is not one,
+since it upscales between steps. `apply_prompts(..., sampler="euler")` then
+rewrites the run's copy only (`_sample_with_euler`): a `SamplerLCM` becomes a
+`KSamplerSelect` on `euler` under the same node id, so its links hold, and a
+`KSampler` takes `euler` in place. Nothing else moves. The text-to-image
+built-ins have no picture input, so the choice is not offered and `"euler"`
+is a no-op on them. The pre-flight and the run report `prompt.sampler_choice`
+(offered) and `prompt.sampler` (the sampler the copy runs: `"lcm"` as saved, or
+`"euler"`; null where not offered). A recipe of a picture made with Euler reads
+`euler` through `extract_recipe_extras`, which names the `KSamplerSelect`.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that

@@ -944,6 +944,82 @@ describe("TrainingSetBuild: generating the pictures", () => {
     expect((await sent(wrapper)).photo_look).toBe(false);
   });
 
+  it("the sampler is offered where the server says, and only Euler is sent", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    const QWEN_CARD = {
+      id: "manual:qwen",
+      name: "Qwen sheet",
+      type: "txt2img",
+      last_used: "2026-11-08T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "qwen" }],
+    };
+    gen.listWorkflowCards.mockResolvedValue({
+      cards: [MOSS_CARD, KREA_CARD, QWEN_CARD],
+    });
+    // Krea samples with LCM over a picture; Qwen is a sheet without the choice.
+    gen.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.workflow_id === KREA_CARD.id
+        ? { ok: true, groups: [{ reasons: [], prompt: { sampler_choice: true, sampler: "lcm" } }] }
+        : { ok: true, groups: [{ reasons: [], prompt: { sampler_choice: false } }] },
+    );
+    const open = async () => {
+      const wrapper = mountDialog();
+      await flushPromises();
+      return wrapper;
+    };
+    const pick = async (wrapper, id) => {
+      wrapper
+        .findAllComponents({ name: "AppSelect" })
+        .find((c) => c.props("label") === "Sheet workflow")
+        .vm.$emit("update:modelValue", id);
+      await flushPromises();
+    };
+    const control = (wrapper) => wrapper.find('[data-testid="cs-sampler"]');
+    const generate = async (wrapper) => {
+      await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+      await flushPromises();
+    };
+    let wrapper = await open();
+    await pick(wrapper, "manual:moss");
+    expect(control(wrapper).exists()).toBe(false);
+    await pick(wrapper, QWEN_CARD.id);
+    expect(control(wrapper).exists()).toBe(false);
+    await pick(wrapper, "manual:krea");
+    expect(control(wrapper).find('[aria-checked="true"]').text()).toBe("LCM");
+    expect(wrapper.find('[data-testid="cs-sampler-hint"]').text()).toContain(
+      "Euler keeps a little more skin detail",
+    );
+    // Another workflow's answer still on its way: the old offer goes at once,
+    // so Euler cannot be picked for a workflow that may not take it.
+    const answers = gen.preflightWorkflowRun.getMockImplementation();
+    gen.preflightWorkflowRun.mockImplementation(() => new Promise(() => {}));
+    await pick(wrapper, QWEN_CARD.id);
+    expect(control(wrapper).exists()).toBe(false);
+    gen.preflightWorkflowRun.mockImplementation(answers);
+    await pick(wrapper, "manual:krea");
+    expect(control(wrapper).exists()).toBe(true);
+    // The default draws without naming a sampler.
+    await generate(wrapper);
+    expect(gen.runWorkflowCard.mock.lastCall[0]).not.toHaveProperty("sampler");
+    wrapper.unmount();
+    wrapper = await open();
+    await pick(wrapper, "manual:krea");
+    await wrapper.find('[data-testid="cs-sampler-euler"]').trigger("click");
+    await flushPromises();
+    // The choice is per draw: another workflow starts again on LCM.
+    await pick(wrapper, "manual:moss");
+    await pick(wrapper, "manual:krea");
+    expect(control(wrapper).find('[aria-checked="true"]').text()).toBe("LCM");
+    await wrapper.find('[data-testid="cs-sampler-euler"]').trigger("click");
+    await flushPromises();
+    await generate(wrapper);
+    expect(gen.runWorkflowCard.mock.lastCall[0].sampler).toBe("euler");
+    wrapper.unmount();
+  });
+
   it("Photo look replaces the Natural/Off switch where the engine has sheet presets", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
