@@ -16690,6 +16690,7 @@ def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
     # whole card less the margin never came free and the run waited for ever.
     five_k, six_k = 5280 * 3168, 6240 * 3744
     sheet = {**row(30000, total - 1100), "pixels": five_k}
+    assert vram_history._need([sheet], six_k) == total - 1100 - margin
     assert vram_history._need([sheet], six_k) <= budget(1100)
     # Scaled past the card, the room is still the room it had.
     big = {**sized, "peak_mb": 25000, "room_mb": 25050}
