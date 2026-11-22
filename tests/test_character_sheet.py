@@ -816,6 +816,25 @@ def test_cuts_follow_dividers_drawn_off_the_grid():
         assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
 
 
+def test_each_passport_row_is_cut_on_its_own_column_gutter():
+    """MiniMax H3 Image draws the two passport rows with their gutters apart
+    (measured: 1232 against 1197 on a 5280 wide sheet). One cut down the whole
+    height left a strip of the next photo on one row."""
+    image = _sheet(
+        [
+            ("x", 630, 0, 768),  # top row's gutter, 30 px right
+            ("x", 560, 772, 1536),  # bottom row's, 40 px left
+            ("y", 768, 0, 1200),  # passport row
+        ]
+    )
+    cells, clean = sheet_cells(image)
+    assert (cells[0][2], cells[1][0]) == (630 - 2, 634 + 2)
+    assert (cells[2][2], cells[3][0]) == (560 - 2, 564 + 2)
+    assert clean
+    for left, top, right, bottom in cells:
+        assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
+
+
 def test_cuts_follow_an_edit_model_s_dividers_further_off_the_grid():
     """Qwen-Image and FLUX.2 Klein, drawing from a reference picture, put
     their dividers up to ~190 px off the layout's cells (measured on real

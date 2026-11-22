@@ -108,6 +108,26 @@ _SETTING_FIELDS = {
     "width": int,
     "height": int,
 }
+# ComfyUI's custom-sampler nodes that are one sampler each. They have no
+# `sampler_name` input: the class is the sampler, so a SamplerCustomAdvanced
+# graph (MiniMax H3 Image's, with SamplerLCM) reported no sampler at all. Named
+# as KSampler spells the same sampler.
+_SAMPLER_NODE_NAMES = {
+    "SamplerLCM": "lcm",
+    "SamplerLCMUpscale": "lcm",
+    "SamplerEulerAncestral": "euler_ancestral",
+    "SamplerEulerAncestralCFGPP": "euler_ancestral_cfg_pp",
+    "SamplerEulerCFGpp": "euler_cfg_pp",
+    "SamplerLMS": "lms",
+    "SamplerDPMAdaptative": "dpm_adaptive",
+    "SamplerDPMPP_2M_SDE": "dpmpp_2m_sde",
+    "SamplerDPMPP_2S_Ancestral": "dpmpp_2s_ancestral",
+    "SamplerDPMPP_3M_SDE": "dpmpp_3m_sde",
+    "SamplerDPMPP_SDE": "dpmpp_sde",
+    "SamplerER_SDE": "er_sde",
+    "SamplerSASolver": "sa_solver",
+    "SamplerSEEDS2": "seeds_2",
+}
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into
 # subgraphs). Public because `services/workflow_export.py` needs the same list:
 # a prompt sitting in one of these is a prompt, and it is the population that
@@ -1152,6 +1172,7 @@ def extract_recipe_extras(workflow: dict) -> dict:
     negative_prompt: str | None = None
     settings: dict[str, Any] = {}
     latent_size: dict[str, int] = {}
+    node_named: str | None = None
     try:
         sized = size_inputs(workflow)
         for node_id, node in workflow.items():
@@ -1181,9 +1202,16 @@ def extract_recipe_extras(workflow: dict) -> dict:
                 value = _typed_setting(value, kind)
                 if value is not None:
                     settings[field] = value
+            # Only a fallback: a `sampler_name` some node names wins, wherever
+            # it comes in the graph.
+            node_named = node_named or _SAMPLER_NODE_NAMES.get(
+                node.get("class_type", "")
+            )
     except Exception:
         logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
         return {"negative_prompt": None, "settings": {}}
+    if node_named is not None:
+        settings.setdefault("sampler_name", node_named)
     settings.update(latent_size)
     return {"negative_prompt": negative_prompt, "settings": settings}
 

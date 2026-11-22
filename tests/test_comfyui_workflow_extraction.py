@@ -1024,3 +1024,25 @@ def test_a_ui_combine_of_one_prompt_is_the_recipe_prompt_and_disagreement_is_non
     assert _follow_positive_ui("5", node_map, link_map) == "a cat"
     # "6": one branch is "a cat" and the other is "oil painting": no prompt.
     assert _follow_positive_ui("6", node_map, link_map) is None
+
+
+def test_a_sampler_node_names_the_sampler_in_the_recipe_settings():
+    """SamplerLCM has no `sampler_name` input: the class is the sampler, so a
+    SamplerCustomAdvanced graph has to be read for it, or the recipe's Settings
+    list shows no sampler (MiniMax H3 Image's built-ins)."""
+    graph = json.loads(json.dumps(_ZEROED_NEGATIVE))
+    graph["6"] = {
+        "class_type": "SamplerLCM",
+        "inputs": {"s_noise": 1.1, "s_noise_end": 0.9, "noise_clip_std": 0.0},
+    }
+    graph["7"] = {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {"guider": ["5", 0], "sampler": ["6", 0]},
+    }
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "lcm"
+    # A KSamplerSelect still names its own choice.
+    graph["6"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}}
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "euler"
+    # And wins over a sampler node that comes before it in the graph.
+    graph = {"0": {"class_type": "SamplerLCM", "inputs": {}}, **graph}
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "euler"
