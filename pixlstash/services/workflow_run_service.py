@@ -395,7 +395,11 @@ def apply_prompts(
             words = graph[literal[0]]["inputs"][literal[1]] if literal else None
             if side == "positive":
                 words, stamp = split_prompt_assist(words, graph)
-                report["recorded"] = report["recorded"] or stamp
+                if text is None:
+                    # Only a run that leaves the prompt alone keeps its stamp:
+                    # writing a prompt drops it, and the run's own additions
+                    # are reported as its parts.
+                    report["recorded"] = report["recorded"] or stamp
             held.add(words)
             if text is None:
                 continue

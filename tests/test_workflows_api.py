@@ -147,7 +147,7 @@ from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import MAX_PROMPT_LENGTH, RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_templates import load_templates
@@ -14036,6 +14036,22 @@ def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
         },
     )
     assert r.status_code == 422, r.text
+
+
+def test_a_blank_prompt_near_the_limit_is_not_refused_for_lines_it_never_gets(runnable):
+    """The tail is only written after words, so a blank prompt counts as is."""
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": " " * (MAX_PROMPT_LENGTH - 5),
+            "prompt_assist": {},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is False
+    runnable.submitted.pop()
 
 
 def test_the_prompt_assist_writes_its_parts_after_the_words_and_stamps_them(runnable):

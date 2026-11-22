@@ -111,14 +111,20 @@ def validate(document: dict, family: str) -> dict:
         problems.append(f"contexts must be a non-empty subset of {CONTEXTS}")
         contexts = {}
     for context, body in contexts.items():
-        if not isinstance((body or {}).get("default_on"), bool):
+        if not isinstance(body, dict):
+            problems.append(f"{context}: is not an object")
+            continue
+        if not isinstance(body.get("default_on"), bool):
             problems.append(f"{context}: default_on is not true or false")
-        categories = (body or {}).get("categories")
+        categories = body.get("categories")
         if not isinstance(categories, list) or not categories:
             problems.append(f"{context}: no categories")
             continue
         seen: set[str] = set()
         for category in categories:
+            if not isinstance(category, dict):
+                problems.append(f"{context}: a category is not an object")
+                continue
             where = f"{context}.{category.get('id')}"
             problems += _id_problems(category.get("id"), seen, where)
             if set(category) - _CATEGORY_KEYS:
@@ -199,8 +205,12 @@ def _load(name: str) -> Optional[dict]:
         return validate(json.load(handle), name)
 
 
-def presets(family: Optional[str]) -> dict:
-    """The presets a graph of *family* gets: its own file, else :data:`GENERIC`."""
+def presets(family: Optional[str]) -> Optional[dict]:
+    """The presets a graph of *family* gets: its own file, else :data:`GENERIC`.
+
+    ``None`` only when neither file is installed, a packaging fault: the
+    callers then offer nothing rather than fail the run.
+    """
     own = _load(family) if family and _ID_RE.match(family) else None
     return own or _load(GENERIC)
 
@@ -214,6 +224,15 @@ def catalogue(family: Optional[str], context: str) -> Optional[dict]:
     an option has none; evidence and notes stay in the file.
     """
     document = presets(family)
+    if document is None:
+        logger.warning(
+            "Prompt assist: no presets for family %r and no %s.json installed, "
+            "so nothing is offered for %s.",
+            family,
+            GENERIC,
+            context,
+        )
+        return None
     body = document["contexts"].get(context)
     if body is None:
         return None
@@ -256,6 +275,11 @@ def assemble(family: Optional[str], context: str, choices: dict, prompt: str) ->
     doubled. An unknown category or option is a :class:`PromptAssistError`.
     """
     document = presets(family)
+    if document is None or context not in document["contexts"]:
+        raise PromptAssistError(
+            "prompt_assist.context",
+            f"No prompt presets are installed for {family or GENERIC} in {context}.",
+        )
     categories = document["contexts"][context]["categories"]
     known = {category["id"] for category in categories}
     for name in choices:

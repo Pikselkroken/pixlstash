@@ -4624,7 +4624,13 @@ def _assemble_prompt_assist(
     if layout:
         return None
     added = len(prompt_assist_tail(stamp) or "")
-    if body.prompt and len(body.prompt) + added > MAX_PROMPT_LENGTH:
+    # The tail is written only after words (`apply_prompts`), so a blank
+    # prompt gains nothing to count.
+    if (
+        body.prompt
+        and body.prompt.strip()
+        and len(body.prompt) + added > MAX_PROMPT_LENGTH
+    ):
         raise HTTPException(
             status_code=422,
             detail=[

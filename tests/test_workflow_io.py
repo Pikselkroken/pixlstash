@@ -944,8 +944,10 @@ def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
     assert (again["positive_text"], again["recorded"]) == ("A woman.", stamp)
     assert replay == graph
     # Writing a prompt without the assist drops the stamp with the old text.
-    run_service.apply_prompts(replay, "A man.", None)
+    fresh = run_service.apply_prompts(replay, "A man.", None)
     assert replay["6"]["inputs"]["prompt"] == "A man."
+    # A fresh run's prompt carries no old stamp, so none is reported.
+    assert fresh["recorded"] is None
     assert PROMPT_ASSIST_META not in replay["6"].get("_meta", {})
 
 
