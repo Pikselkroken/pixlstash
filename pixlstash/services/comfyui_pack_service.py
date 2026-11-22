@@ -32,8 +32,10 @@ logger = get_logger(__name__)
 
 PACK_FOLDER = "ComfyUI-PixlStash"
 
-# What a copy of the nodes leaves out: the pack's own tests, media, caches and
-# git plumbing. ``setup.py`` stages the wheel copy with the same list (a test
+# What a copy of the nodes leaves out: the pack's own tests, screenshots, caches
+# and git plumbing. ``examples`` stays in: ComfyUI lists a node pack's
+# ``examples`` folder in its template browser, and PixlStash's template list
+# reads ComfyUI's. ``setup.py`` stages the wheel copy with the same list (a test
 # holds the two equal).
 PACK_LEFT_OUT = (
     ".git",
@@ -41,7 +43,6 @@ PACK_LEFT_OUT = (
     ".ruff_cache",
     ".pytest_cache",
     "tests",
-    "examples",
     "screenshots",
     "__pycache__",
 )
