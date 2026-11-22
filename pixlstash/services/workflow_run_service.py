@@ -83,6 +83,7 @@ from pixlstash.utils.comfyui_utilities import (
     NEGATIVE_FIELDS,
     PROMPT_ASSIST_META,
     PROMPT_FIELDS,
+    blank_picture_inputs,
     collect_seed_inputs,
     iter_model_fields_api,
     prompt_assist_tail,
@@ -326,6 +327,7 @@ def apply_prompts(
     negative: Optional[str],
     enhance: Optional[bool] = None,
     assist: Optional[dict] = None,
+    blank_picture: Optional[bool] = None,
 ) -> dict:
     """Put this run's prompts into the detected prompt nodes, and report on it.
 
@@ -343,7 +345,9 @@ def apply_prompts(
     enhancer is cut out of the graph (:func:`_cut_prompt_enhancer`). ``None``
     cuts it too where the assist was written, since the enhancer would
     rewrite the very sentences the assist adds; ``True`` and ``None``
-    otherwise leave the graph as it is.
+    otherwise leave the graph as it is. With *blank_picture* ``False`` the
+    blank picture is cut out of the conditioning it feeds
+    (:func:`blank_picture_inputs`); ``None`` and ``True`` leave it.
 
     Returns:
         ``positive_settable`` / ``negative_settable``: whether the graph has
@@ -355,7 +359,8 @@ def apply_prompts(
         nowhere to go - said, never dropped (#1832). ``enhancer``: whether a
         prompt enhancer rewrote a prompt in the graph as it came in, cut or
         not; ``enhancer_on``: whether it still does. ``assist_applied``:
-        whether *assist*'s parts were written.
+        whether *assist*'s parts were written. ``blank_picture``: whether
+        the graph feeds a blank picture to a conditioning encoder, cut or not.
     """
     report = {
         "positive_settable": False,
@@ -366,6 +371,7 @@ def apply_prompts(
         "enhancer": False,
         "enhancer_on": False,
         "assist_applied": False,
+        "blank_picture": False,
     }
     tail = prompt_assist_tail(assist) if prompt and prompt.strip() else None
     enhanced: list[tuple[str, str, str]] = []
@@ -457,7 +463,27 @@ def apply_prompts(
                 if not isinstance(node.get("_meta"), dict):
                     node["_meta"] = {}
                 node["_meta"][PROMPT_ASSIST_META] = deepcopy(assist)
+    blank = blank_picture_inputs(graph)
+    report["blank_picture"] = bool(blank)
+    if blank_picture is False and blank:
+        _cut_blank_picture(graph, blank)
     return report
+
+
+def _cut_blank_picture(graph: dict, links: list[tuple[str, str]]) -> None:
+    """Take the blank picture off each conditioning input it feeds.
+
+    Only the input link goes: the ``EmptyImage`` is left in place, since
+    nothing reads it now and ComfyUI runs nothing no output reaches, so the
+    rest of the graph stays as it was saved.
+    """
+    for node_id, name in links:
+        del graph[node_id]["inputs"][name]
+    logger.info(
+        "Blank picture cut for this run: %s no longer take it on %s.",
+        [node_id for node_id, _ in links],
+        [name for _, name in links],
+    )
 
 
 def _cut_prompt_enhancer(graph: dict, node_id: str, field: str) -> None:

@@ -375,6 +375,14 @@ _RUN_SCHEMA = {
             "the prompt reaches the encoder as written and the enhancer's "
             "model is not loaded. Omitted runs the workflow as it is.",
         },
+        "blank_picture": {
+            "type": "boolean",
+            "description": "false runs without the blank picture a MiniMax H3 "
+            "Image workflow feeds its conditioning (a group's "
+            "prompt.blank_picture is true where it has one). Without it, "
+            "different seeds draw more varied people. Omitted runs the "
+            "workflow as it is.",
+        },
         "prompt_assist": {
             "type": "object",
             "description": "Curated photography text added after prompt "

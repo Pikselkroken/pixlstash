@@ -10601,6 +10601,25 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
 - **A repaired run lands on its own card**, for the reason a bypassed one does:
   deleting a node changes the topology.
 
+#### A run without the blank picture
+
+A MiniMax H3 Image text workflow feeds its conditioning encoder a blank picture
+(`images.image_1` from an `EmptyImage`, no `vae`), which gives less crunch in
+skin and hair but narrows the variety between seeds. `comfyui_utilities.blank_picture_inputs`
+finds it by structure, not by node id or workflow name: an `EmptyImage` every
+reader of which takes it on an image input of a conditioning encoder (a node
+with a `clip` and no conditioning input of its own, the rule the prompt walk
+uses). An `EmptyImage` feeding anything else, a VAE encode included, is content
+and is not one. Each built-in with one is found, and a test holds the detection
+to exactly the built-ins that contain an `EmptyImage`. A run sent with
+`blank_picture: false` takes those input links off its copy
+(`apply_prompts(..., blank_picture=False)`, `_cut_blank_picture`) and leaves the
+`EmptyImage` in place, unread, so the rest of the graph is as saved; null or true
+runs it as it is. The pre-flight and the run report `prompt.blank_picture`, true
+wherever a blank picture is found, cut or not, which is what the Run popup's
+switch is drawn on. Character sheets do not send it: their flow has no switch,
+so their graphs run with the blank picture as saved.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that

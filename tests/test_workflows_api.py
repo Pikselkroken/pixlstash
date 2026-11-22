@@ -14119,6 +14119,7 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "positive_text": "the saved prompt",
         "enhancer": False,
         "enhancer_on": False,
+        "blank_picture": False,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -14402,6 +14403,78 @@ def test_a_prompt_assist_body_is_checked_at_the_door(runnable):
             json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": body},
         )
         assert r.status_code == 422, body
+
+
+def test_a_run_can_go_without_the_blank_picture(runnable):
+    """`blank_picture: false` takes the blank picture off the conditioning's
+    image input and the prompt goes in as written; left out, the graph runs as
+    saved. The answer says there is one either way, so the switch stays drawn."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document.update(
+        {
+            "5": {
+                "class_type": "MiniMaxH3ImageConditioning",
+                "inputs": {
+                    "clip": ["1", 1],
+                    "prompt": "the saved prompt",
+                    "images.image_1": ["20", 0],
+                },
+            },
+            "20": {
+                "class_type": "EmptyImage",
+                "inputs": {"width": 512, "height": 512, "batch_size": 1, "color": 0},
+            },
+        }
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["MiniMaxH3ImageConditioning"] = {
+        "input": {
+            "required": {"clip": ["CLIP", {}], "prompt": ["STRING", {}]},
+            "optional": {"images.image_1": ["IMAGE", {}]},
+        }
+    }
+    info["EmptyImage"] = {
+        "input": {
+            "required": {
+                "width": ["INT", {}],
+                "height": ["INT", {}],
+                "batch_size": ["INT", {}],
+                "color": ["INT", {}],
+            }
+        }
+    }
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    for blank in (None, True):
+        body = asked if blank is None else {**asked, "blank_picture": blank}
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["groups"][0]["prompt"]["blank_picture"] is True
+        sent = runnable.submitted.pop()["graph"]
+        assert sent["5"]["inputs"]["images.image_1"] == ["20", 0]
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={**asked, "blank_picture": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert r.json()["groups"][0]["prompt"]["blank_picture"] is True
+    sent = runnable.submitted.pop()["graph"]
+    assert "images.image_1" not in sent["5"]["inputs"]
+    assert sent["5"]["inputs"]["prompt"] == "a lighthouse at dusk"
+    # The pre-flight judges the graph that would run, and says nothing is missing.
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "blank_picture": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
 
 
 def test_more_runs_than_one_request_starts_are_refused(runnable):
@@ -15262,6 +15335,7 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "unplaced": [],
         "enhancer": False,
         "enhancer_on": False,
+        "blank_picture": False,
         "recorded": None,
         "assist_applied": False,
     }
@@ -15296,6 +15370,7 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "unplaced": ["positive"],
         "enhancer": False,
         "enhancer_on": False,
+        "blank_picture": False,
         "recorded": None,
         "assist_applied": False,
     }

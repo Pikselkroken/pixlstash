@@ -1897,6 +1897,11 @@ class RunRequest(BaseModel):
     # encoder as written and cuts the enhancer out of the run's copy, so its
     # model is never loaded; null and true run the graph as it is.
     enhance_prompt: bool | None = None
+    # Whether a blank picture (an `EmptyImage` a conditioning encoder reads,
+    # as MiniMax H3 Image's text workflows feed one) stays in the run. False
+    # takes it off the encoder's image input, so the run draws without it; null
+    # and true run the graph as it is. Only a graph with one is changed.
+    blank_picture: bool | None = None
     # Curated text for the model family added after the prompt (backend §25).
     # Absent is off, and that is load-bearing: a JSON layout prompt or a
     # `prompt: null` replay stays byte for byte what it was. With it applied,
@@ -2552,6 +2557,9 @@ class RunPrompt(BaseModel):
     # a prompt before its encoder reads it, whether or not this request's
     # `enhance_prompt: false` cut it out: the Run popup's switch for it.
     enhancer: bool = False
+    # True where a conditioning encoder reads a blank picture, whether or not
+    # this request's `blank_picture: false` took it off: the Run popup's switch.
+    blank_picture: bool = False
     # Whether the enhancer rewrites this request's prompt: `enhancer` unless
     # `enhance_prompt: false`, or `null` with the prompt assist applied, cut it.
     enhancer_on: bool = False
@@ -7821,13 +7829,19 @@ def create_router(server) -> APIRouter:
                 else None
             )
             placed = run_service.apply_prompts(
-                graph, body.prompt, body.negative, body.enhance_prompt, stamp
+                graph,
+                body.prompt,
+                body.negative,
+                body.enhance_prompt,
+                stamp,
+                blank_picture=body.blank_picture,
             )
             group.prompt = RunPrompt(
                 positive_settable=placed["positive_settable"],
                 negative_settable=placed["negative_settable"],
                 positive_text=placed["positive_text"],
                 enhancer=placed["enhancer"],
+                blank_picture=placed["blank_picture"],
                 enhancer_on=placed["enhancer_on"],
                 assist=offered
                 and RunPromptAssist(

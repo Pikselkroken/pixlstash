@@ -6564,6 +6564,53 @@ describe("Photo look", () => {
   });
 });
 
+// "Blank picture": shown only where the graph feeds a blank picture to its
+// encoder, on by default, and off is `blank_picture: false` on every request.
+describe("the blank picture", () => {
+  const box = (wrapper) => wrapper.find('[data-testid="rund-blank"]');
+  const answer = (blank_picture) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, blank_picture } }],
+  });
+
+  it("is not offered where the graph has no blank picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).exists()).toBe(false);
+  });
+
+  it("is offered, on, and sends what it always did", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Blank picture");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("blank_picture");
+    }
+  });
+
+  it("off, sends blank_picture: false on the pre-flight it asks and the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].blank_picture).toBe(false);
+    // Still drawn: the server reports the blank picture whether or not it was cut.
+    expect(box(wrapper).element.checked).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].blank_picture).toBe(false);
+  });
+});
+
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
 // makes a NEW workflow. What can silently go wrong: the workflow opens without
 // the form's changes (the body is not the run's), or the tab is opened after

@@ -412,6 +412,27 @@
               }}
             </p>
           </template>
+          <!-- A blank picture feeds the encoder's image input (`prompt.blank_picture`).
+               Per run and never remembered, like the enhancer; off is `blank_picture: false`. -->
+          <template v-if="graphPrompt?.blank_picture">
+            <div class="rund-f rund-check">
+              <input
+                :id="blankId"
+                class="rund-box"
+                type="checkbox"
+                data-testid="rund-blank"
+                :checked="blankPicture"
+                :disabled="submitting"
+                :aria-describedby="`${blankId}-hint`"
+                @change="setBlankPicture($event.target.checked)"
+              />
+              <label :for="blankId">Blank picture</label>
+            </div>
+            <p :id="`${blankId}-hint`" class="rund-note">
+              Less crunch, but different seeds draw more alike people. Off draws
+              without it.
+            </p>
+          </template>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -1421,6 +1442,7 @@ const picsLabelId = useId();
 const stackId = useId();
 const stageId = useId();
 const enhanceId = useId();
+const blankId = useId();
 /**
  * Bumped per read of a workflow into the form: the open, a move of the
  * picker, the read after a band save. Only the newest may write any of the
@@ -2321,6 +2343,14 @@ const enhancePrompt = computed(
 async function setEnhancePrompt(on) {
   enhanceChoice.value = on;
   // Off, the enhancer's model is no longer one the run needs.
+  await runPreflight();
+}
+
+/** The "Blank picture" box; off is sent as `blank_picture: false`. */
+const blankPicture = ref(true);
+
+async function setBlankPicture(on) {
+  blankPicture.value = on;
   await runPreflight();
 }
 
@@ -4300,6 +4330,8 @@ function runBody() {
   // Absent is off: only a family with presets, and the group on, sends it.
   const assist = photoLook.request();
   if (assist) body.prompt_assist = assist;
+  // Only off is sent, and a graph with no blank picture ignores it.
+  if (!blankPicture.value) body.blank_picture = false;
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {

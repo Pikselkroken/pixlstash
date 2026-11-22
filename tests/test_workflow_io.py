@@ -56,6 +56,7 @@ from pixlstash.services.workflow_io import (
 from pixlstash.utils.comfyui_utilities import (
     PROMPT_ASSIST_META,
     NotAWorkflowError,
+    blank_picture_inputs,
     check_comfy_workflow,
     extract_generation_info,
     is_api_format,
@@ -1068,6 +1069,89 @@ def test_the_prompt_assist_moves_no_workflow_identity():
     assert plain != assisted
     assert structural_hash(plain) == structural_hash(assisted)
     assert topology_hash(plain) == topology_hash(assisted)
+
+
+def test_every_built_in_with_an_empty_image_has_a_blank_picture_found():
+    """Wrong if a built-in feeds an EmptyImage to a conditioning encoder and the
+    Run popup's switch is not offered for it, or the detection reads a picture
+    the owner loaded as blank."""
+    with_empty = [
+        path.name
+        for path in sorted(BUILT_IN.glob("*.json"))
+        if '"EmptyImage"' in path.read_text(encoding="utf-8")
+    ]
+    found = [
+        path.name
+        for path in sorted(BUILT_IN.glob("*.json"))
+        if blank_picture_inputs(_load(path))
+    ]
+    assert found == with_empty
+    assert found, "no built-in has a blank picture to test with"
+
+
+def test_an_empty_image_is_a_blank_picture_only_when_the_encoder_is_all_it_feeds():
+    """Wrong if a VAE encode's or a sampler's picture is cut as a blank one, or
+    a mixed EmptyImage is cut from the encoder alone and left reading the rest."""
+    empty = _node("EmptyImage", width=512, height=512, batch_size=1, color=0)
+    checkpoint = _node("CheckpointLoaderSimple", ckpt_name="a.safetensors")
+
+    def encoder() -> dict:
+        return _node(
+            "MiniMaxH3ImageConditioning",
+            clip=["3", 1],
+            prompt="x",
+            **{"images.image_1": ["1", 0]},
+        )
+
+    vae = {
+        "1": empty,
+        "2": _node("VAEEncode", pixels=["1", 0], vae=["3", 0]),
+        "3": checkpoint,
+    }
+    assert blank_picture_inputs(vae) == []
+    alone = {"1": empty, "3": checkpoint, "4": encoder()}
+    assert blank_picture_inputs(alone) == [("4", "images.image_1")]
+    mixed = {**alone, "2": vae["2"]}
+    assert blank_picture_inputs(mixed) == []
+    # An encoder reading the empty picture on an input that is no image is not
+    # one of the encoder's picture inputs.
+    not_image = {
+        "1": empty,
+        "3": checkpoint,
+        "4": _node("TextEncodeX", clip=["3", 1], pixels=["1", 0]),
+    }
+    assert blank_picture_inputs(not_image) == []
+
+
+def test_a_run_without_the_blank_picture_draws_without_it():
+    """Off: the encoder's image input is taken off and the prompt goes in as
+    written, and nothing else in the graph changes. On, or not asked: the graph
+    runs as saved. A graph with no blank picture reports none and is left alone."""
+    name = "MiniMax-H3-Image-t2i.json"
+    saved = _load(BUILT_IN / name)
+    for blank in (None, True):
+        graph = _load(BUILT_IN / name)
+        report = run_service.apply_prompts(
+            graph, "a fox", None, None, blank_picture=blank
+        )
+        assert report["blank_picture"] is True
+        assert graph == {
+            **saved,
+            "6": {**saved["6"], "inputs": {**saved["6"]["inputs"], "prompt": "a fox"}},
+        }
+    graph = _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, "a fox", None, None, blank_picture=False)
+    assert report["blank_picture"] is True
+    expected = _load(BUILT_IN / name)
+    del expected["6"]["inputs"]["images.image_1"]
+    expected["6"]["inputs"]["prompt"] = "a fox"
+    assert graph == expected
+    # The blank picture's own node is left in place, reading nothing.
+    assert "20" in graph
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, blank_picture=False)
+    assert (report["blank_picture"], json.dumps(graph)) == (False, before)
 
 
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
