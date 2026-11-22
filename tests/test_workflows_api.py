@@ -14477,6 +14477,44 @@ def test_a_run_can_go_without_the_blank_picture(runnable):
     assert r.json()["groups"][0]["reasons"] == []
 
 
+def test_a_run_can_sample_with_euler_where_lcm_meets_a_picture(runnable):
+    """`sampler: "euler"` samples the run's copy with Euler where the graph
+    samples with LCM and takes a picture; the pre-flight says the choice is
+    offered and what the run samples with. Left out, or "lcm", the graph runs
+    as saved. A text-to-image graph is not offered and ignores it."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["sampler_name"] = "lcm"
+    document["6"] = {"class_type": "LoadImage", "inputs": {"image": "a.png"}}
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoadImage"] = {"input": {"required": {"image": [["a.png"], {}]}}}
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    prompt = r.json()["groups"][0]["prompt"]
+    assert (prompt["sampler_choice"], prompt["sampler"]) == (True, "lcm")
+    assert runnable.submitted.pop()["graph"]["3"]["inputs"]["sampler_name"] == "lcm"
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "sampler": "euler"})
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["sampler"] == "euler"
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["3"]["inputs"]["sampler_name"] == "euler"
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "sampler": "euler"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "sampler": "warp"})
+    assert r.status_code == 422, r.text
+
+
 def test_more_runs_than_one_request_starts_are_refused(runnable):
     """`count` alone is Pydantic's; count TIMES groups is the route's."""
     r = runnable.owner.post(

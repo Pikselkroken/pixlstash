@@ -551,6 +551,27 @@ def _is_encoder_inputs(node: Any) -> bool:
     return "clip" in inputs and not any(map(_is_conditioning_input, inputs))
 
 
+def lcm_sampler_nodes(workflow: dict) -> list[str]:
+    """The nodes that sample with LCM, as node ids.
+
+    A ``SamplerLCM``, and a ``KSampler`` or ``KSamplerAdvanced`` whose
+    ``sampler_name`` is ``lcm``. ``SamplerLCMUpscale`` is not one: it upscales
+    between steps, which a sampler select would not do.
+    """
+    found: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs") or {}
+        if class_type == "SamplerLCM" or (
+            class_type in ("KSampler", "KSamplerAdvanced")
+            and inputs.get("sampler_name") == "lcm"
+        ):
+            found.append(str(node_id))
+    return found
+
+
 def _follow_prompt_api(
     node_id: str,
     workflow: dict,

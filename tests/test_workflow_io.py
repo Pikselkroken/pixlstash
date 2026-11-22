@@ -1154,6 +1154,62 @@ def test_a_run_without_the_blank_picture_draws_without_it():
     assert (report["blank_picture"], json.dumps(graph)) == (False, before)
 
 
+def test_a_sampler_choice_is_offered_only_where_lcm_meets_a_picture_input():
+    """Wrong if the text-to-image graph is offered Euler (it brings the crunch
+    back there), a graph with a picture input but no LCM is offered anything, or
+    a graph not offered is changed by a request for Euler."""
+    t2i = "MiniMax-H3-Image-t2i.json"
+    graph = _load(BUILT_IN / t2i)
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (False, None)
+    assert json.dumps(graph) == before
+    # Offered on the reference sheet: LCM as saved, and Euler on request.
+    name = "Sheet-MiniMax-H3-Image-Reference.json"
+    graph = _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, None, None, None)
+    assert (report["sampler_choice"], report["sampler"]) == (True, "lcm")
+    assert graph == _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="lcm")
+    assert graph == _load(BUILT_IN / name)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (True, "euler")
+    expected = _load(BUILT_IN / name)
+    expected["14"] = {
+        "class_type": "KSamplerSelect",
+        "inputs": {"sampler_name": "euler"},
+    }
+    assert graph == expected
+
+
+def test_a_euler_run_changes_only_the_sampler_of_an_lcm_graph_with_a_picture():
+    """The KSampler shape: a KSampler on lcm takes euler in place and nothing
+    else in the graph moves. A graph on euler already, or with no picture
+    input, has nothing to offer and is left alone."""
+    name = "Inpaint-MiniMax-H3-Image.json"
+    graph = _load(BUILT_IN / name)
+    graph["9"]["inputs"]["sampler_name"] = "lcm"
+    saved = json.loads(json.dumps(graph))
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (True, "euler")
+    assert graph["9"]["inputs"]["sampler_name"] == "euler"
+    saved["9"]["inputs"]["sampler_name"] = "euler"
+    assert graph == saved
+    # Already Euler: not offered, and a request for Euler is a no-op.
+    graph = _load(BUILT_IN / name)
+    before = json.dumps(graph)
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert (report["sampler_choice"], report["sampler"]) == (False, None)
+    assert json.dumps(graph) == before
+    # LCM with no picture input: not offered.
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    graph["9"]["inputs"]["sampler"] = ["14", 0]
+    graph["14"]["class_type"] = "SamplerLCM"
+    report = run_service.apply_prompts(graph, None, None, None, sampler="euler")
+    assert report["sampler_choice"] is False
+    assert graph["14"]["class_type"] == "SamplerLCM"
+
+
 def test_two_picture_inputs_fill_nothing_and_ui_files_are_not_filled():
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")

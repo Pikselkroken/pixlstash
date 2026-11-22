@@ -958,6 +958,30 @@ def test_a_run_can_go_without_the_blank_picture(monkeypatch):
     assert seen[0] == ("POST", "/workflows/run", {"workflow_id": WORKFLOW_ID})
 
 
+def test_a_run_can_sample_with_euler(monkeypatch):
+    """`sampler` is in the tool's schema as lcm or euler and reaches the run
+    route as the caller set it; left out, the route sees no field."""
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    tool = next(
+        t for t in mcp_server.tools_for(allow_write=True) if t["name"] == "run_workflow"
+    )
+    assert tool["inputSchema"]["properties"]["sampler"]["enum"] == ["lcm", "euler"]
+    done = {"status": "completed", "message": None, "stopped": False, "picture_ids": []}
+    fetch, seen = _run_fetch({"p1": [done]})
+    _write(
+        fetch,
+        "run_workflow",
+        workflow_id=WORKFLOW_ID,
+        sampler="euler",
+        wait_seconds=5,
+    )
+    assert seen[0] == (
+        "POST",
+        "/workflows/run",
+        {"workflow_id": WORKFLOW_ID, "sampler": "euler"},
+    )
+
+
 def test_a_run_reports_each_prompts_ending(monkeypatch):
     monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
     done = {"status": "completed", "message": None, "stopped": False}

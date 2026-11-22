@@ -383,6 +383,14 @@ _RUN_SCHEMA = {
             "different seeds draw more varied people. Omitted runs the "
             "workflow as it is.",
         },
+        "sampler": {
+            "type": "string",
+            "enum": ["lcm", "euler"],
+            "description": "euler samples a MiniMax H3 Image graph with a "
+            "picture input with Euler instead of LCM (a group's "
+            "prompt.sampler_choice is true where it applies). lcm, or left "
+            "out, runs the workflow as it is.",
+        },
         "prompt_assist": {
             "type": "object",
             "description": "Curated photography text added after prompt "
