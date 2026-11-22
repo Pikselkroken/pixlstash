@@ -13095,36 +13095,72 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
   with `split_sheet`, round its stored face boxes as ranking cuts it (faces
-  read since the last rank count too). `sheet_cells` holds no constant for any model's drift. Each cut starts
-  from the grid's own line, scaled to the picture, and searches halfway to
-  the neighbouring line on either side (the passport row once per passport
-  column, over that column's span). A line is *uniform* when over
-  `UNIFORM_SHARE` (0.8) of it lies within `UNIFORM_LEVELS` (12) grey levels of
-  its own median: a gutter, a drawn line or plain studio background is, a
-  line through a photo is not, even one along a door frame. Uniform lines of
-  one level form bands. The cut takes, in order: the band nearest the grid
-  line that is at most `MAX_GUTTER` (64 px at 2560) wide and lighter or darker
-  than both sides (a gutter, trimmed to its edges plus 2 px of seam; a band
-  that only climbs from one level to the next is the seam between a photo and
-  its frame); else the middle of the nearest *seam*, a step of over
-  `UNIFORM_LEVELS` across the line along `UNIFORM_SHARE` of it with neither
-  side white (MiniMax H3 draws its photos touching, each on its own backdrop
-  lit top to bottom, so no line between them is uniform, while a lit arm as
-  grey as the backdrop is), 2 px of seam trimmed each side; else the grid
-  line moved into the nearest wider or step-less band, background the photos
-  share, nothing trimmed; else the most uniform line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
-  shorter side from its centre is never a candidate (stored boxes are widened
-  and rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
-  when no cut is unsure, no background cut is pressed against its window's
-  edge away from the grid line (a sheet drawn at another scale), and no panel
-  holds two face centres; one that does not is still cut when kept. Then the
-  white frame MOSS draws round each photo is trimmed (lines that are almost
-  all over grey 244, from each edge, then as far as the white runs in
-  diagonally from each rounded corner; an overcast sky, ~237, is not frame).
-  Measured on the library's 130 sheets (2026-11): the old step-edge cut ran
-  through picture content on 56 and through a face on 16, none flagged; this
-  one through content on 3 and a face on none, all 3 flagged. Most real
-  sheets are seamless studio grey, with people well off the grid. The six panels are
+  read since the last rank count too). `sheet_cells` cuts in three steps, each tried only
+  when the one before did not find the sheet's layout (`_laid_out`: six
+  boxes, four passports two by two left of two body photos, none
+  overlapping, the passports within `SAME_SIZE["passport"]` (30 %) of each
+  other and the bodies within `SAME_SIZE["body"]` (50 %; models draw them up
+  to 40 % apart), each body clearly taller than a passport and over 70 % of
+  the sheet's height). It logs which step cut at INFO, and at WARNING when it
+  fell to size.
+  1. **Colour gutters** (`_colour_cells`). When the sheet's outermost 8 px
+     are mostly one saturated hue in the magenta family (PIL hue 195-250),
+     every pixel within 18 of that hue and saturated is gutter: learnt, not
+     fixed, since models draw plum to hot pink and drift across one sheet.
+     The six largest regions between the gutters, in layout order, each
+     moved in past the gutter (`_off_gutter`: an edge line goes while over
+     1 % of it is gutter running in from its ends, so a pink sleeve in the
+     middle of an edge stays) and 2 px more for the soft edge.
+  2. **Seams** (`_seam_cells`, `_find_cut`), read on the sheet scaled to
+     2560 wide (a larger sheet is a larger latent, its seams blurred over
+     more pixels). Any colour gutter is painted white first, so a sheet
+     whose gutters ran together in places (Qwen-Image draws them round
+     pairs of photos) is cut on the seams inside them. The passport block's
+     edge is searched from the layout's 1200 of 2560 over 768-1540 (FLUX.2
+     Klein draws it near 920, MiniMax H3 near 1290); every other cut starts
+     from the middle of the block it splits and searches a quarter of the
+     block either side, the passport row once per passport column and the
+     passport column once per row. A line is *uniform* when over
+     `UNIFORM_SHARE` (0.8) of it lies within `UNIFORM_LEVELS` (12) grey
+     levels of its own median; uniform lines of one level form bands. Each
+     cut takes, in order: the nearest band at most `MAX_GUTTER` (64 px)
+     wide and lighter or darker than both sides (a gutter or drawn line,
+     trimmed to its edges plus 2 px); else the nearest band of white (frame,
+     trimmed to its edges when the window holds both), or a band across the
+     layout's line with white either side (Klein's grey border round
+     white-backed passports), nothing trimmed; else the middle of the
+     nearest *seam* (`_seams`) with neither side white, 2 px trimmed each
+     side; else the layout's line moved into background with no line in
+     it, or off the faces, *unsure*. A seam is a line that, on
+     `SEAM_SHARE` (0.4) of the cut's span and on `SEAM_PROMINENCE` (2) times
+     as much of it as the lines around it, holds the largest step within
+     `SEAM_REACH` (24) lines or has busy texture on one side and flat on the
+     other (a sweater running into the next photo's backdrop in the same
+     grey). Wherever two photos meet there is a gutter, a seam or frame, so
+     background with no line in it is one photo as likely as two (FLUX.2
+     Klein can draw both body views as one photo, library picture 4046) and
+     the cut through it is unsure.
+  3. **Size** (`_sized_cells`): the layout's own cells over the sheet past
+     its white frame, split at the passport block's edge when step 2 was
+     sure of it, else at 1200 of 2560; four equal passport cells, two equal
+     bodies. Never clean.
+
+  A line within `FACE_FENCE` (0.2) of a stored face box's shorter side from
+  its centre is never a step-2 candidate (stored boxes are widened and
+  rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
+  when step 1 cut it, or step 2 with every cut sure, and no panel holds two
+  face centres; one that does not is still cut when kept. After steps 2 and
+  3 the white frame MOSS draws round each photo is trimmed (lines almost all
+  over grey 244, up to 64 px from each edge, then as far as white runs in
+  diagonally from a rounded corner when that is short of 16 px), and any
+  colour gutter as in step 1. On 59 probe sheets (2026-11-22: MiniMax H3,
+  FLUX.2 Klein, Qwen-Image; 15 on magenta, the rest without gutters) every
+  magenta sheet cut by step 1 or 2 with no gutter left in a panel; the
+  sheets without gutters cut by seams, clean on 33 of 44, the rest unsure on
+  a passport column MiniMax drew on one continuous backdrop (a sliver of up
+  to ~15 px of the next photo is possible there, and flagged) or on a sheet
+  with five photos. A MOSS sheet on seamless studio grey is now cut where it
+  was but no longer claims to be clean. The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
   extraction has read it. Filing clears each panel's `source_picture_id`: the
