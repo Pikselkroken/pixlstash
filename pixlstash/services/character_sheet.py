@@ -51,6 +51,7 @@ from typing import Literal
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Face, Picture
@@ -138,6 +139,43 @@ MAX_GUTTER = 64
 # box's shorter side. Stored boxes are widened and rounded up to 64 px at the
 # 512 px working size, so only the centre is the face's own.
 FACE_FENCE = 0.2
+# A seam, where two photos drawn edge to edge meet with no gutter (MiniMax H3,
+# FLUX.2 Klein), is a line whose step (the grey levels between the lines either
+# side of it) is at least SEAM_STEP and the largest within SEAM_REACH lines, on
+# SEAM_SHARE of the cut's span. Inside a photo the largest step wanders from
+# row to row, so a line holds it on about 0.3 of them by chance.
+# ponytail: read off 52 probe sheets on 2026-11-22 (MiniMax H3, FLUX.2 Klein);
+# re-read them when a model draws a seam this misses.
+SEAM_STEP = 3
+SEAM_REACH = 24
+SEAM_SHARE = 0.4
+SEAM_PROMINENCE = 2
+# Texture stops at a seam when the TEXTURE_LINES lines on one side change by
+# TEXTURE_STEP grey levels a line on average and those on the other by
+# TEXTURE_RATIO times less.
+TEXTURE_LINES = 4
+TEXTURE_STEP = 4
+TEXTURE_RATIO = 3
+# Colour gutters: a prose sheet can ask for its photos on a magenta sheet. The
+# colour is learnt from the sheet's outermost GUTTER_RING lines, where most of
+# the pixels must be saturated and one hue in the magenta family (PIL hue,
+# 0-255: plum ~205 to hot pink ~245), since models draw anything in that range
+# and let it drift across one sheet. A pixel is gutter within GUTTER_HUE of it.
+GUTTER_RING = 8
+GUTTER_HUES = (195, 250)
+GUTTER_HUE = 18
+GUTTER_SATURATION = 90
+GUTTER_VALUE = 60
+# An edge line of a cut panel is gutter while more than this share of it is
+# gutter running in from its ends (an askew or rounded photo edge).
+EDGE_GUTTER = 0.01
+# The four passport photos are drawn one size, and the two body photos
+# another: each within this share of the others of its kind, or the cut is
+# not the sheet's layout. Models do not draw them quite alike (passports
+# measured up to 21 % apart on 59 probe sheets; body photos up to 27 % on
+# FLUX.2 Klein, and 40 % on an edit model's sheet drawn from a reference),
+# so this catches a cut gone astray, not a model's drift.
+SAME_SIZE = {"passport": 0.3, "body": 0.5}
 
 # (left, top, right, bottom) on the sheet; a face is its stored box.
 Box = tuple[int, int, int, int]
@@ -794,6 +832,52 @@ def _save_with_save_image(nodes: dict) -> None:
                     other_inputs[name] = images
 
 
+def _seams(plane: np.ndarray, lo: int, hi: int, across: tuple[int, int]) -> np.ndarray:
+    """Which lines *lo*..*hi* of *plane*, read over *across*, look like the
+    edge between two photos.
+
+    A point of a line is evidence when the line holds the largest step within
+    :data:`SEAM_REACH` lines (or one of the two lines either side does: a
+    seam's step is blurred over a few), or when texture stops there: the
+    :data:`TEXTURE_LINES` lines on one side are busy (a sweater's knit, hair)
+    and those on the other flat, as where one photo's sweater meets the next
+    one's backdrop in much the same grey. A seam is a line with evidence on
+    :data:`SEAM_SHARE` of *across*, and :data:`SEAM_PROMINENCE` times the
+    lines around it: texture with a grain of its own puts evidence on every
+    line of the grain alike.
+    """
+    size = plane.shape[1]
+    reach = 2 * SEAM_REACH
+    start, end = max(1, lo - reach), min(size - 1, hi + reach)
+    first, last = max(1, start - SEAM_REACH - 2), min(size - 1, end + SEAM_REACH + 2)
+    strip = plane[across[0] : across[1], first - 1 : last + 1].astype(np.float32)
+    step = np.abs(strip[:, 2:] - strip[:, :-2])
+    ridge = (step >= SEAM_STEP) & (
+        step == ndimage.maximum_filter1d(step, 2 * SEAM_REACH + 1, axis=1)
+    )
+    ridge = ndimage.maximum_filter1d(ridge.astype(np.uint8), 5, axis=1)
+    # Busyness: the mean change between neighbouring lines, over the lines
+    # either side of each line (activity[:, j] is between strip lines j, j+1).
+    activity = np.abs(np.diff(strip, axis=1))
+    total = np.concatenate(
+        [np.zeros((len(strip), 1), np.float32), np.cumsum(activity, axis=1)], axis=1
+    )
+    at = np.arange(start, end) - first
+
+    def busy(begin: np.ndarray) -> np.ndarray:
+        begin = np.clip(begin, 0, activity.shape[1])
+        stop = np.clip(begin + TEXTURE_LINES - 1, 0, activity.shape[1])
+        return (total[:, stop] - total[:, begin]) / (TEXTURE_LINES - 1)
+
+    before, after = busy(at - TEXTURE_LINES + 1), busy(at + 2)
+    loud, quiet = np.maximum(before, after), np.minimum(before, after)
+    texture = (loud >= TEXTURE_STEP) & (loud >= TEXTURE_RATIO * quiet)
+    share = (ridge[:, start - first : end - first].astype(bool) | texture).mean(axis=0)
+    around = ndimage.median_filter(share, size=2 * reach + 1, mode="nearest")
+    seam = (share >= SEAM_SHARE) & (share >= SEAM_PROMINENCE * around)
+    return seam[lo - start : hi - start]
+
+
 def _find_cut(
     gray: np.ndarray,
     nominal: int,
@@ -816,11 +900,13 @@ def _find_cut(
     The cut lands, in order of preference, in the uniform band nearest
     *nominal* that has a step at its edges (a gutter or a drawn line, trimmed
     to its edges plus a soft seam's width); down the middle of the nearest
-    seam, a step running the cut's length between two photos drawn touching
-    (not off white, which is the frame's edge), a soft seam's width trimmed
-    each side; at *nominal* moved into the nearest wider
-    or step-less band (background the photos share, nothing trimmed); or, with
-    none, on the most uniform line, which is not ``sure``.
+    seam (:func:`_seams`) between two photos drawn touching (not off
+    white, which is the frame's edge), a soft seam's width trimmed each side;
+    at *nominal* moved into the nearest wider or step-less band (white frame,
+    or background, nothing trimmed); or, with none, at *nominal* moved off
+    the faces. Only a gutter, a seam or white frame is ``sure``: wherever two
+    photos meet there is one of them, so background with no line in it is
+    one photo, or two the cut cannot tell apart.
     """
     plane = gray if vertical else gray.T
     size = plane.shape[1]
@@ -881,25 +967,56 @@ def _find_cut(
             else min(abs(start - nominal), abs(end - 1 - nominal))
         )
 
+    def into(run: tuple[int, int]) -> tuple[int, int, bool]:
+        # *nominal* moved into *run*, nothing trimmed; sure unless the run is
+        # pressed against the window's edge, away from the grid line, where
+        # it most likely goes on past it (a sheet drawn at another scale).
+        start, end = run
+        line = min(max(nominal, start + margin), end - 1 - margin)
+        if line < start:
+            line = (start + end) // 2
+        sure = start <= nominal < end or lo + margin <= line < hi - margin
+        return line, line, sure
+
+    # A narrow band with a step at its edges is a gutter or a drawn line,
+    # trimmed to its edges.
     dividers = [r for r in runs if r[1] - r[0] <= gutter and stepped(*r)]
     if dividers:
         start, end = min(dividers, key=distance)
         return start - bleed, end + bleed, True
+
+    def white_beside(start: int, end: int) -> bool:
+        return all(
+            0 <= edge < size and level(edge) > FRAME_LEVEL
+            for edge in (start - 1 - bleed, end + bleed)
+        )
+
+    # A band of white is frame (or a colour gutter, painted white), however
+    # wide, and so is a band across the layout's own line with white either
+    # side: FLUX.2 Klein frames white-backed passport photos in a wide grey
+    # border, and the cut belongs in the grey. Frame is trimmed to its edges
+    # when the window holds both; the other stays to the frame trim.
+    frames = [r for r in runs if level((r[0] + r[1] - 1) // 2) > FRAME_LEVEL]
+    bordered = [r for r in runs if r[0] <= nominal < r[1] and white_beside(*r)]
+    if frames or bordered:
+        start, end = min(frames + bordered, key=distance)
+        if (start, end) in frames and lo < start and end < hi:
+            return start - bleed, end + bleed, True
+        return into((start, end))
     # Photos drawn touching, each on its own backdrop (MiniMax H3), meet in a
-    # step that runs the cut's length with no band between them: a backdrop
-    # lit top to bottom is no band, and a lit arm can match it in grey. A
-    # step off white is the frame's own edge, which the frame trim finds:
-    # white is read a margin out, past the edge's blur.
+    # seam with no band between them: a backdrop lit top to bottom is no
+    # band, and a lit arm can match it in grey. A step off white is the
+    # frame's own edge, which the frame trim finds: white is read a margin
+    # out, past the edge's blur.
     span = plane[across[0] : across[1]]
 
     def side(offset: int) -> np.ndarray:
         return span[:, np.clip(lines + offset, 0, size - 1)]
 
-    edge = (np.abs(side(bleed) - side(-1 - bleed)) > UNIFORM_LEVELS).mean(axis=0)
     white = np.maximum(
         np.median(side(margin), axis=0), np.median(side(-1 - margin), axis=0)
     )
-    seam = (edge >= UNIFORM_SHARE) & (white <= FRAME_LEVEL) & ~fenced
+    seam = _seams(plane, lo, hi, across) & (white <= FRAME_LEVEL) & ~fenced
     if seam.any():
         # The nearest seam, cut down its middle: every line within a soft
         # seam's width of the step reads it.
@@ -910,23 +1027,256 @@ def _find_cut(
             last += 1
         line = lo + (first + last) // 2
         return line - bleed, line + bleed, True
-    if not runs:
-        # ponytail: no clear line anywhere in the window (an arm across the
-        # gutter or the seam); the least busy line is a guess.
-        if fenced.all():
-            # Faces across the whole window: the line furthest from them.
-            line = lo + int(np.argmax(clearance))
-        else:
-            line = lo + int(np.argmax(np.where(fenced, -1.0, share[1:-1])))
+    if runs:
+        # Background with no line in it: where the photos meet, if they are
+        # two, but nothing says they are.
+        line, _same, _sure = into(min(runs, key=distance))
         return line, line, False
-    start, end = min(runs, key=distance)
-    line = min(max(nominal, start + margin), end - 1 - margin)
-    if line < start:
-        line = (start + end) // 2
-    # Background pressed against the window's edge, away from the grid line,
-    # most likely goes on past it: the sheet is drawn at another scale.
-    sure = start <= nominal < end or lo + margin <= line < hi - margin
-    return line, line, sure
+    if fenced.all():
+        # Faces across the whole window: the line furthest from them.
+        line = lo + int(np.argmax(clearance))
+    else:
+        line = lo + int(np.argmin(np.where(fenced, np.inf, np.abs(lines - nominal))))
+    return line, line, False
+
+
+def _content(gray: np.ndarray) -> Box:
+    """*gray* past every whole line of white frame round its edges."""
+    height, width = gray.shape
+    white = gray > FRAME_LEVEL
+    rows = np.flatnonzero(white.mean(axis=1) <= 0.95)
+    cols = np.flatnonzero(white.mean(axis=0) <= 0.95)
+    if not len(rows) or not len(cols):
+        return 0, 0, width, height
+    return int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+
+
+def _gutter_mask(rgb: np.ndarray) -> np.ndarray | None:
+    """Which pixels are colour gutter, or ``None`` when the sheet's edge is
+    not one colour of the magenta family (:data:`GUTTER_HUES`)."""
+    hsv = np.asarray(Image.fromarray(rgb).convert("HSV"), dtype=np.int16)
+    hue = hsv[..., 0]
+    coloured = (hsv[..., 1] > GUTTER_SATURATION) & (hsv[..., 2] > GUTTER_VALUE)
+    ring = np.ones(hue.shape, dtype=bool)
+    ring[GUTTER_RING:-GUTTER_RING, GUTTER_RING:-GUTTER_RING] = False
+    edge = ring & coloured
+    if edge.sum() < ring.sum() / 2:
+        return None
+    frame = int(np.median(hue[edge]))
+    if not GUTTER_HUES[0] <= frame <= GUTTER_HUES[1]:
+        return None
+    off = np.abs(hue - frame)
+    return coloured & (np.minimum(off, 256 - off) < GUTTER_HUE)
+
+
+def _off_gutter(cell: Box, gutter: np.ndarray, bleed: int) -> Box:
+    """*cell* moved in past the colour gutter along its edges.
+
+    An edge line is gutter while more than :data:`EDGE_GUTTER` of it is
+    gutter running in from its ends: a photo drawn askew or with rounded
+    corners leaves gutter at an edge's ends, while a pink sleeve in the
+    middle of the edge is the photo's own. *bleed* more go from every edge
+    with gutter outside it, for the colour's soft edge.
+    """
+    # ponytail: a pink garment reaching a panel's corner reads as gutter and
+    # costs that edge its rows; compare texture if a model draws one.
+
+    def gutter_share(line: np.ndarray) -> float:
+        if line.all():
+            return 1.0
+        return (int(np.argmin(line)) + int(np.argmin(line[::-1]))) / len(line)
+
+    box = list(cell)
+    while box[2] - box[0] > 2 * bleed + 2 and box[3] - box[1] > 2 * bleed + 2:
+        left, top, right, bottom = box
+        shares = [
+            gutter_share(gutter[top:bottom, left]),
+            gutter_share(gutter[top, left:right]),
+            gutter_share(gutter[top:bottom, right - 1]),
+            gutter_share(gutter[bottom - 1, left:right]),
+        ]
+        # The most gutter goes first: a column of gutter beside the photo
+        # also puts gutter at the ends of its top and bottom rows.
+        edge = int(np.argmax(shares))
+        if shares[edge] <= EDGE_GUTTER:
+            break
+        box[edge] += 1 if edge < 2 else -1
+    # Every edge with gutter just outside it, trimmed or not, loses *bleed*.
+    left, top, right, bottom = box
+    height, width = gutter.shape
+    outside = [
+        left > 0 and gutter_share(gutter[top:bottom, left - 1]) > EDGE_GUTTER,
+        top > 0 and gutter_share(gutter[top - 1, left:right]) > EDGE_GUTTER,
+        right < width and gutter_share(gutter[top:bottom, right]) > EDGE_GUTTER,
+        bottom < height and gutter_share(gutter[bottom, left:right]) > EDGE_GUTTER,
+    ]
+    return (
+        left + bleed * outside[0],
+        top + bleed * outside[1],
+        right - bleed * outside[2],
+        bottom - bleed * outside[3],
+    )
+
+
+def _in_layout_order(boxes: list[Box]) -> list[Box]:
+    """*boxes* as the layout numbers them: the two tallest are the bodies,
+    left to right, after the other four, top row first, each row left to
+    right."""
+    by_height = sorted(boxes, key=lambda b: b[3] - b[1])
+    passports = sorted(by_height[:-2], key=lambda b: b[1])
+    rows = sorted(passports[:2]) + sorted(passports[2:])
+    return rows + sorted(by_height[-2:])
+
+
+def _laid_out(cells: list[Box], width: int, height: int) -> bool:
+    """Whether *cells* are the sheet's layout: four passport photos of one
+    size, two by two, left of two body photos of another, each clearly taller
+    and over most of the sheet's height, none overlapping."""
+    if len(cells) != PANEL_COUNT:
+        return False
+    if any(
+        not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height)
+        for x0, y0, x1, y1 in cells
+    ):
+        return False
+    if any(
+        a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+        for a, b in combinations(cells, 2)
+    ):
+        return False
+
+    def alike(boxes: list[Box], kind: str) -> bool:
+        return all(
+            max(sizes) <= min(sizes) * (1 + SAME_SIZE[kind])
+            for sizes in (
+                [box[2] - box[0] for box in boxes],
+                [box[3] - box[1] for box in boxes],
+            )
+        )
+
+    p1, p2, p3, p4, b5, b6 = cells
+    body_height = min(b5[3] - b5[1], b6[3] - b6[1])
+    return (
+        alike([p1, p2, p3, p4], "passport")
+        and alike([b5, b6], "body")
+        and p1[2] <= p2[0]
+        and p3[2] <= p4[0]
+        and p1[3] <= p3[1]
+        and p2[3] <= p4[1]
+        and max(p2[2], p4[2]) <= b5[0]
+        and b5[2] <= b6[0]
+        and body_height >= 1.3 * (p1[3] - p1[1])
+        and body_height >= 0.7 * height
+    )
+
+
+def _colour_cells(gutter: np.ndarray) -> list[Box]:
+    """Step 1: the six largest regions between the colour gutters, in layout
+    order, each moved in past the gutter round it."""
+    photos = ndimage.binary_opening(~gutter, iterations=3)
+    labels, count = ndimage.label(photos)
+    if count < PANEL_COUNT:
+        return []
+    sizes = ndimage.sum_labels(photos, labels, range(1, count + 1))
+    slices = ndimage.find_objects(labels)
+    bleed = max(1, round(2 * gutter.shape[1] / SHEET_WIDTH))
+    boxes = [
+        _off_gutter(
+            (
+                slices[index][1].start,
+                slices[index][0].start,
+                slices[index][1].stop,
+                slices[index][0].stop,
+            ),
+            gutter,
+            bleed,
+        )
+        for index in np.argsort(sizes)[::-1][:PANEL_COUNT]
+    ]
+    return _in_layout_order(boxes)
+
+
+def _seam_cells(
+    gray: np.ndarray, centres: list[tuple[float, float, float]]
+) -> tuple[list[Box], list[tuple[int, int, bool]]]:
+    """Step 2: the cells cut along gutters and seams, and the cuts.
+
+    The passport block's edge is searched where the layout puts it (1200 of
+    2560; FLUX.2 Klein draws it as near as 920, MiniMax H3 at 1290), over
+    the sheet past its white frame. Every other cut then starts from the middle of the block it
+    splits, since the photos in a block are drawn one size, and searches a
+    quarter of the block either side. The passport row is cut once per
+    passport column, each over its own span, and the passport column then
+    once per row, over that row: a model that draws the two rows with their
+    gutters apart (MiniMax H3 Image does) would otherwise leave a strip of the
+    next photo on one row's cut.
+    """
+    height, width = gray.shape
+    sx, sy = width / SHEET_WIDTH, height / SHEET_HEIGHT
+    left, top, right, bottom = _content(gray)
+    across_x = [(x, y, reach) for x, y, reach in centres]
+    across_y = [(y, x, reach) for x, y, reach in centres]
+
+    def column_cut(
+        start: int, end: int, span: tuple[int, int]
+    ) -> tuple[int, int, bool]:
+        middle, reach = (start + end) // 2, (end - start) // 4
+        window = (middle - reach, middle + reach)
+        return _find_cut(gray, middle, window, span, True, across_x, sx)
+
+    def row_cut(start: int, end: int, span: tuple[int, int]) -> tuple[int, int, bool]:
+        middle, reach = (start + end) // 2, (end - start) // 4
+        window = (middle - reach, middle + reach)
+        return _find_cut(gray, middle, window, span, False, across_y, sy)
+
+    wide = (right - left) / SHEET_WIDTH
+    half = _find_cut(
+        gray,
+        left + round(1200 * wide),
+        (left + round(768 * wide), left + round(1540 * wide)),
+        (top, bottom),
+        True,
+        across_x,
+        sx,
+    )
+    bodies = column_cut(half[1], right, (top, bottom))
+    _l, block_top, _r, block_bottom = _content(gray[:, left : half[0]])
+    column = column_cut(left, half[0], (block_top, block_bottom))
+    rows = [
+        row_cut(block_top, block_bottom, span)
+        for span in ((left, column[0]), (column[1], half[0]))
+    ]
+    top_row = column_cut(left, half[0], (block_top, min(rows[0][0], rows[1][0])))
+    bottom_row = column_cut(left, half[0], (max(rows[0][1], rows[1][1]), block_bottom))
+    cells = [
+        (left, block_top, top_row[0], rows[0][0]),
+        (top_row[1], block_top, half[0], rows[1][0]),
+        (left, rows[0][1], bottom_row[0], block_bottom),
+        (bottom_row[1], rows[1][1], half[0], block_bottom),
+        (half[1], top, bodies[0], bottom),
+        (bodies[1], top, right, bottom),
+    ]
+    return cells, [half, bodies, top_row, bottom_row, *rows]
+
+
+def _sized_cells(gray: np.ndarray, half: tuple[int, int, bool]) -> list[Box]:
+    """Step 3: the layout's own cells, sized to the sheet past its white
+    frame and to the passport block's edge when step 2 was sure of it: four
+    equal passport cells two by two, two equal body cells beside them."""
+    left, top, right, bottom = _content(gray)
+    end, start, sure = half
+    if not sure:
+        end = start = left + round(1200 * (right - left) / SHEET_WIDTH)
+    middle, row = (left + end) // 2, (top + bottom) // 2
+    split = (start + right) // 2
+    return [
+        (left, top, middle, row),
+        (middle, top, end, row),
+        (left, row, middle, bottom),
+        (middle, row, end, bottom),
+        (start, top, split, bottom),
+        (split, top, right, bottom),
+    ]
 
 
 def sheet_cells(
@@ -934,23 +1284,30 @@ def sheet_cells(
 ) -> tuple[list[Box], bool]:
     """The six panels' boxes on *image*, in order, and whether the cut is clean.
 
-    Each cut starts from the grid's own line (passport cells 600×768, body
-    cells 680×1536 at 2560×1536, scaled to the picture) and searches halfway to
-    the next line on either side, so no model's drift is a constant here: see
-    :func:`_find_cut` for where in that window it lands. The passport row is
-    cut once per passport column, each over its own span, and the passport
-    column then once per row, over that row: a model that draws the two rows
-    with their gutters apart (MiniMax H3 Image does) would otherwise leave a
-    strip of the next photo on one row's cut. Whatever is left of the white
-    frame round each photo is then trimmed.
+    Three steps, each tried only when the one before did not find the
+    sheet's layout (:func:`_laid_out`):
+
+    1. Colour gutters: on a sheet drawn on magenta, the six largest regions
+       between the gutters (:func:`_colour_cells`).
+    2. Seams: the cuts searched along gutters, seams and white frame
+       (:func:`_seam_cells`, :func:`_find_cut`). A colour gutter counts as
+       white frame here, so a sheet whose gutters ran together in places
+       (Qwen-Image draws them round pairs of photos) is cut along the seams
+       inside them.
+    3. Size: the layout's own cells (:func:`_sized_cells`), never clean.
+
+    Whatever is left of the white frame round each photo is then trimmed,
+    and any colour gutter.
 
     *faces* are the sheet's stored face boxes. A cut never runs through a
-    face's centre, and the cut is clean only when every cut found a clear line
-    and no panel holds two faces' centres. A cut that is not clean still cuts:
-    it is for the person to judge, from the cells drawn on the sheet.
+    face's centre, and the cut is clean only when every cut found a gutter,
+    a seam or frame and no panel holds two faces' centres. A cut that is not
+    clean still cuts: it is for the person to judge, from the cells drawn on
+    the sheet.
     """
     width, height = image.size
-    sx, sy = width / SHEET_WIDTH, height / SHEET_HEIGHT
+    sx = width / SHEET_WIDTH
+    rgb = np.asarray(image.convert("RGB"))
     gray = np.asarray(image.convert("L"), dtype=np.int16)
     centres = [
         (
@@ -961,40 +1318,57 @@ def sheet_cells(
         for b in faces or ()
         if b and len(b) == 4
     ]
-    across_x = [(x, y, reach) for x, y, reach in centres]
-    across_y = [(y, x, reach) for x, y, reach in centres]
-    grid = [round(x * sx) for x in (0, 600, 1200, 1880)] + [width]
-
-    def column_cut(
-        i: int, span: tuple[int, int] = (0, height)
-    ) -> tuple[int, int, bool]:
-        window = ((grid[i - 1] + grid[i]) // 2, (grid[i] + grid[i + 1]) // 2)
-        return _find_cut(gray, grid[i], window, span, True, across_x, sx)
-
-    column, half, bodies = column_cut(1), column_cut(2), column_cut(3)
-    row = round(768 * sy)
-    window = (row // 2, (row + height) // 2)
-    rows = [
-        _find_cut(gray, row, window, span, False, across_y, sy)
-        for span in ((0, column[0]), (column[1], half[0]))
-    ]
-    # The passport column again, per row, over the part of the row both its
-    # photos cover.
-    top = column_cut(1, (0, min(rows[0][0], rows[1][0])))
-    bottom = column_cut(1, (max(rows[0][1], rows[1][1]), height))
-    cells = [
-        (0, 0, top[0], rows[0][0]),
-        (top[1], 0, half[0], rows[1][0]),
-        (0, rows[0][1], bottom[0], height),
-        (bottom[1], rows[1][1], half[0], height),
-        (half[1], 0, bodies[0], height),
-        (bodies[1], 0, width, height),
-    ]
+    gutter = _gutter_mask(rgb)
     limit, bleed = round(64 * sx), max(1, round(2 * sx))
-    cells = [_inside_frame(gray, cell, limit, bleed) for cell in cells]
-    clean = all(cut[2] for cut in (top, bottom, half, bodies, *rows)) and all(
+
+    def trimmed(cells: list[Box]) -> list[Box]:
+        cells = [_inside_frame(gray, cell, limit, bleed) for cell in cells]
+        if gutter is not None:
+            cells = [_off_gutter(cell, gutter, bleed) for cell in cells]
+        return cells
+
+    step, sure = "colour gutters", True
+    cells = _colour_cells(gutter) if gutter is not None else []
+    if not _laid_out(cells, width, height):
+        if gutter is not None:
+            gray = np.where(gutter, 255, gray).astype(np.int16)
+        # Seams are read at the layout's own size: a larger sheet is drawn
+        # from a larger latent, its seams blurred over as many more pixels.
+        factor = max(1.0, width / SHEET_WIDTH)
+        small = gray
+        if factor > 1:
+            small = np.asarray(
+                Image.fromarray(gray.astype(np.uint8)).resize(
+                    (round(width / factor), round(height / factor)), Image.BOX
+                ),
+                dtype=np.int16,
+            )
+        found, cuts = _seam_cells(
+            small, [(x / factor, y / factor, r / factor) for x, y, r in centres]
+        )
+        step, sure = "seams", all(cut[2] for cut in cuts)
+        cells = trimmed(
+            [
+                (
+                    min(round(left * factor), width),
+                    min(round(top * factor), height),
+                    min(round(right * factor), width),
+                    min(round(bottom * factor), height),
+                )
+                for left, top, right, bottom in found
+            ]
+        )
+        if not _laid_out(cells, width, height):
+            step, sure = "size", False
+            end, start, half_sure = cuts[0]
+            half = (round(end * factor), round(start * factor), half_sure)
+            cells = trimmed(_sized_cells(gray, half))
+    clean = sure and all(
         sum(left <= x < right and top <= y < bottom for x, y, _ in centres) <= 1
         for left, top, right, bottom in cells
+    )
+    (logger.warning if step == "size" else logger.info)(
+        "Sheet %dx%d cut by %s (clean=%s).", width, height, step, clean
     )
     return cells, clean
 
@@ -1008,7 +1382,8 @@ def _inside_frame(
     than the cut's own gutter. From each edge, every line that is almost all
     near-white is frame, up to *limit* lines. The photos have rounded corners,
     so each edge then also steps in as far as the white runs diagonally in from
-    its corners. *bleed* more go with any trim, for the soft seam.
+    its corners, when that is short of a quarter of *limit*. *bleed* more go
+    with any trim, for the soft seam.
     """
     # ponytail: a photo whose own edge is blown-out white loses up to *limit*
     # lines with the frame; tell frame from photo by texture if that shows.
@@ -1028,8 +1403,17 @@ def _inside_frame(
     right -= trimmed(run(cols[::-1]))
     bottom -= trimmed(run(rows[::-1]))
     white = gray[top:bottom, left:right] > FRAME_LEVEL
+    # A rounded corner's white runs a few lines in along the diagonal; white
+    # that runs a quarter of *limit* or more is the photo's own (FLUX.2
+    # Klein lights its passport backdrops near white at a corner).
+    reach = max(1, limit // 4)
+
+    def rounded(flags: np.ndarray) -> int:
+        n = run(flags[:reach])
+        return 0 if n == reach else n
+
     corner = {
-        (ys, xs): run(np.diagonal(white[::ys, ::xs]))
+        (ys, xs): rounded(np.diagonal(white[::ys, ::xs]))
         for ys in (1, -1)
         for xs in (1, -1)
     }
