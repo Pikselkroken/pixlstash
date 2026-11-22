@@ -2845,7 +2845,11 @@ latent or checkpoint loader has the same **core address**
 group has no core label and is addressed by its slot label on the base
 topology, which goes stale if the base topology changes: an accepted limit, and
 `_apply_addressed` now logs every address that matches no node on the run graph
-rather than dropping it silently. LoRAs are not addressed by label:
+rather than dropping it silently. An address that more than one node carries
+names none of them: `workflow_identity.node_addresses` leaves it out of the
+default recipe, the run and export writes, and the form rows, so each such node
+keeps the value it stores (the topology cannot tell same-class nodes in parallel
+branches apart; their widget values can). LoRAs are not addressed by label:
 `lora:<sha256>`, placed by `place_recipe_loras`.
 
 **The default recipe** (`workflow_card_service.workflow_defaults`) is

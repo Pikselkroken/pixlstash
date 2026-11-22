@@ -13582,6 +13582,262 @@ def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
 
 
+def _parallel_branches_document(titled: bool = False) -> dict:
+    """Two same-shaped KSampler branches and one that differs, all of one class.
+
+    Branches 2 and 4 are topologically identical, so their KSampler nodes share
+    a slot label and only their widget values tell them apart. Branch 6 ends in
+    an extra scale, so its KSampler has a label of its own.
+    """
+    document = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["4", 0], "filename_prefix": "b"},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 3, "steps": 30, "cfg": 6.5},
+        },
+        "7": {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["6", 0],
+                "upscale_method": "nearest-exact",
+                "width": 512,
+                "height": 512,
+                "crop": "disabled",
+            },
+        },
+        "8": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["7", 0], "filename_prefix": "c"},
+        },
+    }
+    if titled:
+        for node_id, node in document.items():
+            node["_meta"] = {"title": f"Branch {node_id}"}
+    return document
+
+
+def _parallel_label(document: dict, node_id: str) -> str:
+    """A node's slot label, read off the stored form (model names by reference).
+
+    A label is topology alone, so the widget spelling does not change it; the
+    reduction only wants every model name as a reference.
+    """
+    stored = json.loads(json.dumps(document))
+    for node in stored.values():
+        for name, value in node.get("inputs", {}).items():
+            if isinstance(value, str) and value.endswith(".safetensors"):
+                node["inputs"][name] = asset_reference(value)
+    return topology_node_labels(stored)[node_id]
+
+
+def _run_parallel_branches(runnable, monkeypatch, document, values=()) -> dict:
+    """Run *document* as a manual workflow and return the graph ComfyUI gets."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["ImageScale"] = {
+        "input": {
+            "required": {
+                "image": ["IMAGE", {}],
+                "upscale_method": [["nearest-exact"], {}],
+                "width": ["INT", {}],
+                "height": ["INT", {}],
+                "crop": [["disabled"], {}],
+            }
+        }
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    manual = create_manual_workflow(
+        runnable.server.hub, "Parallel branches", document, "import"
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": manual, "values": list(values)},
+    )
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert not group["reasons"], group
+    return runnable.submitted[-1]["graph"]
+
+
+@pytest.mark.parametrize("titled", [False, True])
+def test_parallel_branches_of_one_class_keep_their_own_values(
+    runnable, monkeypatch, titled
+):
+    """Same-class nodes in parallel branches each keep their stored value (#1622).
+
+    The default recipe reads one value per slot label, and branches 2 and 4
+    share a label. Before the fix the recipe's one value landed on both; the
+    titles must not change that either way.
+    """
+    graph = _run_parallel_branches(
+        runnable, monkeypatch, _parallel_branches_document(titled)
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def test_a_run_value_for_one_slot_changes_only_the_node_it_names(runnable, monkeypatch):
+    """A slot label only one node carries reaches only that node."""
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "6")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        99,
+    ]
+
+
+def test_a_run_value_for_a_label_two_nodes_share_is_applied_to_neither(
+    runnable, monkeypatch
+):
+    """The label names no single node, so neither keeps a value it was not given.
+
+    Both nodes keep their own steps, and the request is logged as matching no
+    settable input rather than copied over the pair.
+    """
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "2")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def _two_model_branches() -> dict:
+    """Two identical UNET branches, each loading a different model."""
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": _ZIMAGE_UNET}},
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": _KREA_UNET}},
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["4", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "6": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["5", 0], "filename_prefix": "b"},
+        },
+    }
+
+
+@pytest.fixture
+def model_branches(runnable, monkeypatch):
+    """The two-branch graph as a manual workflow, its two models on the shelf."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["UNETLoader"] = {
+        "input": {"required": {"unet_name": [[_ZIMAGE_UNET, _KREA_UNET], {}]}}
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    hub = runnable.server.hub
+    with hub.transaction() as conn:
+        for filename, base_model in (
+            (_ZIMAGE_UNET, "Z-Image Turbo"),
+            (_KREA_UNET, "Krea 2"),
+        ):
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, base_model, "
+                "provenance) VALUES ('checkpoint', ?, ?, ?, 'scanned')",
+                (filename, _h(filename), base_model),
+            )
+    manual = create_manual_workflow(
+        hub, "Two model branches", _two_model_branches(), "import"
+    )
+    yield SimpleNamespace(runnable=runnable, manual=manual)
+    delete_manual_workflow(hub, manual)
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model WHERE filename IN (?, ?)", (_ZIMAGE_UNET, _KREA_UNET)
+        )
+
+
+def test_two_loaders_of_one_model_keep_their_own_files(model_branches):
+    """The default recipe's one model for a shared address goes to neither loader.
+
+    Both the run and the export apply the default recipe; the export is the
+    path that writes its models from the recipe (``_export_default_recipe``).
+    """
+    runnable = model_branches.runnable
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_id": model_branches.manual}
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+    r = runnable.owner.get(f"{API}/workflows/{model_branches.manual}/export")
+    assert r.status_code == 200, r.text
+    exported = r.json()["workflow"]
+    assert (
+        exported["1"]["inputs"]["unet_name"],
+        exported["4"]["inputs"]["unet_name"],
+    ) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
+def test_a_run_model_for_a_shared_address_is_applied_to_neither_loader(model_branches):
+    """A model the request names by an address two loaders share is not copied."""
+    runnable = model_branches.runnable
+    label = _parallel_label(_two_model_branches(), "1")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": model_branches.manual,
+            "models": [{"address": f"{label}/unet_name", "filename": _KREA_UNET}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
 def test_one_input_named_two_ways_takes_the_later_value(runnable):
     """A saved recipe's core-addressed override must not beat a request's slot label."""
     core = {"slot_label": _core_address("3", "steps").rpartition("/")[0]}

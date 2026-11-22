@@ -314,6 +314,7 @@ from pixlstash.services.workflow_identity import (
     TWO_PASS,
     loader_swaps,
     core_node_labels,
+    node_addresses,
     match_type,
     model_fix_kind,
 )
@@ -6038,13 +6039,13 @@ def create_router(server) -> APIRouter:
         }
         found = set()
         sized = size_inputs(graph)
+        # A node is addressed only by a label no other node on the graph shares.
+        addresses = node_addresses(labels, core)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
-            addressed_as = [labels.get(node_id)]
-            if node_id in core:
-                addressed_as.append(CORE_ADDRESS_PREFIX + core[node_id])
+            addressed_as = addresses.get(str(node_id), [])
             for name in list(inputs):
                 # A wired input is left alone - overwriting drops the link -
                 # so it counts as not applied and is logged below. Except the
@@ -6065,10 +6066,11 @@ def create_router(server) -> APIRouter:
         for slot_label, input_name in sorted(set(wanted) - found):
             # Not an error: a card's defaults are read off every variant, and a
             # stage-node address goes stale when the base topology changes
-            # (#1622). Logged, because it used to vanish without a word.
+            # (#1622). Logged, because it used to vanish without a word. Also
+            # what an address shared by two nodes comes to: applied to neither.
             logger.info(
                 "[workflows] Parameter %s/%s matches no settable input on the "
-                "run graph, so it is not applied.",
+                "run graph, or names more than one node, so it is not applied.",
                 slot_label,
                 input_name,
             )
@@ -6120,6 +6122,7 @@ def create_router(server) -> APIRouter:
         if not models:
             return []
         labels, core = _graph_labels(graph, "models")
+        addresses = node_addresses(labels, core)
         shelf = _swap_models(hub)
         by_digest = {
             str(row["sha256"]).lower(): row["filename"]
@@ -6157,16 +6160,12 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
+            # A loader two nodes share a label for is no loader to name: the file
+            # would go into both, so it is flagged below and left as it is.
             node_ids = [
                 node_id
                 for node_id in graph
-                if labels.get(node_id) == slot_label
-                # Only a node the core kept has a core address: spelled with
-                # an empty label, the prefix alone would name every other one.
-                or (
-                    node_id in core
-                    and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
-                )
+                if slot_label in addresses.get(str(node_id), ())
             ]
             loaders = [
                 node_id
@@ -13791,13 +13790,12 @@ def create_router(server) -> APIRouter:
             )
             return []
         holds: dict[tuple[str, str], list] = {}
+        addresses = node_addresses(labels, core)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
-            names = [labels.get(node_id)]
-            if node_id in core:
-                names.append(CORE_ADDRESS_PREFIX + core[node_id])
+            names = addresses.get(str(node_id), [])
             for name, value in inputs.items():
                 if (
                     isinstance(value, (bool, int, float, str))
