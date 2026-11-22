@@ -1096,10 +1096,9 @@ them: a ComfyUI workflow draws **character sheets**, one picture with four
 passport photos and two body photos of the same person, and the sheets you keep
 are cut into six pictures each. The Sheets step has two modes, **Text** and
 **Reference and text**, and each lists only the workflows that can draw a sheet
-in it. PixlStash ships seven that can: `Qwen-Image 2.1 Sheet` and
-`FLUX.2 Klein 9B Sheet`, each with a `from Reference` twin;
-`MiniMax H3 Image Sheet (PixlStash)` with its `from Reference` twin; and
-`Sheet-MiniMax-H3-Reference`. Your own workflow is listed too once it meets the
+in it. PixlStash ships six that can: `Qwen-Image 2.1 Sheet`,
+`FLUX.2 Klein 9B Sheet` and `MiniMax H3 Image Sheet (PixlStash)`, each with a
+`from Reference` twin. Your own workflow is listed too once it meets the
 rules below. Add it from Workflows (drop the `.json` on the screen) first.
 Only MOSS-Image's text sheets have been probed for how well they hold the
 layout; the other models' sheets, and every sheet drawn from a reference, have
