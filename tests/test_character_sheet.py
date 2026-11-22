@@ -493,7 +493,6 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
         ("FLUX.2 Klein 9B Sheet from Reference.json", 1),
         ("MiniMax H3 Image Sheet (PixlStash).json", 0),
         ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1),
-        ("Sheet-MiniMax-H3-Reference.json", 1),
         ("Qwen-Image 2.1 Sheet.json", 0),
         ("Qwen-Image 2.1 Sheet from Reference.json", 1),
     ],

@@ -12978,11 +12978,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
-  (PixlStash ships seven, #2700: `data/comfyui-workflows/built-in/Qwen-Image 2.1 Sheet*.json` and
+  (PixlStash ships six, #2700: `data/comfyui-workflows/built-in/Qwen-Image 2.1 Sheet*.json` and
   `FLUX.2 Klein 9B Sheet*.json`, a text and a `from Reference` one of each, and
-  `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
-  own H3 text-to-image template can draw sheets: its size is wired from a
-  `ResolutionSelector`, and the card offers that as a size a run sets; and
   `MiniMax H3 Image Sheet (PixlStash).json` with its `from Reference` twin, a text and a reference one for MiniMax H3
   Image, whose `MiniMaxH3ImageConditioning` takes the picture as
   `<Picture 1>`, and which draw with `SamplerLCM` (`s_noise` 1.1 easing to
