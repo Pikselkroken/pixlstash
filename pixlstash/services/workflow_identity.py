@@ -50,6 +50,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_io import is_picture_loader
 from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
+from pixlstash.utils.comfyui_utilities import ZEROED_CONDITIONING_CLASSES
 
 # Stamped beside every cached value, so a change of rule re-keys visibly.
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
@@ -874,7 +875,7 @@ def _negative_is_prompted(nodes: dict[str, ReducedNode], node: ReducedNode) -> b
             continue
         seen.add(current)
         upstream = nodes[current]
-        if upstream.class_type == "ConditioningZeroOut":
+        if upstream.class_type in ZEROED_CONDITIONING_CLASSES:
             continue
         if _TEXT_ENCODER_CLASS_RE.search(upstream.class_type):
             return True

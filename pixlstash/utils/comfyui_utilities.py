@@ -66,6 +66,12 @@ PROMPT_FIELDS = ("text", "prompt", "value")
 # Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
 # negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
 NEGATIVE_FIELDS = ("negative_prompt", "negative")
+# Nodes whose output is zeroed conditioning: the prompt on their input is not
+# what reaches the sampler. A model with no negative prompt is wired through
+# one (its guider's negative takes the zeroed positive), so a walk up the
+# negative side stops there and finds none. Shared with workflow_io and
+# workflow_identity, which detect the same thing.
+ZEROED_CONDITIONING_CLASSES = frozenset({"ConditioningZeroOut"})
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -526,6 +532,12 @@ def _follow_prompt_api(
         return None
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
+
+    # A zeroed negative has no prompt, however the zeroing node is wired to the
+    # positive one. Only the negative side stops here: a walk up the positive
+    # side is read as it always was.
+    if side == "negative" and class_type in ZEROED_CONDITIONING_CLASSES:
+        return None
 
     # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
     # `TextEncode` class, or a node that takes `clip` and no conditioning, so
