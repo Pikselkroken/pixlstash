@@ -75,6 +75,18 @@ describe("usePromptAssist", () => {
     });
   });
 
+  it("picking the shipped default, by its sentence or after another, pins nothing", () => {
+    open().commit("camera", "Taken on a phone.");
+    expect(localStorage.getItem(KEY)).toBeNull();
+    const look = open();
+    look.commit("camera", "35 mm film");
+    look.commit("camera", "Phone snapshot");
+    // Back at the default is never-chosen: the next release's default wins.
+    expect(open(assist({ cameraDefault: "film" })).current("camera")).toEqual({
+      id: "film",
+    });
+  });
+
   it("an emptied row stays empty when its default changes", () => {
     open().commit("camera", "");
     expect(open(assist({ cameraDefault: "film" })).request().choices.camera).toBe("none");

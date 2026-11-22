@@ -1051,6 +1051,49 @@ describe("TrainingSetBuild: generating the pictures", () => {
     wrapper.unmount();
   });
 
+  it("Off on the group stays Off on an engine the server has no presets for", async () => {
+    api.fetchCharacterSetSuggestion.mockResolvedValue(
+      suggestion({ stillsGroup: emptyGroup() }),
+    );
+    sheetsWorld({ description: "Adult woman, copper bob" });
+    const QWEN_CARD = {
+      id: "manual:qwen",
+      name: "Qwen sheet",
+      type: "txt2img",
+      last_used: "2026-11-08T20:00:00Z",
+      models: [{ kind: "unet", base_model_family: "qwen" }],
+    };
+    gen.listWorkflowCards.mockResolvedValue({ cards: [KREA_CARD, QWEN_CARD] });
+    const assist = {
+      family: "krea2",
+      context: "sheet",
+      default_on: true,
+      categories: [{ id: "look", label: "Closing look", default: "none", options: [] }],
+      parts: [],
+    };
+    // Presets for Krea only: Qwen falls back to the plain Natural/Off switch.
+    gen.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.prompt_assist && body.workflow_id === KREA_CARD.id
+        ? { ok: true, groups: [{ reasons: [], prompt: { assist } }] }
+        : { ok: true, groups: [{ reasons: [] }] },
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Sheet workflow")
+      .vm.$emit("update:modelValue", QWEN_CARD.id);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="pa"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="cs-photo-look"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
+    await flushPromises();
+    expect(gen.buildSheetPrompt.mock.lastCall[0].photo_look).toBe(false);
+    wrapper.unmount();
+  });
+
   it("draws text sheets with a MiniMax H3 text-to-image workflow, in prose", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

@@ -154,6 +154,13 @@ export function usePromptAssist(assist, context) {
     const preset = category(id)?.options?.find(
       (opt) => same(opt.label, typed) || same(opt.text, typed),
     );
+    if (preset && preset.id === category(id)?.default) {
+      // The shipped preset is "never chosen": storing it would pin this
+      // release's default past the next one's. (An emptied row is stored even
+      // where the default is empty, so it stays empty if that changes.)
+      if (id in state.choices) resetRow(id);
+      return;
+    }
     state.choices = {
       ...state.choices,
       [id]: !typed ? "none" : preset ? { id: preset.id } : { text: typed },

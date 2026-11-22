@@ -2287,6 +2287,8 @@ async function setStage(name, on) {
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
   addedUpscale.value = false;
+  // Per run like the stages: a tick on one workflow says nothing about another.
+  enhanceChoice.value = null;
 }
 
 const upscale = useUpscaleStore();

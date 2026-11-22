@@ -1045,6 +1045,14 @@ watch([workflowId, layout], askSheetAssist);
 watch(sheetAssist, (assist) => {
   if (assist && !form.photo_look && !sheetLook.hasStoredOn()) sheetLook.setOn(false);
 });
+// And back: the group stands in for the Natural/Off switch, so an engine
+// without the group (no presets) keeps the last On/Off the owner chose.
+watch(
+  () => (sheetAssist.value ? sheetLook.on.value : null),
+  (on) => {
+    if (on !== null && form.photo_look !== on) form.photo_look = on;
+  },
+);
 
 const railIsReference = computed(() =>
   phase.value === "describe" ? fromReference.value : !!drawnFrom.value,

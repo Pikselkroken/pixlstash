@@ -6261,6 +6261,20 @@ describe("the prompt enhancer", () => {
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0].enhance_prompt).toBe(false);
   });
+
+  it("a tick on one workflow is not carried to the next one picked", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    preflightWorkflowRun.mockClear();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("enhance_prompt");
+  });
 });
 
 // Photo look: the server's presets for a model family, under the prompt. What
