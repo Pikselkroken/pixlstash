@@ -19,6 +19,7 @@ from pixlstash.hub.workflow_cards import run_family
 from pixlstash.services import prompt_assist
 from pixlstash.services.character_sheet import PHOTO_LOOK
 from pixlstash.services.prompt_assist import (
+    MAX_TEXT_LENGTH,
     PRESET_DIR,
     PromptAssistError,
     as_sentence,
@@ -169,6 +170,12 @@ def test_choices_pick_skip_or_type_and_typed_text_is_only_flagged():
         },
     ]
     assert render_words(stamp["parts"][0]["text"]) == ["photorealistic"]
+    # The cap holds for the written text, closing stop included.
+    with pytest.raises(PromptAssistError):
+        assemble(FAMILY, "photo", {"camera": {"text": "x" * MAX_TEXT_LENGTH}}, "A.")
+    assert assemble(
+        FAMILY, "photo", {"camera": {"text": "x" * (MAX_TEXT_LENGTH - 1)}}, "A."
+    )["parts"][0]["text"].endswith("x.")
     assert as_sentence("Done!") == "Done!"
     # None for the camera drops its finish with it.
     stamp = assemble(FAMILY, "photo", {"camera": "none"}, "A man.")

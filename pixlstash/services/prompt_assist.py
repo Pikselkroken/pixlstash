@@ -317,7 +317,14 @@ def assemble(family: Optional[str], context: str, choices: dict, prompt: str) ->
                     }
                 )
         elif as_sentence(choice.get("text") or ""):
-            picked.append({**part, "id": None, "text": as_sentence(choice["text"])})
+            text = as_sentence(choice["text"])
+            # The cap holds for what is written, closing stop included.
+            if len(text) > MAX_TEXT_LENGTH:
+                raise PromptAssistError(
+                    f"prompt_assist.choices.{category['id']}",
+                    f"{category['label']} is over {MAX_TEXT_LENGTH} characters.",
+                )
+            picked.append({**part, "id": None, "text": text})
     parts = []
     for part in picked + finishes:
         if part["text"] in prompt:

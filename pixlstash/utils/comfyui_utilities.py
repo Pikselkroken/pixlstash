@@ -693,20 +693,26 @@ def prompt_assist_tail(stamp: Any) -> str | None:
         return None
 
 
-def split_prompt_assist(text: Any, workflow: dict) -> tuple[Any, dict | None]:
+def split_prompt_assist(
+    text: Any, workflow: dict, node_id: Any = None
+) -> tuple[Any, dict | None]:
     """The owner's words in a prompt literal, and the stamp of what a run added.
 
     The one reader of :data:`PROMPT_ASSIST_META`. A stamp is trusted only
     where *text* ends with exactly what it says was added, after some words
     of the owner's; otherwise the whole literal is the owner's prompt (a file
-    edited elsewhere) and the mismatch is logged.
+    edited elsewhere) and the mismatch is logged. With *node_id*, the node
+    holding the literal, only that node's stamp is read: the run writes the
+    stamp there. Without it (a recipe read, whose text may come through a
+    primitive), any stamp whose lines end the text is the one.
     """
     if not isinstance(text, str):
         return text, None
     stamps = [
         node["_meta"][PROMPT_ASSIST_META]
-        for node in workflow.values()
-        if isinstance(node, dict)
+        for nid, node in workflow.items()
+        if (node_id is None or str(nid) == str(node_id))
+        and isinstance(node, dict)
         and isinstance(node.get("_meta"), dict)
         and PROMPT_ASSIST_META in node["_meta"]
     ]

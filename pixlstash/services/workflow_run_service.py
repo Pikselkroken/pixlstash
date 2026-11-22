@@ -368,7 +368,7 @@ def apply_prompts(
         "assist_applied": False,
     }
     tail = prompt_assist_tail(assist) if prompt and prompt.strip() else None
-    enhanced: list[tuple[str, str]] = []
+    enhanced: list[tuple[str, str, str]] = []
     written: list[tuple[str, str]] = []
     try:
         detected = detect_workflow_io(graph)
@@ -390,11 +390,13 @@ def apply_prompts(
                 continue
             report[f"{side}_settable"] = True
             if rewritten_prompt_input(graph, node_id, name) != (str(node_id), name):
-                enhanced.append((str(node_id), name))
+                enhanced.append((side, str(node_id), name))
             literal = _literal_prompt_target(graph, node_id, name)
             words = graph[literal[0]]["inputs"][literal[1]] if literal else None
             if side == "positive":
-                words, stamp = split_prompt_assist(words, graph)
+                words, stamp = split_prompt_assist(
+                    words, graph, literal[0] if literal else None
+                )
                 if text is None:
                     # Only a run that leaves the prompt alone keeps its stamp:
                     # writing a prompt drops it, and the run's own additions
@@ -431,11 +433,17 @@ def apply_prompts(
             report["unplaced"].append(side)
     report["assist_applied"] = bool(tail and written)
     report["enhancer"] = bool(enhanced)
-    cut = enhance is False or (enhance is None and report["assist_applied"])
-    if cut:
-        for node_id, name in enhanced:
+    # The owner's switch cuts every enhancer; the assist cuts only the ones that
+    # would rewrite the words it added to, on the positive side.
+    kept = False
+    for side, node_id, name in enhanced:
+        if enhance is False or (
+            enhance is None and report["assist_applied"] and side == "positive"
+        ):
             _cut_prompt_enhancer(graph, node_id, name)
-    report["enhancer_on"] = bool(enhanced) and not cut
+        else:
+            kept = True
+    report["enhancer_on"] = kept
     if report["assist_applied"]:
         for node_id, name in written:
             literal = _literal_prompt_target(graph, node_id, name)

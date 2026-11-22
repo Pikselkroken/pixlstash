@@ -1006,6 +1006,50 @@ def test_with_the_enhancer_cut_the_stamp_is_on_the_encoder():
     assert (report["enhancer_on"], "21" in graph) == (True, True)
 
 
+def test_the_assist_cuts_only_the_positive_enhancer():
+    """The assist's words go to the positive prompt, so a negative prompt with
+    an enhancer of its own keeps it; the owner's off switch still cuts both."""
+    words = "Make the hat purple."
+
+    def with_negative_enhancer():
+        graph = _load(BUILT_IN / "MiniMax-H3-Image-Edit.json")
+        for at, was in (("31", "21"), ("32", "22"), ("33", "23")):
+            graph[at] = json.loads(json.dumps(graph[was]))
+        graph["31"]["inputs"]["replace"] = "blurry, low quality"
+        graph["32"]["inputs"]["prompt"] = ["31", 0]
+        graph["33"]["inputs"]["json_string"] = ["32", 0]
+        graph["7"] = {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["4", 0], "text": ["33", 0]},
+        }
+        return graph
+
+    graph = with_negative_enhancer()
+    report = run_service.apply_prompts(graph, words, None, None, _assisted(words))
+    assert report["assist_applied"] is True
+    assert ("21" in graph, "31" in graph) == (False, True)
+    assert report["enhancer_on"] is True
+    graph = with_negative_enhancer()
+    report = run_service.apply_prompts(graph, words, None, False, _assisted(words))
+    assert ("21" in graph, "31" in graph, report["enhancer_on"]) == (
+        False,
+        False,
+        False,
+    )
+
+
+def test_a_stamp_on_another_node_is_not_this_prompts():
+    """The run reads only the stamp on the node holding the literal."""
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    stamp = _assisted("A woman.")
+    tail = " " + " ".join(part["text"] for part in stamp["parts"])
+    graph["6"]["inputs"]["prompt"] = "A woman." + tail
+    graph["3"].setdefault("_meta", {})[PROMPT_ASSIST_META] = stamp
+    report = run_service.apply_prompts(graph, None, None)
+    assert report["recorded"] is None
+    assert report["positive_text"] == "A woman." + tail
+
+
 def test_the_prompt_assist_moves_no_workflow_identity():
     plain = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
     assisted = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
