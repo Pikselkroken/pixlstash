@@ -1742,11 +1742,11 @@ Escape and Enter do nothing here: cancelling deletes a set.
   afresh. The mode on show is checked first and each answer lands as it
   comes, so its select fills before the other mode is done. The three draw choices (*Body
   photos*, *Sheets to draw*, *Sheet size*) are `Segmented` toggles
-  side by side (*Sheet size* greys out what the chosen model does not draw
-  well, `ENGINES[…].sizes`: 4K, 5K and 6K for all but the MiniMax models;
-  Small, Medium, 4K and 6K for MiniMax H3, whose workflows pick 5K; Small,
-  Medium and Large for MiniMax H3 Image, whose workflows pick 4K; the hint
-  names the sizes the model draws; a size saved with the set, or
+  side by side (*Sheet size* offers only the sizes the chosen model draws
+  well, `ENGINES[…].sizes`, and greys out the rest: Small, Medium and Large
+  for all but the MiniMax models; Large and 5K for MiniMax H3, whose
+  workflows pick 5K; 4K, 5K and 6K for MiniMax H3 Image, whose workflows pick
+  4K; the hint names the sizes the model draws; a size saved with the set, or
   remembered as picked for that same model (`size_family`), stands where the
   model draws it), wrapping only on a narrow window, with one line of hints; the
   description takes the height the form leaves. There is no man/woman
