@@ -103,7 +103,7 @@ def test_waist_up_draws_the_head_bigger_than_mid_thigh():
     def head(framing):
         items = json.loads(sheet_prompt(description="x", framing=framing))["items"]
         y1, x1, y2, x2 = next(
-            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Her head")
+            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Their head")
         )
         return (y2 - y1) * (x2 - x1)
 
@@ -185,11 +185,11 @@ def test_a_background_replaces_the_studio_and_none_keeps_it(layout):
         text = sheet_prompt(description="x", layout=layout, **kwargs)
         return text if layout == "prose" else json.loads(text)["summary"]["caption"]
 
-    studio = "same woman on a plain light-grey studio background, soft even "
+    studio = "same person on a plain light-grey studio background, soft even "
     assert studio in summary()
     assert studio in summary(background="  ")
     park = summary(background="A sunlit park with tall trees.")
-    assert "same woman with the background: a sunlit park with tall trees, ph" in park
+    assert "same person with the background: a sunlit park with tall trees, ph" in park
     assert "studio" not in park
 
 
@@ -219,7 +219,7 @@ def test_no_build_given_says_none_and_a_given_one_reaches_the_torso(framing):
     assert "body shape:" not in described
     assert "{" not in "".join(i["caption"] for i in json.loads(described)["items"])
     given = sheet_prompt(description="Adult woman", body="curvy", framing=framing)
-    assert "Her body shape: curvy." in given
+    assert "Their body shape: curvy." in given
     assert "adult woman, curvy" in given
 
 
@@ -235,14 +235,14 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
     assert len(characters) == 6
     for item in characters:
         assert (
-            "the same woman as in the reference picture, auburn hair, slim"
+            "the same person as in the reference picture, auburn hair, slim"
             in item["caption"]
         )
     assert "reference picture" not in json.dumps(plain)
     # No description: the picture alone says who.
     bare = json.loads(sheet_prompt(description="", reference=True))
     assert (
-        "the same woman as in the reference picture, wearing"
+        "the same person as in the reference picture, wearing"
         in (bare["items"][0]["caption"])
     )
 
@@ -256,7 +256,7 @@ def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
     assert prose == layout["summary"]["caption"].replace(
         "Identical face, hair", "Identical face, eye colour, hair"
     )
-    assert prose.startswith("Character reference sheet of one and the same woman")
+    assert prose.startswith("Character reference sheet of one and the same person")
 
 
 def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
@@ -1353,7 +1353,7 @@ def test_prompt_route_hands_out_the_canvas(client):
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},
     ).json()["prompt"]
-    assert "the same woman as in the reference picture, x" in prose
+    assert "the same person as in the reference picture, x" in prose
     assert not prose.startswith("{")
     little = client.post(
         f"{API_PREFIX}/character-sheets/prompt",

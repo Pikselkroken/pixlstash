@@ -189,16 +189,6 @@
               />
             </div>
             <div class="cs-opt">
-              <FieldLabel>Draw a</FieldLabel>
-              <Segmented
-                v-model="form.subject"
-                aria-label="Draw a"
-                :options="SUBJECTS"
-                data-testid="cs-subject"
-                @pick="subjectTouched = true"
-              />
-            </div>
-            <div class="cs-opt">
               <FieldLabel>Proportions</FieldLabel>
               <Segmented
                 v-model="form.proportions"
@@ -720,10 +710,7 @@ import {
   sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
-import {
-  proportionsFromDescription,
-  subjectFromDescription,
-} from "../../utils/trainingSetBuild";
+import { proportionsFromDescription } from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -772,10 +759,6 @@ const SIZES = [
 // out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
 // and H3 Image want a large canvas (an engine's own `sizes`).
 const SIZES_DRAWN_WELL = ["small", "medium", "large"];
-const SUBJECTS = [
-  { id: "woman", label: "Woman" },
-  { id: "man", label: "Man" },
-];
 // The figure the sheet draws (#1079): the words alone lose to a layout made
 // for a typical adult, so the layout changes with it.
 const PROPORTIONS = [
@@ -888,7 +871,6 @@ const form = reactive({
   framing: "mid_thigh",
   size: "large",
   count: 4,
-  subject: "woman",
   proportions: "typical",
   // An older saved form has none, and reads as on.
   photo_look: true,
@@ -912,8 +894,6 @@ const offered = computed(() =>
   ),
 );
 const framingTouched = ref(false);
-// Picked by hand: the description no longer decides who is drawn.
-const subjectTouched = ref(false);
 const proportionsTouched = ref(false);
 const savedDescription = ref("");
 const loras = ref([]);
@@ -1263,13 +1243,12 @@ watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
 
-// "Adult man, …" draws a man: the description decides until a toggle is
-// picked by hand.
+// "Adult woman with dwarfism" draws a little person: the description decides
+// until a toggle is picked by hand. Who is drawn is the description's alone:
+// the sheet names "the person".
 watch(
   () => form.description,
   (text) => {
-    const subject = subjectFromDescription(text);
-    if (subject && !subjectTouched.value) form.subject = subject;
     const proportions = proportionsFromDescription(text);
     if (proportions && !proportionsTouched.value) form.proportions = proportions;
   },
@@ -1958,7 +1937,6 @@ async function draw() {
       background: form.background,
       framing: form.framing,
       size: form.size,
-      subject: form.subject,
       proportions: form.proportions,
       // The route ignores it for any layout but prose.
       photo_look: photoLook,
@@ -2408,7 +2386,6 @@ async function load() {
 function restoreState(saved) {
   if (!saved) return;
   framingTouched.value = !!saved.framing_touched;
-  subjectTouched.value = !!saved.subject_touched;
   proportionsTouched.value = !!saved.proportions_touched;
   // A build saved when the build had a field of its own joins the description.
   const { body = "", ...fields } = saved.form || {};
@@ -2579,7 +2556,6 @@ const snapshot = computed(() => {
         : phase.value,
     form: { ...form },
     framing_touched: framingTouched.value,
-    subject_touched: subjectTouched.value,
     proportions_touched: proportionsTouched.value,
     mode: mode.value,
     workflow_id: workflowId.value,

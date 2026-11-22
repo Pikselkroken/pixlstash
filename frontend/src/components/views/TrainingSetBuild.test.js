@@ -3146,29 +3146,6 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
-  it("draws a man when the description says so, until a toggle is picked", async () => {
-    api.fetchCharacterSetSuggestion.mockResolvedValue(
-      suggestion({ stillsGroup: emptyGroup() }),
-    );
-    sheetsWorld({ description: "Adult man, short beard" });
-    const wrapper = mountDialog();
-    await flushPromises();
-    const picked = () =>
-      wrapper.find('[data-testid="cs-subject"] [aria-checked="true"]').text();
-    expect(picked()).toBe("Man");
-
-    await wrapper.find('[data-testid="cs-description"] textarea').setValue("Adult woman");
-    expect(picked()).toBe("Woman");
-    const man = wrapper
-      .find('[data-testid="cs-subject"]')
-      .findAll("button")
-      .find((b) => b.text() === "Man");
-    await man.trigger("click");
-    await wrapper.find('[data-testid="cs-description"] textarea').setValue("Adult woman, red hair");
-    expect(picked()).toBe("Man");
-    wrapper.unmount();
-  });
-
   it("draws a little person when the description says so, and asks for one", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),

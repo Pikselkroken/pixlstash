@@ -81,7 +81,7 @@ PANEL_COUNT = 6
 MAX_FACES = PANEL_COUNT
 
 Framing = Literal["waist_up", "mid_thigh", "knees_up", "full_body"]
-Subject = Literal["woman", "man"]
+Subject = Literal["person", "woman", "man"]
 # The figure's proportions: a typical adult's, a little person's (#1079) or a
 # cartoon's. The probed boxes are a typical adult's, about seven heads tall.
 Proportions = Literal["typical", "little_person", "cartoon"]
@@ -136,7 +136,11 @@ FACE_FENCE = 0.2
 # (left, top, right, bottom) on the sheet; a face is its stored box.
 Box = tuple[int, int, int, int]
 
-_PRONOUN = {"woman": ("her", "Her"), "man": ("his", "His")}
+_PRONOUN = {
+    "person": ("their", "Their"),
+    "woman": ("her", "Her"),
+    "man": ("his", "His"),
+}
 
 # The passport half, in MOSS `abs_centralized` / `yxyx` boxes on the 2560×1536
 # canvas (y -768..768, x -1280..1280). Panel 1's boxes; panels 2-4 are offset.
@@ -409,7 +413,7 @@ def sheet_prompt(
     shoes: str = "",
     background: str = "",
     framing: Framing = "mid_thigh",
-    subject: Subject = "woman",
+    subject: Subject = "person",
     proportions: Proportions = "typical",
     trigger: str = "",
     size: Size = "large",

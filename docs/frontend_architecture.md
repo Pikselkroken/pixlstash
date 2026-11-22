@@ -1740,17 +1740,19 @@ Escape and Enter do nothing here: cancelling deletes a set.
   has no address, and while it is unreachable the step asks again every 15 s
   (the server keeps the failure up to a minute), then checks every card
   afresh. The mode on show is checked first and each answer lands as it
-  comes, so its select fills before the other mode is done. The four draw choices (*Body
-  photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
+  comes, so its select fills before the other mode is done. The three draw choices (*Body
+  photos*, *Sheets to draw*, *Sheet size*) are `Segmented` toggles
   side by side (*Sheet size* greys out what the chosen model does not draw
   well, `ENGINES[…].sizes`: 4K for all but MiniMax H3 and H3 Image, Small and
   Medium for those two, and choosing one of their workflows picks 4K; a size saved with the set, or
   remembered as picked for that same model (`size_family`), stands where the
   model draws it), wrapping only on a narrow window, with one line of hints; the
-  description takes the height the form leaves. *Draw a* follows the
-  description (`subjectFromDescription`: "man", "he", "his" against "woman",
-  "she", "her") until a toggle is picked by hand, as the framing follows its
-  suggestion. There is no Body field: the build belongs in the description,
+  description takes the height the form leaves. There is no man/woman
+  toggle: the step sends no `subject`, so the route's default, `person`,
+  names "the person" and the description or the reference picture says who
+  (a 30-sheet probe on MiniMax H3 Image and FLUX.2 Klein kept the sex the
+  description gave on every sheet, and drew the same face as the named sex on
+  the same seed). The framing follows its suggestion. There is no Body field: the build belongs in the description,
   and a build saved while there was one has its body text joined to the
   description when it opens. *Photo look* (*Natural* / *Off*, a sixth
   `Segmented`, on by default) is sent as `photo_look` and shows, with its
