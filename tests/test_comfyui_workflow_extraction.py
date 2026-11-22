@@ -912,3 +912,115 @@ def test_the_editor_view_of_a_video_graph_reads_the_same_prompt():
     }
     info = extract_generation_info(ui_only)
     assert info["positive_prompt"] == "a lighthouse turning in fog"
+
+
+# ===========================================================================
+# A recipe reads the prompt of a combine only where its branches agree
+#
+# A ConditioningCombine of two encoders used to read as no prompt at all, since
+# the recipe's walk never followed conditioning_1 / conditioning_2. Branches
+# carrying one prompt are that prompt; branches that disagree are none, and
+# never the first branch's text picked over the second's.
+# ===========================================================================
+
+
+def _api_combine_recipe(first: dict, second: dict) -> dict:
+    """An API graph whose sampler's positive is a combine of two encoders."""
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "m"}},
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": first["text"], "clip": ["1", 1]},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": second["text"], "clip": ["1", 1]},
+        },
+        "4": {
+            "class_type": "ConditioningCombine",
+            "inputs": {"conditioning_1": ["2", 0], "conditioning_2": ["3", 0]},
+        },
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "positive": ["4", 0], "seed": 1},
+        },
+        "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0]}},
+    }
+
+
+def test_a_combine_of_one_prompt_is_the_recipe_prompt():
+    graph = _api_combine_recipe({"text": "a cat"}, {"text": "a cat"})
+    assert extract_generation_info(graph)["positive_prompt"] == "a cat"
+
+
+def test_a_combine_of_one_primitive_is_the_recipe_prompt():
+    graph = _api_combine_recipe({"text": ["7", 0]}, {"text": ["7", 0]})
+    graph["7"] = {
+        "class_type": "PrimitiveStringMultiline",
+        "inputs": {"value": "a cat"},
+    }
+    assert extract_generation_info(graph)["positive_prompt"] == "a cat"
+
+
+def test_a_combine_of_different_prompts_is_no_recipe_prompt():
+    graph = _api_combine_recipe({"text": "a cat"}, {"text": "oil painting"})
+    assert extract_generation_info(graph)["positive_prompt"] is None
+
+
+def test_a_ui_combine_of_one_prompt_is_the_recipe_prompt_and_disagreement_is_none():
+    """The UI-format walk: a combine's branches agree, or the prompt is none."""
+    from pixlstash.utils.comfyui_utilities import _follow_positive_ui
+
+    def encoder(node_id, text_link):
+        return {
+            "id": node_id,
+            "type": "CLIPTextEncode",
+            "inputs": [{"name": "text", "type": "STRING", "link": text_link}],
+            "widgets_values": [""],
+        }
+
+    def combine(branches):
+        return {
+            "id": 9,
+            "type": "ConditioningCombine",
+            "inputs": [
+                {"name": f"conditioning_{i}", "type": "CONDITIONING", "link": link}
+                for i, link in enumerate(branches, start=1)
+            ],
+            "widgets_values": [],
+        }
+
+    primitive = {
+        "id": 1,
+        "type": "PrimitiveStringMultiline",
+        "inputs": [],
+        "widgets_values": ["a cat"],
+    }
+    other = {
+        "id": 3,
+        "type": "PrimitiveStringMultiline",
+        "inputs": [],
+        "widgets_values": ["oil painting"],
+    }
+    node_map = {
+        "1": primitive,
+        "2": encoder(2, 10),
+        "3": encoder(3, 11),
+        "4": encoder(4, 12),
+        "5": combine([20, 21]),
+        "6": combine([22, 23]),
+        "7": other,
+    }
+    link_map = {
+        "10": "1",
+        "11": "1",
+        "12": "7",
+        "20": "2",
+        "21": "3",
+        "22": "2",
+        "23": "4",
+    }
+    # Both branches of "5" carry the primitive's text: one prompt.
+    assert _follow_positive_ui("5", node_map, link_map) == "a cat"
+    # "6": one branch is "a cat" and the other is "oil painting": no prompt.
+    assert _follow_positive_ui("6", node_map, link_map) is None
