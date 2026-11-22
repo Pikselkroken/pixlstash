@@ -139,6 +139,10 @@ MAX_GUTTER = 64
 # box's shorter side. Stored boxes are widened and rounded up to 64 px at the
 # 512 px working size, so only the centre is the face's own.
 FACE_FENCE = 0.2
+# A photo cut by hand (the step's edited boxes) is at least this many pixels a
+# side on the sheet: a sliver is not a photo. The step keeps its boxes at 5 %
+# of the sheet, which is over this on every size the step draws.
+MIN_EDITED_PX = 32
 # A seam, where two photos drawn edge to edge meet with no gutter (MiniMax H3,
 # FLUX.2 Klein), is a line whose step (the grey levels between the lines either
 # side of it) is at least SEAM_STEP and the largest within SEAM_REACH lines, on
@@ -1559,6 +1563,10 @@ class SheetUnreadable(ValueError):
     """The sheet's file is missing or is not an image."""
 
 
+class SheetBoxesInvalid(ValueError):
+    """The photo boxes a person cut by hand are not six photos on the sheet."""
+
+
 def _vectors(rows: list) -> list[np.ndarray]:
     return [np.frombuffer(features, dtype=np.float32) for features in rows if features]
 
@@ -1710,8 +1718,10 @@ def rank_sheets(
             for features, bbox in rows
             if features
         ]
-        # Cut only once the faces are read, so the polling while a sheet is
-        # drawn reads no files, and with them, as using it will cut.
+        # The cut needs no faces: they only fence it. It is shown from the
+        # moment the sheet exists, and the face-aware one replaces it once the
+        # faces are read. Cached per file and face boxes, so polling re-reads
+        # nothing.
         cut = (
             _sheet_cut(
                 vault.image_root,
@@ -1719,7 +1729,7 @@ def rank_sheets(
                 file_path,
                 _face_boxes([bbox for _, bbox in rows]),
             )
-            if rows and file_path
+            if file_path
             else None
         )
         out.append(
@@ -1794,8 +1804,57 @@ def file_on_character_in_session(
     session.commit()
 
 
-def _cut(server, sheet: Picture, faces: list[list[int]]) -> list[tuple[bytes, str]]:
-    """The sheet's six panels as PNG bytes, ready to import, cut round *faces*."""
+def _hand_cut_panels(image: Image.Image, boxes: list[list[float]]) -> list[Image.Image]:
+    """The six photos a person cut by hand, each cropped exactly as drawn.
+
+    Each box is `[left, top, right, bottom]` as fractions of the sheet, in
+    panel order. Raises :class:`SheetBoxesInvalid` for anything that is not
+    six boxes inside the sheet, inverted, or under :data:`MIN_EDITED_PX` a side.
+    """
+    width, height = image.size
+    if len(boxes) != PANEL_COUNT:
+        raise SheetBoxesInvalid(
+            f"A sheet is cut into {PANEL_COUNT} photos, not {len(boxes)} boxes."
+        )
+    panels = []
+    for box in boxes:
+        if len(box) != 4:
+            raise SheetBoxesInvalid(f"A photo box is four numbers, not {box}.")
+        left, top, right, bottom = box
+        # A NaN fails every comparison, so it is refused here with the rest.
+        if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+            raise SheetBoxesInvalid(
+                f"A photo box must lie inside the sheet with left < right and "
+                f"top < bottom, not {box}."
+            )
+        pixels = (
+            round(left * width),
+            round(top * height),
+            round(right * width),
+            round(bottom * height),
+        )
+        if (
+            pixels[2] - pixels[0] < MIN_EDITED_PX
+            or pixels[3] - pixels[1] < MIN_EDITED_PX
+        ):
+            raise SheetBoxesInvalid(
+                f"A photo box must be at least {MIN_EDITED_PX} px a side on the "
+                f"sheet, not {pixels[2] - pixels[0]} by {pixels[3] - pixels[1]} px."
+            )
+        panels.append(image.crop(pixels))
+    return panels
+
+
+def _cut(
+    server,
+    sheet: Picture,
+    faces: list[list[int]],
+    boxes: list[list[float]] | None = None,
+) -> list[tuple[bytes, str]]:
+    """The sheet's six panels as PNG bytes, ready to import.
+
+    Cut round *faces*, or where a person drew them, at *boxes*.
+    """
     path = ImageUtils.resolve_picture_path(server.vault.image_root, sheet.file_path)
     if not path or not os.path.isfile(path):
         raise SheetUnreadable(
@@ -1803,7 +1862,12 @@ def _cut(server, sheet: Picture, faces: list[list[int]]) -> list[tuple[bytes, st
         )
     try:
         with Image.open(path) as image:
-            panels = split_sheet(image.convert("RGB"), faces)
+            rgb = image.convert("RGB")
+            panels = (
+                split_sheet(rgb, faces)
+                if boxes is None
+                else _hand_cut_panels(rgb, boxes)
+            )
     except OSError as exc:
         logger.warning(
             "Couldn't read character sheet %s at %s to cut it: %s", sheet.id, path, exc
@@ -1817,15 +1881,24 @@ def _cut(server, sheet: Picture, faces: list[list[int]]) -> list[tuple[bytes, st
     return entries
 
 
-def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
+def use_sheets(
+    server,
+    character_id: int,
+    picture_ids: list[int],
+    boxes: dict[int, list[list[float]]] | None = None,
+) -> list[int]:
     """Cut each sheet into its six panels and file them on the character.
 
     Passport photos first, sheet by sheet, each cut round its stored faces
     as :func:`rank_sheets` cuts it (faces read since the last rank count
-    too); one that does not cut cleanly is cut all the same. Every sheet is
-    read before anything is imported, so an unreadable one imports nothing.
-    Returns the panels' picture ids. Raises :class:`SheetNotFound` and
-    :class:`SheetUnreadable`. The sheets themselves stay in the Scrapheap.
+    too); one that does not cut cleanly is cut all the same. A sheet in
+    *boxes* (picture id to six `[left, top, right, bottom]` fractions, as a
+    person drew them) is cut at those instead, exactly. Every sheet is read
+    and every box checked before anything is imported, so a bad one imports
+    nothing. Returns the panels' picture ids. Raises :class:`SheetNotFound`,
+    :class:`SheetUnreadable` and :class:`SheetBoxesInvalid` (a box for a
+    picture not among *picture_ids* included). The sheets themselves stay in
+    the Scrapheap.
     """
     ids = list(dict.fromkeys(picture_ids))
     sheets = server.vault.db.run_immediate_read_task(
@@ -1833,8 +1906,15 @@ def use_sheets(server, character_id: int, picture_ids: list[int]) -> list[int]:
     )
     if sheets is None:
         raise SheetNotFound(f"No character {character_id} or no picture among {ids}.")
+    boxes = boxes or {}
+    stray = sorted(set(boxes) - set(ids))
+    if stray:
+        raise SheetBoxesInvalid(f"Boxes given for pictures {stray}, not among {ids}.")
     faces = server.vault.db.run_immediate_read_task(sheet_face_boxes_in_session, ids)
-    cuts = [(sheet, _cut(server, sheet, faces.get(sheet.id, []))) for sheet in sheets]
+    cuts = [
+        (sheet, _cut(server, sheet, faces.get(sheet.id, []), boxes.get(sheet.id)))
+        for sheet in sheets
+    ]
     panel_ids: list[int] = []
     for sheet, entries in cuts:
         _new, _duplicates, made = import_derived_outputs(
