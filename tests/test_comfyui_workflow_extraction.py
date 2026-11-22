@@ -931,3 +931,6 @@ def test_a_sampler_node_names_the_sampler_in_the_recipe_settings():
     # A KSamplerSelect still names its own choice.
     graph["6"] = {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}}
     assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "euler"
+    # And wins over a sampler node that comes before it in the graph.
+    graph = {"0": {"class_type": "SamplerLCM", "inputs": {}}, **graph}
+    assert extract_recipe_extras(graph)["settings"]["sampler_name"] == "euler"
