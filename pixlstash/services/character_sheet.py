@@ -81,7 +81,7 @@ PANEL_COUNT = 6
 MAX_FACES = PANEL_COUNT
 
 Framing = Literal["waist_up", "mid_thigh", "knees_up", "full_body"]
-Subject = Literal["woman", "man"]
+Subject = Literal["person", "woman", "man"]
 # The figure's proportions: a typical adult's, a little person's (#1079) or a
 # cartoon's. The probed boxes are a typical adult's, about seven heads tall.
 Proportions = Literal["typical", "little_person", "cartoon"]
@@ -99,11 +99,17 @@ SIZES = {
     "small": (1280, 768),
     "medium": (1840, 1104),
     "large": (2560, 1536),
-    "4k": (5280, 3168),
+    # MiniMax H3 Image's sizes: its reference sheets draw waxy faces at
+    # large and keep a face close only from 4K up (the 2026-11-22 probe).
+    "4k": (3840, 2304),
+    "5k": (5280, 3168),
+    # The nearest 5:3 to 6K on the 16-pixel grid; MiniMax H3 Image only,
+    # about 40 s a sheet on a 32 GB card and no closer a face than 5K.
+    "6k": (6240, 3744),
 }
 # MiniMax H3's own size joins the three every model has (a nested ``Literal``
 # flattens to all four).
-Size = Literal[Size, "4k"]
+Size = Literal[Size, "4k", "5k", "6k"]
 
 # ponytail: words from scores; thresholds read off the 2026-11 probes (one
 # sheet 0.57-0.70, across sheets 0.37). P6 validation tunes them.
@@ -136,7 +142,11 @@ FACE_FENCE = 0.2
 # (left, top, right, bottom) on the sheet; a face is its stored box.
 Box = tuple[int, int, int, int]
 
-_PRONOUN = {"woman": ("her", "Her"), "man": ("his", "His")}
+_PRONOUN = {
+    "person": ("their", "Their"),
+    "woman": ("her", "Her"),
+    "man": ("his", "His"),
+}
 
 # The passport half, in MOSS `abs_centralized` / `yxyx` boxes on the 2560×1536
 # canvas (y -768..768, x -1280..1280). Panel 1's boxes; panels 2-4 are offset.
@@ -409,7 +419,7 @@ def sheet_prompt(
     shoes: str = "",
     background: str = "",
     framing: Framing = "mid_thigh",
-    subject: Subject = "woman",
+    subject: Subject = "person",
     proportions: Proportions = "typical",
     trigger: str = "",
     size: Size = "large",

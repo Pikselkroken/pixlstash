@@ -6,7 +6,6 @@ import {
   freeTrainingSetName,
   liveBuildRuns,
   proportionsFromDescription,
-  subjectFromDescription,
 } from "./trainingSetBuild";
 
 const runs = (...statuses) =>
@@ -51,15 +50,6 @@ describe("trainingSetBuild", () => {
     expect(buildLine(drawing, []).text).toBe("4 drawn · keep one");
     const failed = { stage: "generate", sheets: { runs: runs("failed", "completed") } };
     expect(buildLine(failed, [])).toMatchObject({ text: "1 of 2 failed", error: true });
-  });
-
-  it("reads who a sheet draws from the description", () => {
-    expect(subjectFromDescription("Adult man, short beard, his eyes grey")).toBe("man");
-    expect(subjectFromDescription("Adult woman, copper bob")).toBe("woman");
-    // "woman" and "human" hold "man" but are not it.
-    expect(subjectFromDescription("A human woman")).toBe("woman");
-    expect(subjectFromDescription("Freckles, green eyes")).toBeNull();
-    expect(subjectFromDescription("")).toBeNull();
   });
 
   it("reads a little person or a cartoon figure from the description", () => {

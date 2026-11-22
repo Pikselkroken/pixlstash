@@ -48,7 +48,7 @@ class SheetPromptRequest(BaseModel):
         "light-grey studio.",
     )
     framing: character_sheet.Framing = "mid_thigh"
-    subject: character_sheet.Subject = "woman"
+    subject: character_sheet.Subject = "person"
     proportions: character_sheet.Proportions = Field(
         "typical",
         description="The figure: a typical adult's, a little person's, or a "

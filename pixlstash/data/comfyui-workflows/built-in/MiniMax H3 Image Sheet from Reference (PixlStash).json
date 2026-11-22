@@ -39,8 +39,8 @@
         0
       ],
       "prompt": "Character reference sheet of the person in the picture.",
-      "width": 2560,
-      "height": 1536,
+      "width": 3840,
+      "height": 2304,
       "images.image_1": [
         "1",
         0
@@ -59,8 +59,8 @@
   },
   "8": {
     "inputs": {
-      "width": 2560,
-      "height": 1536,
+      "width": 3840,
+      "height": 2304,
       "batch_size": 1
     },
     "class_type": "EmptyLatentImage",

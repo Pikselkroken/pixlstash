@@ -85,7 +85,7 @@ def test_every_box_lands_inside_its_own_panel(framing, proportions):
     assert all("an adult woman" in i["caption"] for i in characters)
 
 
-@pytest.mark.parametrize("size", ["small", "medium", "4k"])
+@pytest.mark.parametrize("size", ["small", "medium", "4k", "5k", "6k"])
 def test_another_sheet_size_scales_the_layout_with_its_canvas(size):
     width, height = character_sheet.SIZES[size]
     assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
@@ -103,7 +103,7 @@ def test_waist_up_draws_the_head_bigger_than_mid_thigh():
     def head(framing):
         items = json.loads(sheet_prompt(description="x", framing=framing))["items"]
         y1, x1, y2, x2 = next(
-            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Her head")
+            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Their head")
         )
         return (y2 - y1) * (x2 - x1)
 
@@ -185,11 +185,11 @@ def test_a_background_replaces_the_studio_and_none_keeps_it(layout):
         text = sheet_prompt(description="x", layout=layout, **kwargs)
         return text if layout == "prose" else json.loads(text)["summary"]["caption"]
 
-    studio = "same woman on a plain light-grey studio background, soft even "
+    studio = "same person on a plain light-grey studio background, soft even "
     assert studio in summary()
     assert studio in summary(background="  ")
     park = summary(background="A sunlit park with tall trees.")
-    assert "same woman with the background: a sunlit park with tall trees, ph" in park
+    assert "same person with the background: a sunlit park with tall trees, ph" in park
     assert "studio" not in park
 
 
@@ -219,7 +219,7 @@ def test_no_build_given_says_none_and_a_given_one_reaches_the_torso(framing):
     assert "body shape:" not in described
     assert "{" not in "".join(i["caption"] for i in json.loads(described)["items"])
     given = sheet_prompt(description="Adult woman", body="curvy", framing=framing)
-    assert "Her body shape: curvy." in given
+    assert "Their body shape: curvy." in given
     assert "adult woman, curvy" in given
 
 
@@ -235,14 +235,14 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
     assert len(characters) == 6
     for item in characters:
         assert (
-            "the same woman as in the reference picture, auburn hair, slim"
+            "the same person as in the reference picture, auburn hair, slim"
             in item["caption"]
         )
     assert "reference picture" not in json.dumps(plain)
     # No description: the picture alone says who.
     bare = json.loads(sheet_prompt(description="", reference=True))
     assert (
-        "the same woman as in the reference picture, wearing"
+        "the same person as in the reference picture, wearing"
         in (bare["items"][0]["caption"])
     )
 
@@ -256,7 +256,7 @@ def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
     assert prose == layout["summary"]["caption"].replace(
         "Identical face, hair", "Identical face, eye colour, hair"
     )
-    assert prose.startswith("Character reference sheet of one and the same woman")
+    assert prose.startswith("Character reference sheet of one and the same person")
 
 
 def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
@@ -487,19 +487,20 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
 
 
 @pytest.mark.parametrize(
-    ("name", "references"),
+    ("name", "references", "size"),
     [
-        ("FLUX.2 Klein 9B Sheet.json", 0),
-        ("FLUX.2 Klein 9B Sheet from Reference.json", 1),
-        ("MiniMax H3 Image Sheet (PixlStash).json", 0),
-        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1),
-        ("Qwen-Image 2.1 Sheet.json", 0),
-        ("Qwen-Image 2.1 Sheet from Reference.json", 1),
+        ("FLUX.2 Klein 9B Sheet.json", 0, "large"),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", 1, "large"),
+        ("MiniMax H3 Image Sheet (PixlStash).json", 0, "4k"),
+        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1, "4k"),
+        ("Qwen-Image 2.1 Sheet.json", 0, "large"),
+        ("Qwen-Image 2.1 Sheet from Reference.json", 1, "large"),
     ],
 )
-def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
+def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references, size):
     """The step lists a workflow from a reference only with a reference input,
-    and draws only one with a size to set: every size is the sheet's (#2700)."""
+    and draws only one with a size to set: every size is one of the sheet's
+    (#2700), and MiniMax H3 Image's is 4K, the least it draws faces well at."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     assert reference_input_count(reduce_api_graph(graph)) == references
     sizes = {
@@ -507,7 +508,7 @@ def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
         for node in graph.values()
         if "width" in node["inputs"] and node["class_type"] not in BLANK_PICTURE_CLASSES
     }
-    assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
+    assert sizes == {character_sheet.SIZES[size]}
 
 
 # The outputs of every class the H3 Image sheets use, as ComfyUI declares them:
@@ -1341,18 +1342,23 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "size": "small"},
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
-    # MiniMax H3's size: the route takes it like any other.
-    four_k = client.post(
-        f"{API_PREFIX}/character-sheets/prompt",
-        json={"description": "x", "size": "4k", "layout": "prose"},
-    )
-    assert four_k.status_code == 200, four_k.text
-    assert (four_k.json()["width"], four_k.json()["height"]) == (5280, 3168)
+    # MiniMax H3's sizes: the route takes them like any other.
+    for size, canvas in (
+        ("4k", (3840, 2304)),
+        ("5k", (5280, 3168)),
+        ("6k", (6240, 3744)),
+    ):
+        drawn = client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"description": "x", "size": size, "layout": "prose"},
+        )
+        assert drawn.status_code == 200, drawn.text
+        assert (drawn.json()["width"], drawn.json()["height"]) == canvas
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},
     ).json()["prompt"]
-    assert "the same woman as in the reference picture, x" in prose
+    assert "the same person as in the reference picture, x" in prose
     assert not prose.startswith("{")
     little = client.post(
         f"{API_PREFIX}/character-sheets/prompt",

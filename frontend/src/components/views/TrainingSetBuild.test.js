@@ -1181,7 +1181,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
       await size("Large").trigger("click");
       release();
       await flushPromises();
-      // H3 starts at 4K, but not over the owner's Large.
+      // H3 starts at 5K, but not over the owner's Large.
       expect(size("Large").attributes("aria-checked")).toBe("true");
       expect(size("4K").attributes("aria-checked")).toBe("false");
       wrapper.unmount();
@@ -1742,7 +1742,7 @@ describe("TrainingSetBuild: generating the pictures", () => {
         .filter((o) => o.value && !o.disabled)
         .map((o) => o.value),
     ).toEqual(["h3"]);
-    // H3 wants a large canvas: Small and Medium are greyed out, 4K is chosen.
+    // H3 wants a large canvas: Large or 5K, and 5K is chosen.
     const sizes = () =>
       wrapper
         .findAll('[data-testid="cs-size"] button')
@@ -1751,9 +1751,11 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ["Small", true, "false"],
       ["Medium", true, "false"],
       ["Large", false, "false"],
-      ["4K", false, "true"],
+      ["4K", true, "false"],
+      ["5K", false, "true"],
+      ["6K", true, "false"],
     ]);
-    // Another model greys 4K out and goes back to Large.
+    // Another model greys 4K and 5K out and goes back to Large.
     select("Sheet workflow").vm.$emit("update:modelValue", "manual:moss");
     await flushPromises();
     expect(sizes()).toEqual([
@@ -1761,13 +1763,15 @@ describe("TrainingSetBuild: generating the pictures", () => {
       ["Medium", false, "false"],
       ["Large", false, "true"],
       ["4K", true, "false"],
+      ["5K", true, "false"],
+      ["6K", true, "false"],
     ]);
     select("Sheet workflow").vm.$emit("update:modelValue", "manual:h3-t2i");
     await flushPromises();
     await wrapper.find('[data-testid="cts-generate-primary"]').trigger("click");
     await flushPromises();
     expect(gen.buildSheetPrompt).toHaveBeenLastCalledWith(
-      expect.objectContaining({ layout: "prose", size: "4k" }),
+      expect.objectContaining({ layout: "prose", size: "5k" }),
     );
     expect(gen.runWorkflowCard).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -1822,13 +1826,16 @@ describe("TrainingSetBuild: generating the pictures", () => {
       wrapper
         .findAll('[data-testid="cs-size"] button')
         .map((b) => [b.text(), b.attributes("disabled") !== undefined, b.attributes("aria-checked")]);
+    // H3 Image draws only from 4K up, and starts there.
     expect(sizes()).toEqual([
       ["Small", true, "false"],
       ["Medium", true, "false"],
-      ["Large", false, "false"],
+      ["Large", true, "false"],
       ["4K", false, "true"],
+      ["5K", false, "false"],
+      ["6K", false, "false"],
     ]);
-    expect(wrapper.text()).toContain("MiniMax H3 Image needs Large or 4K.");
+    expect(wrapper.text()).toContain("MiniMax H3 Image needs 4K, 5K or 6K.");
     wrapper.unmount();
   });
 
@@ -3461,29 +3468,6 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     wrapper.unmount();
   });
 
-  it("draws a man when the description says so, until a toggle is picked", async () => {
-    api.fetchCharacterSetSuggestion.mockResolvedValue(
-      suggestion({ stillsGroup: emptyGroup() }),
-    );
-    sheetsWorld({ description: "Adult man, short beard" });
-    const wrapper = mountDialog();
-    await flushPromises();
-    const picked = () =>
-      wrapper.find('[data-testid="cs-subject"] [aria-checked="true"]').text();
-    expect(picked()).toBe("Man");
-
-    await wrapper.find('[data-testid="cs-description"] textarea').setValue("Adult woman");
-    expect(picked()).toBe("Woman");
-    const man = wrapper
-      .find('[data-testid="cs-subject"]')
-      .findAll("button")
-      .find((b) => b.text() === "Man");
-    await man.trigger("click");
-    await wrapper.find('[data-testid="cs-description"] textarea').setValue("Adult woman, red hair");
-    expect(picked()).toBe("Man");
-    wrapper.unmount();
-  });
-
   it("draws a little person when the description says so, and asks for one", async () => {
     api.fetchCharacterSetSuggestion.mockResolvedValue(
       suggestion({ stillsGroup: emptyGroup() }),
@@ -3704,10 +3688,10 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
       return chosen;
     };
     expect(await open("large")).toBe("Large");
-    expect(await open("small")).toBe("4K");
+    expect(await open("small")).toBe("5K");
   });
 
-  it("starts an H3 workflow at 4K over a size remembered from another model", async () => {
+  it("starts an H3 workflow at 5K over a size remembered from another model", async () => {
     const H3 = {
       id: "manual:h3-t2i",
       name: "MiniMax H3: Text to Image",
@@ -3733,7 +3717,7 @@ describe("TrainingSetBuild: the build is kept on the set", () => {
     const chosen = (wrapper) =>
       wrapper.find('[data-testid="cs-size"] [aria-checked="true"]').text();
     let wrapper = await open();
-    expect(chosen(wrapper)).toBe("4K");
+    expect(chosen(wrapper)).toBe("5K");
     // Large picked for H3 itself is kept next time.
     const large = wrapper
       .findAll('[data-testid="cs-size"] button')
