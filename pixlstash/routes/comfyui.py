@@ -1056,6 +1056,7 @@ def list_builtin_workflows(hub) -> list[str]:
                     RecursionError,
                     ValueError,
                     OSError,
+                    sqlite3.Error,
                 ) as exc:
                     logger.warning(
                         "Built-in workflow %s will not read, so its stored "
@@ -1071,6 +1072,7 @@ def list_builtin_workflows(hub) -> list[str]:
                 RecursionError,
                 ValueError,
                 OSError,
+                sqlite3.Error,
             ) as exc:
                 logger.warning(
                     "Built-in workflow %s cannot be a manual workflow, so it "

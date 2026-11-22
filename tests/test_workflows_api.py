@@ -6493,6 +6493,66 @@ def test_a_retired_built_in_the_owner_edited_is_left_on_the_page(
     assert manual_document(hub, wid)["6"]["inputs"]["prompt"] == "the owner's words"
 
 
+def test_a_built_in_whose_store_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """A hub write can raise sqlite3.Error. Wrong if that one built-in ends the
+    start-up pass, so every one after it is never listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {
+            "A-broken.json": "MiniMax H3 Image T2I (PixlStash).json",
+            "B-listed.json": "FLUX.2 Klein 9B Edit.json",
+        },
+    )
+    real_store = comfyui_module.store_builtin_workflow
+
+    def store(hub_, name, path):
+        if name == "A-broken.json":
+            raise sqlite3.OperationalError("database is locked")
+        return real_store(hub_, name, path)
+
+    monkeypatch.setattr(comfyui_module, "store_builtin_workflow", store)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "B-listed"
+    assert [r for r in caplog.records if "A-broken.json" in r.getMessage()]
+
+
+def test_a_built_in_whose_refresh_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """The refresh of a filed built-in can raise sqlite3.Error too. Wrong if
+    the next built-in in the folder is never filed."""
+    hub = workflow_env.server.hub
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    comfyui_module.list_builtin_workflows(hub)
+    _fill_builtin_folder(
+        builtin,
+        {
+            "FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json",
+            "MiniMax H3 Image T2I (PixlStash).json": "MiniMax H3 Image T2I (PixlStash).json",
+        },
+    )
+
+    def refresh(hub_, name, path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "refresh_builtin_workflow", refresh)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == (
+        "MiniMax H3 Image T2I (PixlStash)"
+    )
+    assert [r for r in caplog.records if "FLUX.2 Klein 9B Edit.json" in r.getMessage()]
+
+
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(
