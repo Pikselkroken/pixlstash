@@ -218,7 +218,7 @@ def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
 
 
 def _literal_prompt_target(
-    graph: dict, node_id: str, field: Optional[str]
+    graph: dict, node_id: str, field: Optional[str], shared: bool = False
 ) -> Optional[tuple[str, str]]:
     """Where a prompt node's text is a literal string, as ``(node, field)``.
 
@@ -226,6 +226,9 @@ def _literal_prompt_target(
     unoverridden :data:`TEXT_NODE_CLASSES` node wired into it. Behind a prompt
     enhancer, the words it rewrites (:func:`rewritten_prompt_input`): writing
     the encoder's field would cut the enhancer out of the run.
+
+    *shared* reads the words wherever they are: a text node several encoders
+    read is still where their prompt lives. Only a writer needs it unshared.
     """
     if field is not None:
         node_id, field = rewritten_prompt_input(graph, node_id, field)
@@ -246,7 +249,7 @@ def _literal_prompt_target(
         source_inputs = (source or {}).get("inputs") or {}
         if (
             field
-            and readers == 1
+            and (readers == 1 or shared)
             and isinstance(source_inputs.get(field), str)
             and not overriding_text_inputs(source["class_type"], source_inputs)
         ):
@@ -388,6 +391,19 @@ def apply_prompts(
     for side, text in sides:
         node_ids = getattr(detected, f"{side}_prompts")
         held = set()
+        # Where each encoder's text goes, decided before any of this side is
+        # written: an encoder that cuts its link to a text node another encoder
+        # of the same prompt still reads must not change that decision for it.
+        targets = (
+            {
+                node_id: prompt_text_target(
+                    graph, node_id, text, _side_fields(detected, side, node_id)
+                )
+                for node_id in node_ids
+            }
+            if text is not None
+            else {}
+        )
         for node_id in node_ids:
             fields = _side_fields(detected, side, node_id)
             inputs = (graph.get(node_id) or {}).get("inputs") or {}
@@ -397,7 +413,9 @@ def apply_prompts(
             report[f"{side}_settable"] = True
             if rewritten_prompt_input(graph, node_id, name) != (str(node_id), name):
                 enhanced.append((side, str(node_id), name))
-            literal = _literal_prompt_target(graph, node_id, name)
+            # Read the words wherever they are: encoders sharing one text node
+            # carry one prompt, and that node is where it is held.
+            literal = _literal_prompt_target(graph, node_id, name, shared=True)
             words = graph[literal[0]]["inputs"][literal[1]] if literal else None
             if side == "positive":
                 words, stamp = split_prompt_assist(
@@ -411,7 +429,7 @@ def apply_prompts(
             held.add(words)
             if text is None:
                 continue
-            target = prompt_text_target(graph, node_id, text, fields)
+            target = targets[node_id]
             if target is not None:
                 graph[target[0]]["inputs"][target[1]] = text
                 if side == "positive":

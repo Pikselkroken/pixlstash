@@ -600,34 +600,39 @@ def _text_to_sheet(out: dict, nodes: dict, inputs: dict) -> dict:
     size["width"], size["height"] = SIZES["large"]
     try:
         detected = detect_workflow_io(out)
-        positive, negative = detected.positive_prompts, detected.negative_prompts
+        positive, negative = detected.positive_prompt_nodes, detected.negative_prompts
     except WorkflowGraphError as exc:
         logger.warning("A text sheet copy's prompts could not be read: %s", exc)
         positive, negative = (), ()
-    if len(positive) != 1:
+    if not positive:
         raise SheetConversionRefused(
-            f"PixlStash finds {len(positive)} prompts in this workflow. Only "
-            "a workflow with one prompt can be made into a sheet workflow."
+            "PixlStash does not find one prompt in this workflow. Only a "
+            "workflow with one prompt can be made into a sheet workflow."
         )
-    if positive[0] in negative:
-        raise SheetConversionRefused(
-            "Its prompt and negative prompt are one node, so the negative "
-            "would be drawn as the sheet's layout too."
-        )
-    encoder = out[positive[0]]
-    if encoder["class_type"] == SHEET_LAYOUT_ENCODER:
-        raise SheetConversionRefused("This workflow already draws sheets.")
-    # ponytail: CLIPTextEncode only, the encoder of nearly every text-to-image
-    # template. One with fields of its own (SDXL's text_g / text_l, Flux 1's
-    # clip_l / t5xxl) needs a layout encoder that takes them.
-    if encoder["class_type"] != "CLIPTextEncode":
-        raise SheetConversionRefused(
-            f"Its prompt is encoded by {encoder['class_type']}. Only a "
-            "workflow whose prompt goes through CLIP Text Encode can be made "
-            "into a sheet workflow."
-        )
-    encoder["class_type"] = SHEET_LAYOUT_ENCODER
-    encoder.setdefault("inputs", {})["region_strength"] = 1.0
+    # Every encoder of the one prompt takes the layout, so none of them draws
+    # a sheet the others do not.
+    for node_id in positive:
+        if node_id in negative:
+            raise SheetConversionRefused(
+                "Its prompt and negative prompt are one node, so the negative "
+                "would be drawn as the sheet's layout too."
+            )
+        encoder = out[node_id]
+        if encoder["class_type"] == SHEET_LAYOUT_ENCODER:
+            raise SheetConversionRefused("This workflow already draws sheets.")
+        # ponytail: CLIPTextEncode only, the encoder of nearly every text-to-image
+        # template. One with fields of its own (SDXL's text_g / text_l, Flux 1's
+        # clip_l / t5xxl) needs a layout encoder that takes them.
+        if encoder["class_type"] != "CLIPTextEncode":
+            raise SheetConversionRefused(
+                f"Its prompt is encoded by {encoder['class_type']}. Only a "
+                "workflow whose prompt goes through CLIP Text Encode can be made "
+                "into a sheet workflow."
+            )
+    for node_id in positive:
+        encoder = out[node_id]
+        encoder["class_type"] = SHEET_LAYOUT_ENCODER
+        encoder.setdefault("inputs", {})["region_strength"] = 1.0
     # As the edit path's copy: a sheet PixlStash cannot collect is lost.
     _save_with_save_image(nodes)
     return out

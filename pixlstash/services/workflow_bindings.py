@@ -333,9 +333,10 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
 
     Bindings win when the file has them, even an empty list. Otherwise the
     detected inputs of an API-format graph: exactly one picture input, and
-    exactly one positive prompt's text, followed one link upstream when a
-    primitive node feeds it. Two of either is ambiguous and fills nothing, so a
-    fixed style prompt beside a subject prompt is never overwritten. A UI-format
+    the text of the one positive prompt, followed one link upstream when a
+    primitive node feeds it. Encoders that carry the same prompt are that one
+    prompt; two different prompts are ambiguous and fill nothing, so a fixed
+    style prompt beside a subject prompt is never overwritten. A UI-format
     file fills nothing, because the run routes can only submit API format
     (#1307).
 
@@ -375,10 +376,14 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
                     {"path": prefix + [node_id, "inputs", field], "template": None}
                 )
                 break
-    if len(found.positive_prompts) == 1:
-        path = _text_path(graph, found.positive_prompts[0])
-        if path:
-            targets[CAPTION].append({"path": prefix + path, "template": None})
+    # Every encoder of one prompt is captioned; a primitive they share is one
+    # path, so it is listed once.
+    paths = []
+    for node_id in found.positive_prompt_nodes:
+        path = _text_path(graph, node_id)
+        if path and path not in paths:
+            paths.append(path)
+    targets[CAPTION].extend({"path": prefix + path, "template": None} for path in paths)
     return targets
 
 

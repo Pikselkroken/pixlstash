@@ -136,8 +136,12 @@ class WorkflowIO:
     picture_inputs: tuple[str, ...] = ()
     # The class of each picture input, in the same order.
     picture_input_classes: tuple[str, ...] = ()
+    # Every encoder that carries the positive prompt. Several of them are one
+    # prompt when they carry the same one (see ``positive_one_prompt``).
     positive_prompts: tuple[str, ...] = ()
     negative_prompts: tuple[str, ...] = ()
+    # Whether ``positive_prompts`` is one prompt, so a caption fills it.
+    positive_one_prompt: bool = False
     ambiguities: tuple[str, ...] = ()
 
     @property
@@ -149,6 +153,15 @@ class WorkflowIO:
     def workflow_type(self) -> str:
         """``i2i`` when the workflow takes a picture, ``t2i`` otherwise."""
         return "i2i" if self.picture_inputs else "t2i"
+
+    @property
+    def positive_prompt_nodes(self) -> tuple[str, ...]:
+        """The encoders of the one positive prompt, or ``()`` when there is not one.
+
+        Every one of them is written, read and captioned together: they carry
+        the same prompt, so a caption fills each (``workflow_bindings``).
+        """
+        return self.positive_prompts if self.positive_one_prompt else ()
 
 
 def detect_workflow_io(document: dict) -> WorkflowIO:
@@ -205,6 +218,7 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
         )
     positive: tuple[str, ...] = ()
     negative: tuple[str, ...] = ()
+    one_positive = False
     distinct = set(readings.values())
     if len(distinct) > 1:
         ambiguities.append(
@@ -217,9 +231,10 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
             if ids is None:
                 ambiguities.append(f"{side} prompt not found")
                 sides[side] = ()
-            elif len(ids) > 1:
+            elif len(ids) > 1 and not _one_prompt(nodes, graph, ids):
                 ambiguities.append(f"{len(ids)} {side} prompts: {', '.join(ids)}")
         positive, negative = sides["positive"], sides["negative"]
+        one_positive = _one_prompt(nodes, graph, positive)
 
     return WorkflowIO(
         save_nodes=tuple(save_nodes),
@@ -227,8 +242,45 @@ def detect_workflow_io(document: dict) -> WorkflowIO:
         picture_input_classes=tuple(nodes[key].class_type for key in picture_inputs),
         positive_prompts=positive,
         negative_prompts=negative,
+        positive_one_prompt=one_positive and bool(positive),
         ambiguities=tuple(ambiguities),
     )
+
+
+def _one_prompt(
+    nodes: dict[str, ReducedNode], graph: dict | None, ids: tuple[str, ...]
+) -> bool:
+    """Whether the encoders *ids* carry one and the same prompt.
+
+    They do when each reads its prompt from the same link (one primitive
+    feeding several encoders), or each holds the same literal text. Encoders
+    that read different prompts, or whose prompt is unknown (a UI-format
+    literal, which is not in the reduced graph), are not one: the caller
+    reports them as ambiguous and fills none. Nothing is picked.
+    """
+    if len(ids) < 2:
+        return len(ids) == 1
+    sources = {_prompt_source(nodes, graph, node_id) for node_id in ids}
+    return len(sources) == 1 and None not in sources
+
+
+def _prompt_source(
+    nodes: dict[str, ReducedNode], graph: dict | None, node_id: str
+) -> tuple | None:
+    """Where one encoder's prompt comes from: its link, or its own text.
+
+    ``None`` when it holds neither under a prompt field. The text of a literal
+    is read from the API graph only; the reduced node keeps prompt text out.
+    """
+    node = nodes[node_id]
+    links = {name: (source, slot) for name, source, slot in node.inputs}
+    literals = ((graph or {}).get(node_id) or {}).get("inputs") or {}
+    for name in PROMPT_FIELDS:
+        if name in links:
+            return ("link", *links[name])
+        if isinstance(literals.get(name), str):
+            return ("text", literals[name])
+    return None
 
 
 def _is_conditioning_input(name: str) -> bool:

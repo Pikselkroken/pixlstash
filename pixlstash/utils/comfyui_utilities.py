@@ -72,6 +72,9 @@ NEGATIVE_FIELDS = ("negative_prompt", "negative")
 # negative side stops there and finds none. Shared with workflow_io and
 # workflow_identity, which detect the same thing.
 ZEROED_CONDITIONING_CLASSES = frozenset({"ConditioningZeroOut"})
+# Nodes that join two conditionings into one. A recipe reads the prompt only
+# where every branch carries the same one (:func:`_agreed_prompt`).
+CONDITIONING_COMBINE_CLASSES = frozenset({"ConditioningCombine"})
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -325,6 +328,18 @@ def _follow_positive_ui(
         # text sits in widgets_values[0] without being declared in inputs[]
         return _extract_text_from_node_ui(node)
     # Follow any CONDITIONING-type input upstream (skips non-conditioning inputs)
+    if node.get("type") in CONDITIONING_COMBINE_CLASSES:
+        branches = []
+        for inp in node.get("inputs") or []:
+            if inp.get("type") != "CONDITIONING":
+                continue
+            upstream_id = link_map.get(str(inp.get("link")))
+            branches.append(
+                _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
+                if upstream_id
+                else None
+            )
+        return _agreed_prompt(branches)
     for inp in node.get("inputs") or []:
         if inp.get("type") == "CONDITIONING" and inp.get("link") is not None:
             upstream_id = link_map.get(str(inp["link"]))
@@ -332,6 +347,18 @@ def _follow_positive_ui(
                 result = _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
                 if result is not None:
                     return result
+    return None
+
+
+def _agreed_prompt(prompts: list[str | None]) -> str | None:
+    """The prompt every branch of a combine carries, or ``None``.
+
+    A combine of two prompts that disagree is no single prompt, and a branch
+    that resolves to nothing leaves the whole unknown. Never one branch's
+    text picked over another's.
+    """
+    if prompts and all(p is not None for p in prompts) and len(set(prompts)) == 1:
+        return prompts[0]
     return None
 
 
@@ -598,6 +625,17 @@ def _follow_prompt_api(
     # side is read as it always was.
     if side == "negative" and class_type in ZEROED_CONDITIONING_CLASSES:
         return None
+
+    # A combine carries the prompt only where both branches carry the same one.
+    if class_type in CONDITIONING_COMBINE_CLASSES:
+        return _agreed_prompt(
+            [
+                _follow_prompt_api(str(inputs[name][0]), workflow, depth + 1, side)
+                if _is_api_ref(inputs.get(name))
+                else None
+                for name in ("conditioning_1", "conditioning_2")
+            ]
+        )
 
     # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
     # `TextEncode` class, or a node that takes `clip` and no conditioning, so

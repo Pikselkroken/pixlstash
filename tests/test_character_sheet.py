@@ -524,6 +524,9 @@ _H3_IMAGE_OUTPUTS = {
     "ConditioningZeroOut": ["CONDITIONING"],
     "EmptyLatentImage": ["LATENT"],
     "EmptyImage": ["IMAGE"],
+    "PrimitiveStringMultiline": ["STRING"],
+    "ConditioningSetTimestepRange": ["CONDITIONING"],
+    "ConditioningCombine": ["CONDITIONING"],
     "RandomNoise": ["NOISE"],
     "CFGGuider": ["GUIDER"],
     "SamplerLCM": ["SAMPLER"],
@@ -593,7 +596,7 @@ def test_the_h3_image_text_workflows_condition_on_a_blank_picture_never_drawn_fr
     conditioning = graph["6"]["inputs"]
     blank = graph[conditioning["images.image_1"][0]]
     assert blank == {
-        "inputs": {"width": 512, "height": 512, "batch_size": 1, "color": 0},
+        "inputs": {"width": 32, "height": 32, "batch_size": 1, "color": 0},
         "class_type": "EmptyImage",
     }
     assert "vae" not in conditioning
@@ -733,7 +736,7 @@ def test_a_text_to_image_copy_saves_with_save_image():
                 class_type="ConditioningCombine",
                 inputs={"conditioning_1": ["2", 0], "conditioning_2": ["4", 0]},
             ),
-            "finds 2 prompts",
+            "does not find one prompt",
         ),
     ],
 )

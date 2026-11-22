@@ -106,11 +106,11 @@ def _t2i_graph() -> dict:
         ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
         ("MiniMax-H3-Image-Edit.json", (("11",), ("1",), ("6",), ())),
-        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("6",), ())),
+        ("MiniMax-H3-Image-t2i.json", (("11",), (), ("22", "6"), ())),
         # The character sheet workflows (#2700); a zeroed negative again.
         ("Sheet-Flux2-Klein-9B.json", (("18",), (), ("6",), ())),
         ("Sheet-Flux2-Klein-9B-Reference.json", (("18",), ("1",), ("6",), ())),
-        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("6",), ())),
+        ("Sheet-MiniMax-H3-Image.json", (("11",), (), ("22", "6"), ())),
         ("Sheet-MiniMax-H3-Image-Reference.json", (("11",), ("1",), ("6",), ())),
         # MiniMax H3 guides with BasicGuider: no negative at all.
         ("Sheet-MiniMax-H3-Reference.json", (("19",), ("1",), ("6",), ())),
@@ -765,8 +765,9 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             # The words its prompt enhancer rewrites, not the encoder's wire.
             [["21", "inputs", "replace"]],
         ),
-        ("MiniMax-H3-Image-t2i.json", [], [["6", "inputs", "prompt"]]),
-        ("Sheet-MiniMax-H3-Image.json", [], [["6", "inputs", "prompt"]]),
+        # Both encoders read the one prompt node.
+        ("MiniMax-H3-Image-t2i.json", [], [["21", "inputs", "value"]]),
+        ("Sheet-MiniMax-H3-Image.json", [], [["21", "inputs", "value"]]),
         (
             "Sheet-MiniMax-H3-Image-Reference.json",
             [["1", "inputs", "image"]],
@@ -966,16 +967,22 @@ def test_a_stale_stamp_on_the_encoder_goes_when_the_enhancer_takes_the_words():
     assert PROMPT_ASSIST_META not in graph["6"].get("_meta", {})
 
 
+def _set_prompt(graph: dict, text: str) -> None:
+    """Give both encoders of the t2i prompt *text*, as a run does."""
+    for node_id in ("6", "22"):
+        graph[node_id]["inputs"]["prompt"] = text
+
+
 def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
     graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
     stamp = _assisted("A woman.")
     run_service.apply_prompts(graph, "A woman.", None, None, stamp)
-    graph["6"]["inputs"]["prompt"] += " Edited elsewhere."
+    _set_prompt(graph, graph["6"]["inputs"]["prompt"] + " Edited elsewhere.")
     info = extract_generation_info(graph)
     assert info["positive_prompt"] == graph["6"]["inputs"]["prompt"]
     assert info["prompt_assist"] is None
     # Nor one that says it added the whole prompt: the owner said something.
-    graph["6"]["inputs"]["prompt"] = " " + " ".join(p["text"] for p in stamp["parts"])
+    _set_prompt(graph, " " + " ".join(p["text"] for p in stamp["parts"]))
     assert extract_generation_info(graph)["prompt_assist"] is None
 
 
@@ -989,7 +996,7 @@ def test_the_prompt_assist_adds_nothing_where_the_run_writes_no_words(prompt):
         assert json.dumps(graph) == json.dumps(before)
     else:
         assert graph["6"]["inputs"]["prompt"] == prompt
-        assert "_meta" not in graph["6"]
+        assert PROMPT_ASSIST_META not in graph["6"].get("_meta", {})
 
 
 def test_with_the_enhancer_cut_the_stamp_is_on_the_encoder():
@@ -1054,7 +1061,7 @@ def test_a_stamp_on_another_node_is_not_this_prompts():
     graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
     stamp = _assisted("A woman.")
     tail = " " + " ".join(part["text"] for part in stamp["parts"])
-    graph["6"]["inputs"]["prompt"] = "A woman." + tail
+    graph["21"]["inputs"]["value"] = "A woman." + tail
     graph["3"].setdefault("_meta", {})[PROMPT_ASSIST_META] = stamp
     report = run_service.apply_prompts(graph, None, None)
     assert report["recorded"] is None
@@ -1135,9 +1142,14 @@ def test_a_run_without_the_blank_picture_draws_without_it():
             graph, "a fox", None, None, blank_picture=blank
         )
         assert report["blank_picture"] is True
+        # Both encoders carry the one prompt, so both get it.
         assert graph == {
             **saved,
             "6": {**saved["6"], "inputs": {**saved["6"]["inputs"], "prompt": "a fox"}},
+            "22": {
+                **saved["22"],
+                "inputs": {**saved["22"]["inputs"], "prompt": "a fox"},
+            },
         }
     graph = _load(BUILT_IN / name)
     report = run_service.apply_prompts(graph, "a fox", None, None, blank_picture=False)
@@ -1145,6 +1157,7 @@ def test_a_run_without_the_blank_picture_draws_without_it():
     expected = _load(BUILT_IN / name)
     del expected["6"]["inputs"]["images.image_1"]
     expected["6"]["inputs"]["prompt"] = "a fox"
+    expected["22"]["inputs"]["prompt"] = "a fox"
     assert graph == expected
     # The blank picture's own node is left in place, reading nothing.
     assert "20" in graph
@@ -2313,3 +2326,113 @@ def test_a_converted_graph_keeps_the_workflows_own_keys():
         "pixlstash_output": "theirs",
     }
     assert with_converted_graph(editor, graph)["pixlstash_output"] == "mine"
+
+
+# ===========================================================================
+# Encoders that carry one prompt are one prompt
+#
+# A graph whose positive conditioning is several encoders carrying the same
+# prompt (MiniMax H3's blank-picture step and its text-only step, both fed by
+# one primitive) is ONE prompt everywhere PixlStash reads or writes one. Two
+# encoders that carry different prompts stay no single prompt, and nothing is
+# picked between them.
+# ===========================================================================
+
+
+def _combined_graph(first: dict, second: dict) -> dict:
+    """A text to image graph whose positive is a combine of two encoders."""
+    graph = _t2i_graph()
+    graph["7"] = _node(
+        "ConditioningCombine", conditioning_1=["2", 0], conditioning_2=["8", 0]
+    )
+    graph["8"] = _node("CLIPTextEncode", clip=["1", 1], **second)
+    graph["2"]["inputs"] = {"clip": ["1", 1], **first}
+    graph["4"]["inputs"]["positive"] = ["7", 0]
+    return graph
+
+
+def _shared_primitive_graph() -> dict:
+    """Both encoders of the combine read one primitive's text."""
+    graph = _combined_graph({"text": ["9", 0]}, {"text": ["9", 0]})
+    graph["9"] = _node("PrimitiveStringMultiline", value="a cat")
+    return graph
+
+
+def test_encoders_reading_one_primitive_are_one_positive_prompt():
+    graph = _shared_primitive_graph()
+    found = detect_workflow_io(graph)
+    assert (found.positive_prompts, found.positive_prompt_nodes) == (
+        ("2", "8"),
+        ("2", "8"),
+    )
+    assert found.ambiguities == ()
+    # One path, not one per encoder: the primitive is written once.
+    assert run_targets(graph)["caption"] == [
+        {"path": ["9", "inputs", "value"], "template": None}
+    ]
+
+
+def test_encoders_holding_the_same_text_are_one_positive_prompt():
+    graph = _combined_graph({"text": "a cat"}, {"text": "a cat"})
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("2", "8")
+    assert found.ambiguities == ()
+    assert run_targets(graph)["caption"] == [
+        {"path": ["2", "inputs", "text"], "template": None},
+        {"path": ["8", "inputs", "text"], "template": None},
+    ]
+
+
+def test_combined_encoders_with_different_prompts_are_no_single_prompt():
+    graph = _combined_graph({"text": "a cat"}, {"text": "oil painting"})
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ()
+    assert found.ambiguities == ("2 positive prompts: 2, 8",)
+    # Neither prompt is picked for the caption, and neither is for the recipe.
+    assert run_targets(graph)["caption"] == []
+
+
+def test_a_writer_fills_every_encoder_of_one_prompt_and_keeps_it_one():
+    graph = _shared_primitive_graph()
+    report = run_service.apply_prompts(graph, "a dog", None)
+    assert (report["positive_settable"], report["positive_text"]) == (True, "a cat")
+    assert report["unplaced"] == []
+    assert (graph["2"]["inputs"]["text"], graph["8"]["inputs"]["text"]) == (
+        "a dog",
+        "a dog",
+    )
+    # Writing must not leave one encoder reading the primitive and the other
+    # holding a literal: that reads as two prompts on the next detection.
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("2", "8")
+    assert found.ambiguities == ()
+
+
+def test_a_built_in_t2i_run_keeps_its_one_prompt_after_it_is_written():
+    """Step 1 (blank picture) and steps 2 to 6 (text only) share one prompt."""
+    graph = _load(BUILT_IN / "MiniMax-H3-Image-t2i.json")
+    report = run_service.apply_prompts(graph, "A woman in a red coat.", None)
+    assert report["positive_text"] is not None
+    assert report["unplaced"] == []
+    found = detect_workflow_io(graph)
+    assert found.positive_prompt_nodes == ("22", "6")
+    assert found.ambiguities == ()
+    assert [
+        graph[node]["inputs"]["prompt"] for node in found.positive_prompt_nodes
+    ] == ["A woman in a red coat."] * 2
+
+
+def test_the_built_in_blank_picture_is_read_as_no_picture():
+    """EmptyImage feeds the blank step's encoder and nothing else, so the
+    workflow is text to image with no picture input to fill."""
+    for name in ("MiniMax-H3-Image-t2i.json", "Sheet-MiniMax-H3-Image.json"):
+        graph = _load(BUILT_IN / name)
+        found = detect_workflow_io(graph)
+        assert found.picture_inputs == ()
+        assert found.workflow_type == "t2i"
+        readers = [
+            key
+            for key, node in graph.items()
+            if any(v == ["20", 0] for v in node["inputs"].values())
+        ]
+        assert readers == ["6"]
