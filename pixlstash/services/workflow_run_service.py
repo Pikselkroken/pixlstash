@@ -406,10 +406,13 @@ def apply_prompts(
             target = prompt_text_target(graph, node_id, text, fields)
             if target is not None:
                 graph[target[0]]["inputs"][target[1]] = text
-                meta = graph[target[0]].get("_meta")
-                if isinstance(meta, dict):
-                    meta.pop(PROMPT_ASSIST_META, None)
                 if side == "positive":
+                    # A stamp can sit on another node than the one written
+                    # (an enhancer's input), and it read the old words only.
+                    for node in graph.values():
+                        meta = node.get("_meta") if isinstance(node, dict) else None
+                        if isinstance(meta, dict):
+                            meta.pop(PROMPT_ASSIST_META, None)
                     written.append((str(node_id), name))
         if side == "positive" and len(held) == 1:
             report["positive_text"] = held.pop()

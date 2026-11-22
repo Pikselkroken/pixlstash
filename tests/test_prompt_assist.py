@@ -18,7 +18,6 @@ import pytest
 from pixlstash.hub.workflow_cards import run_family
 from pixlstash.services import prompt_assist
 from pixlstash.services.character_sheet import PHOTO_LOOK
-import pixlstash.services.prompt_assist as prompt_assist_module
 from pixlstash.services.prompt_assist import (
     PRESET_DIR,
     PromptAssistError,
@@ -255,7 +254,7 @@ def test_a_run_graph_is_of_one_family_or_of_none(hub):
 
 def test_no_presets_installed_offers_nothing_and_assembles_nothing(monkeypatch):
     """A packaging fault (no family file, no generic file) fails no run."""
-    monkeypatch.setattr(prompt_assist_module, "_load", lambda name: None)
-    assert prompt_assist_module.catalogue("minimax_h3_image", "photo") is None
-    with pytest.raises(prompt_assist_module.PromptAssistError):
-        prompt_assist_module.assemble("minimax_h3_image", "photo", {}, "x")
+    monkeypatch.setattr(prompt_assist, "_load", lambda name: None)
+    assert prompt_assist.catalogue("minimax_h3_image", "photo") is None
+    with pytest.raises(prompt_assist.PromptAssistError):
+        prompt_assist.assemble("minimax_h3_image", "photo", {}, "x")

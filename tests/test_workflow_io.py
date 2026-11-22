@@ -949,6 +949,10 @@ def test_the_prompt_assist_stamp_round_trips_and_the_recipe_reads_the_words():
     # A fresh run's prompt carries no old stamp, so none is reported.
     assert fresh["recorded"] is None
     assert PROMPT_ASSIST_META not in replay["6"].get("_meta", {})
+    # Nor does a stamp left on a node other than the one written survive.
+    replay["3"].setdefault("_meta", {})[PROMPT_ASSIST_META] = stamp
+    run_service.apply_prompts(replay, "A child.", None)
+    assert all(PROMPT_ASSIST_META not in n.get("_meta", {}) for n in replay.values())
 
 
 def test_a_stamp_that_is_not_the_prompts_end_is_not_trusted():
