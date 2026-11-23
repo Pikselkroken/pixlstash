@@ -37,6 +37,15 @@ from pixlstash.server import Server
 from pixlstash.hub.registry import LibraryError, LibraryRegistry, read_vault_uuid
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.vault import Vault
+from pixlstash import trusted_sqlite as trusted_sqlite_module
+from tests.windows_acl_vectors import (
+    AUTHENTICATED_USERS,
+    SOMEONE_ELSE,
+    allow,
+    install_fake_windows_security,
+    profile_default_dacl,
+    security,
+)
 
 
 def make_vault(folder, *, username="owner", password_hash="a-real-hash", tokens=1):
@@ -2715,3 +2724,109 @@ class TestLegacyAndRegistryReadsAreChecked:
         assert not isinstance(raised.value, registry_module.NotAVaultError)
         assert read_vault_uuid(folder) is None
         assert registry_module.read_vault_folder_roots(folder) == []
+
+
+class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
+    """R2-4: location is the user's choice; importing a login is not.
+
+    On Windows other accounts' write access is reported and the open goes
+    ahead. Copying a password hash and tokens into the hub is refused when the
+    legacy vault or a sidecar is owned by another account: a replacement is
+    always the planter's, a real legacy vault on this computer is this user's.
+    Simulated on Linux with the vector reader. Only the guard module sees
+    ``os.name == "nt"``: the registry and the hub use ``pathlib``, which
+    cannot build a Windows path on Linux.
+    """
+
+    @pytest.fixture
+    def windows(self, monkeypatch):
+        class _WindowsOs:
+            name = "nt"
+
+            def __getattr__(self, attribute):
+                return getattr(os, attribute)
+
+        def install(overrides=None):
+            monkeypatch.setattr(trusted_sqlite_module, "os", _WindowsOs())
+            return install_fake_windows_security(monkeypatch, overrides)
+
+        return install
+
+    def test_a_foreign_owned_legacy_vault_is_not_prepared(self, paths, windows):
+        hub_path, folder = paths
+        vault_path = os.path.join(os.path.realpath(folder), "vault.db")
+        hub = HubDatabase(hub_path)
+        try:
+            windows({vault_path: security(owner=SOMEONE_ELSE)})
+            with pytest.raises(HubBootstrapError, match="does not import a login"):
+                prepare_legacy_identity(hub, folder)
+        finally:
+            hub.close()
+
+    @pytest.mark.parametrize("suffix", ["-wal", "-journal"])
+    def test_a_foreign_owned_sidecar_is_not_imported_from(self, paths, windows, suffix):
+        hub_path, folder = paths
+        vault_path = os.path.join(os.path.realpath(folder), "vault.db")
+        with open(vault_path + suffix, "wb"):
+            pass
+        hub = HubDatabase(hub_path)
+        try:
+            windows({vault_path + suffix: security(owner=SOMEONE_ELSE)})
+            with pytest.raises(HubBootstrapError, match="does not import a login"):
+                prepare_legacy_identity(hub, folder)
+        finally:
+            hub.close()
+
+    def test_a_vault_of_ours_in_a_folder_others_can_write_is_prepared(
+        self, paths, windows, caplog
+    ):
+        """The other direction: an ordinary ``D:\\\\`` folder must still upgrade."""
+        hub_path, folder = paths
+        resolved = os.path.realpath(folder)
+        hub = HubDatabase(hub_path)
+        try:
+            modify = profile_default_dacl() + (
+                allow(AUTHENTICATED_USERS, 0x001301BF, flags=0x03),
+            )
+            windows(
+                {
+                    resolved: security(dacl=modify),
+                    os.path.join(resolved, "vault.db"): security(dacl=modify),
+                }
+            )
+            library = prepare_legacy_identity(hub, folder)
+        finally:
+            hub.close()
+
+        assert library.identity_migration_state == "pending"
+        assert any(
+            "Authenticated Users" in r.getMessage() and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_a_vault_that_turns_foreign_after_approval_is_not_copied(
+        self, paths, windows
+    ):
+        hub_path, folder = paths
+        vault_path = os.path.join(os.path.realpath(folder), "vault.db")
+        hub = HubDatabase(hub_path)
+        try:
+            windows()
+            library = prepare_legacy_identity(hub, folder)
+            windows({vault_path: security(owner=SOMEONE_ELSE)})
+            with pytest.raises(HubBootstrapError, match="does not import a login"):
+                bootstrap_module._copy_legacy_identity_if_needed(hub, library)
+            assert hub.fetchone("SELECT COUNT(*) FROM user")[0] == 0
+        finally:
+            hub.close()
+
+    def test_a_vault_of_ours_is_copied(self, paths, windows):
+        hub_path, folder = paths
+        hub = HubDatabase(hub_path)
+        try:
+            windows()
+            library = prepare_legacy_identity(hub, folder)
+            assert bootstrap_module._copy_legacy_identity_if_needed(hub, library)
+            assert hub.fetchone("SELECT username FROM user")[0] == "owner"
+        finally:
+            hub.close()
