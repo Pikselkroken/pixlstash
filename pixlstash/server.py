@@ -1577,7 +1577,7 @@ class Server(
             }
             write_json_atomic(server_config_path, server_config)
         else:
-            with open(server_config_path, "r") as f:
+            with open(server_config_path, "r", encoding="utf-8") as f:
                 server_config = json.load(f)
 
                 # Ensure server config options exist

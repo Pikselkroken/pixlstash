@@ -92,6 +92,7 @@ import { inspectFolder } from './setup/InspectFolder';
 import { readLibraryFolder } from './setup/ReadLibraryFolder';
 import { overlayStateFor, runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
+import { standaloneConfigPath } from './setup/StandaloneConfig';
 import {
   argsAfter,
   cliCommandHint,
@@ -1528,30 +1529,6 @@ async function retryLaunch(recovery: StartupRecovery): Promise<void> {
   await startWithOverlayFallback(await activeOverlayAccel(), recovery);
 }
 
-/**
- * Locate the standalone (pip/Docker) server config so first-run setup can offer
- * to import its values. Resolved via the backend's own platformdirs so it
- * matches wherever a local install actually keeps it; best-effort (returns null
- * if the bundled interpreter, platformdirs, or the file are unavailable).
- */
-async function standaloneConfigPath(): Promise<string | null> {
-  try {
-    const { stdout } = await execFileP(
-      backendInterpreter(),
-      [
-        '-c',
-        "from platformdirs import user_config_dir; import os; " +
-          "print(os.path.join(user_config_dir('pixlstash'), 'server-config.json'))",
-      ],
-      { timeout: 8000 },
-    );
-    const path = stdout.trim();
-    return path && existsSync(path) ? path : null;
-  } catch {
-    return null;
-  }
-}
-
 function readJsonFile(path: string): Record<string, unknown> | null {
   try {
     return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
@@ -1787,7 +1764,7 @@ function registerIpc(): void {
         gpu: { available: false },
       };
     }
-    const stdPath = await standaloneConfigPath();
+    const stdPath = await standaloneConfigPath(backendInterpreter());
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
       typeof imported?.image_root === 'string' ? (imported.image_root as string) : null;

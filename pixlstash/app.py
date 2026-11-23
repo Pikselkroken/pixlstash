@@ -437,7 +437,7 @@ def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
     if not os.path.exists(server_config_path):
         return True
     try:
-        with open(server_config_path, "r") as handle:
+        with open(server_config_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
         return not isinstance(data, dict)
     except Exception as exc:
@@ -494,7 +494,7 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
     config["port"] = port
     config["require_ssl"] = require_ssl
     config["cookie_secure"] = require_ssl
-    with open(server_config_path, "w") as handle:
+    with open(server_config_path, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2)
 
     print(f"\nSaved setup to: {server_config_path}")
