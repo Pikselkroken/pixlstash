@@ -9,6 +9,8 @@ that identify nobody.
 
 from __future__ import annotations
 
+import os
+
 from pixlstash import trusted_sqlite
 from pixlstash.trusted_sqlite import WindowsAce
 
@@ -50,9 +52,10 @@ def profile_default_dacl(user: str = ME) -> tuple[WindowsAce, ...]:
 
 
 class _Seen(list):
-    """The paths read, plus ``restricted``: the paths the writer was asked to lock."""
+    """The paths read, plus ``created`` and ``locked`` (see the installer)."""
 
-    restricted: list
+    created: list
+    locked: list
 
 
 def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME):
@@ -60,9 +63,11 @@ def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME
 
     Every path gets the profile default, owned by *user*, unless *overrides*
     maps its string form to a ``_WindowsSecurity`` or to an exception to raise.
-    The DACL writer is replaced too, recording ``(path, is_directory)`` on the
-    returned list's ``restricted`` attribute, and the once-per-finding notice
-    memory is cleared so each test sees its own warnings.
+    The Windows creators are replaced by their POSIX equivalents, recording
+    ``(path, is_directory)`` on the returned list's ``created`` attribute; the
+    sidecar lock-down writer records the path on ``locked``; and the
+    once-per-finding notice memory is cleared so each test sees its own
+    warnings.
 
     Returns the list of paths read, so a test can show which objects the guard
     actually asked about.
@@ -81,23 +86,44 @@ def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME
             owner_sid=user, dacl=profile_default_dacl(user)
         )
 
-    def restrict(path: str, *, is_directory: bool) -> None:
-        restricted.append((str(path), is_directory))
+    def create_file(path: str) -> int:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)
+        created.append((str(path), False))
+        return fd
 
-    restricted: list[tuple[str, bool]] = []
+    def create_directory(path: str) -> None:
+        os.mkdir(path, 0o700)
+        created.append((str(path), True))
+
+    def lock_down(path: str, *, is_directory: bool) -> None:
+        locked.append(str(path))
+
+    created: list[tuple[str, bool]] = []
+    locked: list[str] = []
     monkeypatch.setattr(trusted_sqlite, "_read_windows_security", read)
     monkeypatch.setattr(trusted_sqlite, "_windows_user_sid", lambda: user)
-    monkeypatch.setattr(trusted_sqlite, "_apply_private_windows_dacl", restrict)
-    monkeypatch.setattr(trusted_sqlite, "_windows_notices_logged", set())
-    seen.restricted = restricted
+    monkeypatch.setattr(trusted_sqlite, "_windows_create_private_file", create_file)
+    monkeypatch.setattr(
+        trusted_sqlite, "_windows_create_private_directory", create_directory
+    )
+    monkeypatch.setattr(trusted_sqlite, "_apply_private_windows_dacl", lock_down)
+    monkeypatch.setattr(trusted_sqlite, "_notices_logged", set())
+    seen.created = created
+    seen.locked = locked
     return seen
 
 
-def security(owner: str = ME, dacl=None, *, null_dacl: bool = False):
+def security(
+    owner: str = ME, dacl=None, *, null_dacl: bool = False, protected: bool = False
+):
     """A ``_WindowsSecurity`` for one path; ``null_dacl`` means no DACL at all."""
     if null_dacl:
-        return trusted_sqlite._WindowsSecurity(owner_sid=owner, dacl=None)
+        return trusted_sqlite._WindowsSecurity(
+            owner_sid=owner, dacl=None, dacl_protected=protected
+        )
     return trusted_sqlite._WindowsSecurity(
         owner_sid=owner,
         dacl=tuple(dacl if dacl is not None else profile_default_dacl()),
+        dacl_protected=protected,
     )

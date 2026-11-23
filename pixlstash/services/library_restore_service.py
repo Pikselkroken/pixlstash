@@ -50,7 +50,7 @@ from tqdm import tqdm
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.pixl_logging import get_logger
 from pixlstash.startup_permissions import makedirs_private
-from pixlstash.trusted_sqlite import restrict_new_path_to_owner
+from pixlstash.trusted_sqlite import create_private_temp_file
 from pixlstash.services.library_backup_service import (
     human_bytes,
 )
@@ -761,15 +761,15 @@ def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
         RestoreError: The copy failed, before anything live has moved.
     """
     source = os.path.join(scratch, _HUB_NAME)
-    handle, temp_path = tempfile.mkstemp(
-        prefix=".pixlstash-hub-", suffix=".tmp", dir=plan.config_dir
+    # The temp becomes the live hub: created 0600, and owner-only on Windows
+    # where the mode means nothing. copyfile rewrites its content in place.
+    handle, temp_path = create_private_temp_file(
+        plan.config_dir, prefix=".pixlstash-hub-", suffix=".tmp"
     )
     os.close(handle)
     try:
         shutil.copyfile(source, temp_path)
         os.chmod(temp_path, RESTORED_FILE_MODE)
-        # The temp becomes the live hub; on Windows the mode means nothing.
-        restrict_new_path_to_owner(temp_path, is_directory=False)
     except OSError as exc:
         try:
             os.unlink(temp_path)

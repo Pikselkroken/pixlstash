@@ -17,6 +17,7 @@ to everyone - must stay silent.
 """
 
 import ctypes
+import errno
 import os
 import struct
 import subprocess
@@ -513,7 +514,7 @@ class TestGuardOnSimulatedWindows:
         install_fake_windows_security(monkeypatch, overrides)
         monkeypatch.setattr(
             trusted_sqlite,
-            "_windows_notices_logged",
+            "_notices_logged",
             {(None, str(library), first[0].getMessage())},
         )
         TrustedSQLiteLocation.open(path).close()
@@ -543,19 +544,19 @@ class TestGuardOnSimulatedWindows:
 
 
 class TestCreationIsLockedDown:
-    """F2: what PixlStash creates is restricted on Windows; what it finds is not."""
+    """F2/R2-5: what PixlStash creates is created locked; what it finds is not."""
 
     @pytest.fixture
     def windows(self, monkeypatch):
         monkeypatch.setattr(os, "name", "nt")
-        return install_fake_windows_security(monkeypatch).restricted
+        return install_fake_windows_security(monkeypatch)
 
-    def test_a_vault_the_guard_creates_is_restricted(self, tmp_path, windows):
+    def test_a_vault_the_guard_creates_is_created_locked(self, tmp_path, windows):
         path = tmp_path / "vault.db"
 
         TrustedSQLiteLocation.open(str(path), create=True).close()
 
-        assert windows == [(os.path.realpath(path), False)]
+        assert windows.created == [(os.path.realpath(path), False)]
 
     def test_an_existing_vault_is_left_as_it_is(self, tmp_path, windows):
         path = tmp_path / "vault.db"
@@ -563,18 +564,21 @@ class TestCreationIsLockedDown:
 
         TrustedSQLiteLocation.open(str(path), create=True).close()
 
-        assert windows == []
+        assert windows.created == []
+        assert windows.locked == []
 
-    def test_a_hub_file_created_on_first_open_is_restricted(self, tmp_path, windows):
+    def test_a_hub_file_created_on_first_open_is_created_locked(
+        self, tmp_path, windows
+    ):
         path = str(tmp_path / "hub.db")
 
         created, _identity = hub_db._prepare_hub_file(path, repair=False)
         again, _identity = hub_db._prepare_hub_file(path, repair=False)
 
         assert created and not again
-        assert windows == [(path, False)]
+        assert windows.created == [(path, False)]
 
-    def test_mkdir_private_restricts_only_the_folders_it_creates(
+    def test_mkdir_private_creates_only_the_missing_folders_locked(
         self, tmp_path, windows
     ):
         existing = tmp_path / "existing"
@@ -582,12 +586,12 @@ class TestCreationIsLockedDown:
 
         mkdir_private(existing / "a" / "b")
 
-        assert windows == [
+        assert windows.created == [
             (str(existing / "a"), True),
             (str(existing / "a" / "b"), True),
         ]
 
-    def test_makedirs_private_restricts_only_the_folders_it_creates(
+    def test_makedirs_private_creates_only_the_missing_folders_locked(
         self, tmp_path, windows
     ):
         existing = tmp_path / "existing"
@@ -596,29 +600,33 @@ class TestCreationIsLockedDown:
         makedirs_private(str(existing / "a" / "b"))
         makedirs_private(str(existing / "a" / "b"))
 
-        assert windows == [
+        assert windows.created == [
             (str(existing / "a"), True),
             (str(existing / "a" / "b"), True),
         ]
 
-    def test_a_folder_another_process_made_first_is_not_restricted(
-        self, tmp_path, monkeypatch, windows
+    @pytest.mark.parametrize("maker", [mkdir_private, makedirs_private])
+    def test_a_folder_another_process_made_first_is_left_alone(
+        self, tmp_path, monkeypatch, windows, maker
     ):
-        """The race in ``mkdir_private``: it was missing, then somebody made it."""
+        """R2-6: missing at the probe, made by somebody else before our create."""
         target = tmp_path / "raced"
-        real_mkdir = Path.mkdir
+        real_create = trusted_sqlite._windows_create_private_directory
 
-        def made_by_someone_else(self, *args, **kwargs):
-            if self == target:
+        def made_by_someone_else(path):
+            if str(path) == str(target):
                 os.mkdir(target)
-                raise FileExistsError(str(target))
-            return real_mkdir(self, *args, **kwargs)
+                raise FileExistsError(errno.EEXIST, "exists", str(target))
+            return real_create(path)
 
-        monkeypatch.setattr(Path, "mkdir", made_by_someone_else)
+        monkeypatch.setattr(
+            trusted_sqlite, "_windows_create_private_directory", made_by_someone_else
+        )
 
-        mkdir_private(target)
+        maker(target if maker is mkdir_private else str(target))
 
-        assert windows == []
+        assert target.is_dir()
+        assert windows.created == []
 
     def test_makedirs_private_still_raises_on_an_existing_file(self, tmp_path, windows):
         blocker = tmp_path / "file"
@@ -626,18 +634,82 @@ class TestCreationIsLockedDown:
 
         with pytest.raises(FileExistsError):
             makedirs_private(str(blocker))
-        assert windows == []
+        assert windows.created == []
 
-    def test_nothing_is_restricted_off_windows(self, tmp_path, monkeypatch):
+    def test_nothing_windows_runs_off_windows(self, tmp_path, monkeypatch):
         def boom(*_args, **_kwargs):
-            raise AssertionError("the DACL writer ran on POSIX")
+            raise AssertionError("a Windows creator ran on POSIX")
 
-        monkeypatch.setattr(trusted_sqlite, "_apply_private_windows_dacl", boom)
+        monkeypatch.setattr(trusted_sqlite, "_windows_create_private_file", boom)
+        monkeypatch.setattr(trusted_sqlite, "_windows_create_private_directory", boom)
 
         mkdir_private(Path(tmp_path / "x" / "y"))
         TrustedSQLiteLocation.open(
             str(tmp_path / "x" / "y" / "v.db"), create=True
         ).close()
+
+
+def _touch(path: str) -> None:
+    """Create an empty file; ``Path`` cannot be built while ``os.name`` is faked."""
+    with open(path, "wb"):
+        pass
+
+
+class TestSidecarsAreLockedDown:
+    """R2-3: a sidecar this account owns gets the owner-only DACL at open."""
+
+    @pytest.fixture
+    def hub(self, tmp_path, monkeypatch):
+        directory = tmp_path / "lib"
+        directory.mkdir()
+        path = directory / "vault.db"
+        path.touch()
+        monkeypatch.setattr(os, "name", "nt")
+        return path
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_an_unprotected_sidecar_of_ours_is_locked_down(
+        self, hub, monkeypatch, suffix
+    ):
+        sidecar = str(hub) + suffix
+        _touch(sidecar)
+        windows = install_fake_windows_security(monkeypatch)
+
+        TrustedSQLiteLocation.open(str(hub)).close()
+
+        assert windows.locked == [sidecar]
+
+    def test_a_protected_sidecar_is_left_alone(self, hub, monkeypatch):
+        sidecar = str(hub) + "-wal"
+        _touch(sidecar)
+        windows = install_fake_windows_security(
+            monkeypatch, {sidecar: security(protected=True)}
+        )
+
+        TrustedSQLiteLocation.open(str(hub)).close()
+
+        assert windows.locked == []
+
+    def test_a_sidecar_another_account_owns_is_not_touched(self, hub, monkeypatch):
+        sidecar = str(hub) + "-wal"
+        _touch(sidecar)
+        windows = install_fake_windows_security(
+            monkeypatch, {sidecar: security(owner=SOMEONE_ELSE)}
+        )
+
+        TrustedSQLiteLocation.open(str(hub)).close()
+
+        assert windows.locked == []
+
+    def test_the_folder_and_the_database_are_never_rewritten(self, hub, monkeypatch):
+        _touch(str(hub) + "-shm")
+        windows = install_fake_windows_security(monkeypatch)
+
+        guard = TrustedSQLiteLocation.open(str(hub))
+        guard.verify_after_open()
+        guard.close()
+
+        assert set(windows.locked) == {str(hub) + "-shm"}
 
 
 # --- The ctypes layer over a fake _win32(), on real ctypes buffers ---------
@@ -686,6 +758,11 @@ class _FakeWin32:
         self.set_calls = []
         self.added = []
         self.set_code = 0
+        self.protected = False
+        self.acls = {}
+        self.descriptors = {}
+        self.created = []
+        self.create_code = 0
 
     def namespace(self):
         return types.SimpleNamespace(
@@ -743,10 +820,51 @@ class _FakeWin32:
 
     def InitializeAcl(self, acl, size, revision):
         self.acl_size = size
+        self.acls[ctypes.addressof(acl)] = []
         return 1
 
     def AddAccessAllowedAceEx(self, acl, revision, flags, mask, sid):
-        self.added.append((flags, mask, _sid_string_at(sid)))
+        entry = (flags, mask, _sid_string_at(sid))
+        self.added.append(entry)
+        self.acls[ctypes.addressof(acl)].append(entry)
+        return 1
+
+    def GetSecurityDescriptorControl(self, sd, control, revision):
+        control._obj.value = 0x1000 if self.protected else 0
+        return 1
+
+    def InitializeSecurityDescriptor(self, sd, revision):
+        self.descriptors[ctypes.addressof(sd)] = {"dacl": None, "control": 0}
+        return 1
+
+    def SetSecurityDescriptorDacl(self, sd, present, acl, defaulted):
+        self.descriptors[ctypes.addressof(sd)]["dacl"] = ctypes.addressof(acl)
+        return 1
+
+    def SetSecurityDescriptorControl(self, sd, mask, bits):
+        self.descriptors[ctypes.addressof(sd)]["control"] |= mask & bits
+        return 1
+
+    def _attributes(self, sa):
+        """What a SECURITY_ATTRIBUTES pointer carries: (protected, ACEs) or None."""
+        if sa is None:
+            return None
+        attributes = sa._obj
+        assert attributes.nLength == ctypes.sizeof(attributes)
+        descriptor = self.descriptors[attributes.lpSecurityDescriptor]
+        return descriptor["control"] & 0x1000 == 0x1000, self.acls[descriptor["dacl"]]
+
+    def CreateFileW(self, path, access, share, sa, disposition, flags, template):
+        self.created.append((path, access, disposition, flags, self._attributes(sa)))
+        if self.create_code:
+            return trusted_sqlite._INVALID_HANDLE_VALUE
+        return 4242
+
+    def CreateDirectoryW(self, path, sa):
+        self.created.append((path, self._attributes(sa)))
+        return 0 if self.create_code else 1
+
+    def CloseHandle(self, handle):
         return 1
 
     def SetNamedSecurityInfoW(self, path, kind, info, owner, group, dacl, sacl):
@@ -764,8 +882,13 @@ def fake_win32(monkeypatch):
         ctypes, "FormatError", lambda code: f"message {code}", raising=False
     )
     monkeypatch.setattr(ctypes, "get_last_error", lambda: 0, raising=False)
+    monkeypatch.setattr(
+        trusted_sqlite,
+        "msvcrt",
+        types.SimpleNamespace(open_osfhandle=lambda handle, flags: handle),
+    )
     monkeypatch.setattr(trusted_sqlite, "_windows_user_sid", lambda: ME)
-    monkeypatch.setattr(trusted_sqlite, "_windows_notices_logged", set())
+    monkeypatch.setattr(trusted_sqlite, "_notices_logged", set())
 
     def install(*args, **kwargs):
         fake = _FakeWin32(*args, **kwargs)
@@ -879,51 +1002,101 @@ class TestReaderOverAFakeApi:
         assert not _warned(caplog, "FAT32")
 
 
-class TestWriterOverAFakeApi:
-    def test_a_directory_gets_three_inheritable_full_control_entries(self, fake_win32):
+OWNER_ONLY = [
+    (0x001F01FF, ME),
+    (0x001F01FF, SYSTEM),
+    (0x001F01FF, ADMINISTRATORS),
+]
+
+
+class TestCreationOverAFakeApi:
+    """R2-5: the security attributes passed at creation carry the protected DACL."""
+
+    def test_a_directory_is_created_protected_and_inheritable(self, fake_win32):
         fake = fake_win32()
 
-        trusted_sqlite._apply_private_windows_dacl("C:\\lib", is_directory=True)
+        trusted_sqlite._windows_create_private_directory("C:\\lib")
 
-        assert fake.added == [
-            (0x03, 0x001F01FF, ME),
-            (0x03, 0x001F01FF, SYSTEM),
-            (0x03, 0x001F01FF, ADMINISTRATORS),
-        ]
-        ((path, info),) = fake.set_calls
+        ((path, (protected, aces)),) = fake.created
         assert path == "C:\\lib"
-        assert info == 0x80000004  # PROTECTED_DACL | DACL
+        assert protected
+        assert aces == [(0x03, mask, sid) for mask, sid in OWNER_ONLY]
         assert fake.acl_size % 4 == 0
-        assert fake.acl_size >= 8 + sum(
-            8 + len(_sid_bytes(s)) for s in (ME, SYSTEM, ADMINISTRATORS)
-        )
+        assert fake.acl_size >= 8 + sum(8 + len(_sid_bytes(s)) for _m, s in OWNER_ONLY)
 
-    def test_a_file_gets_the_same_entries_without_inheritance(self, fake_win32):
+    def test_a_file_is_created_new_without_following_a_link(self, fake_win32):
+        fake = fake_win32()
+
+        fd = trusted_sqlite._windows_create_private_file("C:\\lib\\vault.db")
+
+        assert fd == 4242
+        ((path, access, disposition, flags, (protected, aces)),) = fake.created
+        assert path == "C:\\lib\\vault.db"
+        assert access == 0xC0000000  # GENERIC_READ | GENERIC_WRITE
+        assert disposition == 1  # CREATE_NEW
+        assert flags & 0x00200000  # FILE_FLAG_OPEN_REPARSE_POINT
+        assert protected
+        assert aces == [(0, mask, sid) for mask, sid in OWNER_ONLY]
+
+    def test_an_existing_name_is_file_exists(self, fake_win32, monkeypatch):
+        fake = fake_win32()
+        fake.create_code = 80
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: 80, raising=False)
+
+        with pytest.raises(FileExistsError):
+            trusted_sqlite._windows_create_private_file("C:\\lib\\vault.db")
+
+    def test_a_volume_without_acls_creates_without_attributes(self, fake_win32, caplog):
+        fake = fake_win32(persistent=False)
+
+        trusted_sqlite._windows_create_private_directory("E:\\lib")
+
+        assert fake.created == [("E:\\lib", None)]
+        assert not _warned(caplog, "E:\\lib")
+
+    def test_a_descriptor_that_cannot_be_built_is_a_warning(self, fake_win32, caplog):
+        fake = fake_win32()
+        fake.InitializeAcl = lambda acl, size, revision: 0
+
+        trusted_sqlite._windows_create_private_directory("C:\\lib")
+
+        assert fake.created == [("C:\\lib", None)]
+        assert _warned(caplog, "Could not prepare an owner-only permission list")
+        assert _warned(caplog, "InitializeAcl failed with Windows error")
+
+
+class TestSidecarWriterOverAFakeApi:
+    def test_a_sidecar_gets_three_full_control_entries_protected(self, fake_win32):
         fake = fake_win32()
 
         trusted_sqlite._apply_private_windows_dacl(
-            "C:\\lib\\vault.db", is_directory=False
+            "C:\\lib\\vault.db-wal", is_directory=False
         )
 
-        assert {flags for flags, _mask, _sid in fake.added} == {0}
+        assert fake.added == [(0, mask, sid) for mask, sid in OWNER_ONLY]
+        ((path, info),) = fake.set_calls
+        assert path == "C:\\lib\\vault.db-wal"
+        assert info == 0x80000004  # PROTECTED_DACL | DACL
 
-    def test_a_volume_without_acls_is_left_alone(self, fake_win32):
-        fake = fake_win32(persistent=False)
+    def test_the_reader_reports_a_protected_descriptor(self, fake_win32):
+        fake = fake_win32([])
+        fake.protected = True
 
-        trusted_sqlite._apply_private_windows_dacl("E:\\lib", is_directory=True)
+        assert trusted_sqlite._read_windows_security("C:\\v.db-wal").dacl_protected
 
-        assert fake.set_calls == []
-
-    def test_a_failure_is_a_warning_with_path_and_code(
-        self, fake_win32, monkeypatch, caplog
+    def test_a_lock_down_failure_is_a_warning_with_path_and_code(
+        self, fake_win32, caplog
     ):
-        fake = fake_win32()
+        fake = fake_win32([_ace_bytes(0x0, 0, FULL_CONTROL, ME)])
         fake.set_code = 5
-        monkeypatch.setattr(os, "name", "nt")
 
-        trusted_sqlite.restrict_new_path_to_owner("C:\\lib", is_directory=True)
+        trusted_sqlite._check_windows_acl(
+            "C:\\lib\\vault.db-wal", kind="file", sidecar=True
+        )
 
-        assert _warned(caplog, "Could not restrict C:\\lib")
+        assert _warned(
+            caplog, "Could not restrict SQLite sidecar C:\\lib\\vault.db-wal"
+        )
         assert _warned(caplog, "SetNamedSecurityInfoW failed with Windows error 5")
 
 
@@ -983,15 +1156,29 @@ class TestRealWindowsAcls:
         directory.mkdir()
         _icacls(str(directory), "/grant", "*S-1-1-0:(OI)(CI)W")
 
-        hub_db.HubDatabase(str(directory / "hub.db")).close()
-
-        assert _warned(caplog, "Everyone")
-        found = trusted_sqlite._read_windows_security(
-            os.path.realpath(directory / "hub.db")
-        )
-        trusted = {trusted_sqlite._windows_user_sid(), SYSTEM, ADMINISTRATORS}
-        assert {ace.sid for ace in found.dacl} <= trusted
-        assert not any(ace.flags & INHERITED_ACE for ace in found.dacl)
+        hub = hub_db.HubDatabase(str(directory / "hub.db"))
+        try:
+            assert _warned(caplog, "Everyone")
+            trusted = {trusted_sqlite._windows_user_sid(), SYSTEM, ADMINISTRATORS}
+            found = trusted_sqlite._read_windows_security(
+                os.path.realpath(directory / "hub.db")
+            )
+            assert found.dacl_protected
+            assert {ace.sid for ace in found.dacl} <= trusted
+            assert not any(ace.flags & INHERITED_ACE for ace in found.dacl)
+            # R2-3: the first hub's WAL sidecars were created after its check
+            # and inherited the folder's Everyone entry; the next open, while
+            # they exist, locks them down.
+            second = hub_db.HubDatabase(str(directory / "hub.db"))
+            second.close()
+            for suffix in ("-wal", "-shm"):
+                sidecar = os.path.realpath(directory / "hub.db") + suffix
+                assert os.path.exists(sidecar), sidecar
+                locked = trusted_sqlite._read_windows_security(sidecar)
+                assert locked.dacl_protected, sidecar
+                assert {ace.sid for ace in locked.dacl} <= trusted, sidecar
+        finally:
+            hub.close()
 
     def test_a_folder_pixlstash_creates_is_protected_and_inheritable(self, tmp_path):
         target = tmp_path / "made" / "here"
@@ -1000,6 +1187,7 @@ class TestRealWindowsAcls:
 
         for folder in (tmp_path / "made", target):
             found = trusted_sqlite._read_windows_security(str(folder))
+            assert found.dacl_protected
             assert len(found.dacl) == 3, found.dacl
             assert all(ace.flags & 0x03 == 0x03 for ace in found.dacl)
             assert not any(ace.flags & INHERITED_ACE for ace in found.dacl)

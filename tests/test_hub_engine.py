@@ -15,6 +15,7 @@ import types
 import pytest
 from sqlmodel import select
 
+from pixlstash import database as database_module
 from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
@@ -1067,6 +1068,163 @@ class TestHostileSidecarRefusal:
             path, private=True, create=True, trusted_root=str(directory)
         )
         guard.close()
+
+
+def _locks_on(*paths: str) -> list[tuple[str, str, str, str]]:
+    """``(file, type, start, end)`` of every POSIX lock this process holds on *paths*.
+
+    ``/proc/locks`` lines read ``N: POSIX ADVISORY READ <pid> <dev>:<ino>
+    <start> <end>``; a blocked waiter has an extra ``->`` after the number.
+    """
+    inodes = {os.stat(path).st_ino: os.path.basename(path) for path in paths}
+    held = []
+    with open("/proc/locks") as handle:
+        for line in handle:
+            fields = line.split()
+            if fields[1] == "->":
+                fields = fields[:1] + fields[2:]
+            kind, access, pid, device_inode = fields[1], fields[3], fields[4], fields[5]
+            inode = int(device_inode.split(":")[-1])
+            if kind == "POSIX" and pid == str(os.getpid()) and inode in inodes:
+                held.append((inodes[inode], access, fields[6], fields[7]))
+    return sorted(held)
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/locks"), reason="reads /proc/locks")
+class TestTheLiveEnginesLocksSurviveAGuardedRead:
+    """R2-1: a guarded open never drops this process's locks on the file.
+
+    POSIX locks belong to the process and the inode, so closing ANY ordinary
+    descriptor this process has on the database releases every lock it holds
+    there - a live engine's included. The registry's folder scan reads the
+    *active* vault through ``checked_read_connection`` on every create, attach
+    and relocate, so a guard that opened and closed its own descriptor stripped
+    the running server of its read lock on the vault and its WAL index.
+    """
+
+    @pytest.fixture
+    def live(self, tmp_path):
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "vault.db")
+        connection = sqlite3.connect(path, isolation_level=None)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE library_settings (library_uuid TEXT)")
+        connection.execute("BEGIN")
+        connection.execute("SELECT * FROM library_settings").fetchall()
+        try:
+            yield path
+        finally:
+            connection.close()
+
+    def test_a_checked_read_leaves_the_live_read_lock_in_place(self, live):
+        before = _locks_on(live, live + "-shm")
+        assert before, "the live read transaction should hold POSIX locks"
+
+        with trusted_sqlite.checked_read_connection(live) as connection:
+            connection.execute("SELECT 1").fetchone()
+
+        assert _locks_on(live, live + "-shm") == before
+
+    def test_a_guard_open_and_close_leaves_the_live_read_lock_in_place(self, live):
+        before = _locks_on(live, live + "-shm")
+
+        guard = TrustedSQLiteLocation.open(live)
+        guard.verify_after_open()
+        guard.close()
+
+        assert _locks_on(live, live + "-shm") == before
+
+
+class TestACheckedReadSeesASwapDuringConnect:
+    """The identity comparison is what stands in for the old descriptor guard."""
+
+    def test_a_file_replaced_while_connecting_is_refused(self, tmp_path, monkeypatch):
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "vault.db")
+        sqlite3.connect(path).close()
+        real_connect = sqlite3.connect
+
+        def replacing_connect(database, *args, **kwargs):
+            os.unlink(path)
+            sqlite3.connect.__wrapped__(path).close()
+            return real_connect(database, *args, **kwargs)
+
+        replacing_connect.__wrapped__ = real_connect
+        monkeypatch.setattr(sqlite3, "connect", replacing_connect)
+        with pytest.raises(TrustedSQLiteLocationError, match="changed while"):
+            with trusted_sqlite.checked_read_connection(path):
+                pass
+
+
+class TestVaultPreCreateNeverFollowsALink:
+    """R2-2: a dangling symlink at vault.db must not become a database elsewhere.
+
+    ``os.path.exists`` is False for a dangling link, so the pre-create runs,
+    ``O_EXCL`` fails on the link with ``FileExistsError`` - and SQLite, left to
+    open the path, would create the database at the link's target.
+    """
+
+    def test_a_dangling_symlink_refuses_and_creates_nothing(self, tmp_path):
+        library = tmp_path / "lib"
+        library.mkdir(mode=0o700)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        target = elsewhere / "planted.db"
+        (library / "vault.db").symlink_to(target)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            database_module.VaultDatabase(str(library / "vault.db"))
+
+        assert not target.exists()
+
+    def test_a_regular_file_that_won_the_race_is_still_opened(
+        self, tmp_path, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir(mode=0o700)
+        path = str(library / "vault.db")
+        open(path, "wb").close()
+        real_exists = os.path.exists
+        monkeypatch.setattr(
+            database_module.os.path,
+            "exists",
+            lambda p: False if str(p) == path else real_exists(p),
+        )
+
+        vault = database_module.VaultDatabase(path)
+        vault.close()
+
+        assert os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+class TestLoosePermissionsAreReportedOnce:
+    """R2-6: the overlap scan opens every library on each add; say it once."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_world_writable_folder_is_warned_about_once(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(trusted_sqlite, "_notices_logged", set())
+        directory = tmp_path / "lib"
+        directory.mkdir()
+        os.chmod(directory, 0o777)
+        try:
+            for _ in range(3):
+                TrustedSQLiteLocation.open(
+                    str(directory / "vault.db"), create=True
+                ).close()
+        finally:
+            os.chmod(directory, 0o700)
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING"
+            and f"SQLite directory {directory} " in r.getMessage()
+        ]
+        assert len(warnings) == 1
 
 
 class TestAuthServiceOnTheHub:

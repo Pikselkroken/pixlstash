@@ -31,7 +31,7 @@ from PIL import Image, ImageOps, PngImagePlugin
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.startup_permissions import makedirs_private
-from pixlstash.trusted_sqlite import restrict_new_path_to_owner
+from pixlstash.trusted_sqlite import create_private_directory
 from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -159,8 +159,7 @@ def make_share_copies(
     batch = uuid.uuid4().hex
     directory = os.path.join(root, batch)
     makedirs_private(root)
-    os.mkdir(directory, mode=0o700)
-    restrict_new_path_to_owner(directory, is_directory=True)
+    create_private_directory(directory)
     claimed: dict = {}
     files, skipped = [], []
     # Where a link may go, best first. The library's batch is made on first use.

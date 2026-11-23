@@ -39,7 +39,7 @@ from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
-    restrict_new_path_to_owner,
+    create_private_file,
 )
 
 logger = get_logger(__name__)
@@ -86,13 +86,11 @@ def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]
     Returns True only for the process that won creation. ``O_EXCL`` handles a
     simultaneous server/CLI first open without either observing a permissive
     sqlite-created file; ``O_NOFOLLOW`` rejects a pre-positioned symlink where
-    the platform provides it.
+    the platform provides it. On Windows the file is created already carrying
+    the owner-only DACL (``create_private_file``).
     """
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        fd = os.open(path, flags, HUB_FILE_MODE)
+        fd = create_private_file(path, mode=HUB_FILE_MODE)
     except FileExistsError:
         info = _validate_hub_file(path, repair=repair)
         return False, (info.st_dev, info.st_ino)
@@ -116,8 +114,6 @@ def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]
             os.fchmod(fd, HUB_FILE_MODE)
     finally:
         os.close(fd)
-    # The Windows counterpart of the 0600 above: this process created the file.
-    restrict_new_path_to_owner(path, is_directory=False)
     return True, (info.st_dev, info.st_ino)
 
 
@@ -284,13 +280,13 @@ class HubDatabase:
             )
         except TrustedSQLiteLocationError as exc:
             raise HubPermissionError(str(exc)) from exc
-        # The guard fd must outlive the connection. POSIX advisory locks are
-        # per-process, per-inode: closing ANY fd this process holds on the hub
-        # file releases every fcntl lock the process has on it - including the
-        # ones SQLite took for self._conn (sqlite.org/howtocorrupt.html §2.2).
-        # The hub is explicitly multi-process (server + CLI), so a lock-stripped
-        # connection lets another process treat the hub as unused and delete its
-        # live -wal/-shm on close. Retained as self._guard, closed in close().
+        # The guard holds no lock-releasing descriptor on the hub: POSIX
+        # advisory locks are per-process, per-inode, so closing ANY ordinary fd
+        # this process had on the file would release every fcntl lock the
+        # process holds on it - including the ones SQLite took for self._conn,
+        # or for another hub connection in this process
+        # (sqlite.org/howtocorrupt.html §2.2). Its inode pin (O_PATH on Linux)
+        # is released in close(), after the connection.
         try:
             self._conn = sqlite3.connect(
                 guard.path,

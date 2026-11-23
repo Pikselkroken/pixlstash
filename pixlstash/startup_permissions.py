@@ -21,7 +21,7 @@ from platformdirs import user_config_dir
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
-    restrict_new_path_to_owner,
+    create_private_directory,
 )
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
@@ -47,8 +47,8 @@ def mkdir_private(path: Path) -> None:
     the leaf.  Under umask ``0002`` its missing parents still become ``0775``.
     Existing directories are never changed here; repairing them requires an
     explicit user decision through :func:`repair_permission_issues`. On
-    Windows, where the mode means nothing, each directory this call creates is
-    restricted to this account instead (``restrict_new_path_to_owner``).
+    Windows, where the mode means nothing, each directory is created already
+    restricted to this account (``create_private_directory``).
     """
 
     missing: list[Path] = []
@@ -59,23 +59,29 @@ def mkdir_private(path: Path) -> None:
             break
         current = current.parent
     for directory in reversed(missing):
-        try:
-            directory.mkdir(mode=0o700)
-        except FileExistsError:
-            # Another process made it in the meantime: not ours to restrict.
-            if not directory.is_dir():
-                raise
-            continue
-        restrict_new_path_to_owner(str(directory), is_directory=True)
+        _create_component(str(directory))
+
+
+def _create_component(directory: str) -> None:
+    """Create one missing directory private, tolerating a concurrent creator.
+
+    A folder another process made between the existence probe and this call is
+    left exactly as that process made it: it is not ours to restrict.
+    """
+    try:
+        create_private_directory(directory)
+    except FileExistsError:
+        if not os.path.isdir(directory):
+            raise
 
 
 def makedirs_private(path: str | os.PathLike[str]) -> None:
     """``os.makedirs(path, mode=0o700, exist_ok=True)``, locking what it creates.
 
     Raises exactly as ``os.makedirs`` does - an empty path or an existing file
-    still fails - and every component it actually creates is restricted to this
-    account on Windows, as :func:`mkdir_private` does. Existing directories are
-    left as they are.
+    still fails - and every component it creates is created private, as in
+    :func:`mkdir_private`, including the race: a folder another process made
+    in the meantime is left as it is. Existing directories are untouched.
     """
     missing: list[str] = []
     current = os.path.abspath(os.fspath(path)) if os.fspath(path) else ""
@@ -85,9 +91,11 @@ def makedirs_private(path: str | os.PathLike[str]) -> None:
         if parent == current:
             break
         current = parent
-    os.makedirs(path, mode=0o700, exist_ok=True)
     for directory in reversed(missing):
-        restrict_new_path_to_owner(directory, is_directory=True)
+        _create_component(directory)
+    # Creates nothing by now; kept for os.makedirs' errors on an empty path or
+    # an existing non-directory.
+    os.makedirs(path, mode=0o700, exist_ok=True)
 
 
 @dataclass(frozen=True)
