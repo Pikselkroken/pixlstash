@@ -1,7 +1,9 @@
-- On Windows, PixlStash now checks who else can write to a library's folder
-  before opening it. A library in a folder that other accounts on the computer
-  can change (for example a folder created at the top of a second drive) is no
-  longer opened; the error names the folder and gives the `icacls` command
-  that removes the other accounts' access. Libraries and settings under your
-  user profile are unaffected. Libraries on drives that keep no permissions
-  (FAT32/exFAT USB sticks) still open, with a warning in the log.
+- On Windows, the files and folders PixlStash creates for itself - your
+  settings and sign-in database, new libraries and their database, and the
+  folders it keeps alongside them - are now readable and changeable only by
+  your account (and by Windows itself and administrators), as they already
+  were on Linux and macOS.
+- On Windows, when a library is kept in a folder that other accounts on the
+  computer can also change, the server log now says so once, with the command
+  that limits the folder to your account if you want that. The library opens
+  as before.
