@@ -20,8 +20,10 @@ The data classes are deliberately plain:
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Callable
 
 
 @dataclass
@@ -148,18 +150,238 @@ class TrainingHandle:
 
 
 class TrainerBackend(ABC):
-    """Abstract interface every PixlStash trainer adapter implements.
+    """The interface every training plugin implements.
 
     Implementations are the single place that knows a specific trainer's
     invocation, config shape, and progress storage. PixlStash code above this
-    interface deals only in the data classes in this module.
+    interface (the training service, the training routes) deals only in this
+    class and the data classes in this module. A plugin is listed in
+    :mod:`pixlstash.training.registry` under :attr:`name`; a recipe names its
+    trainer with ``"trainer"``.
 
     The lifecycle is: :meth:`prepare` (lay out the work dir, render config,
     create the per-job DB) → :meth:`submit` (spawn the process) → repeated
     :meth:`progress` polling → optional :meth:`cancel`. After a restart,
     :meth:`reconcile` re-derives status from disk + PID liveness, and
-    :meth:`is_alive` is the cheap liveness probe it builds on.
+    :meth:`is_alive` is the cheap liveness probe it builds on. With
+    :meth:`handle_for`, those seven are all a plugin must implement: every
+    other member has a default that core handles (no memory probe, no
+    after-training previews, a status-only live view, no Train longer).
+
+    **The output-folder contract.** A run's ``save_root`` must hold what
+    :mod:`pixlstash.utils.training_run_folder` reads, since that is how a run
+    reaches the model shelf and how the live view finds its previews:
+    ``<name>_<step:09d>.safetensors`` per kept step, the bare final
+    ``<name>.safetensors``, ``config.yaml``, and
+    ``samples/<timestamp>__<step:09d>_<prompt index>.<ext>``.
+
+    Attributes:
+        name: The registry key (``"ai-toolkit"``), stored on a run's
+            ``trainer`` column.
+        display_name: What the owner reads.
+        presets_dir: The folder of this trainer's recipes, or None.
+        template_dir: Where a recipe's ``template`` resolves, or None.
+        supports_train_longer: Whether :meth:`kept_checkpoints`,
+            :meth:`carry_on_from` and :meth:`template_from_rendered` are
+            implemented, so a finished run can be trained on.
     """
+
+    name: str = ""
+    display_name: str = ""
+    presets_dir: str | None = None
+    template_dir: str | None = None
+    supports_train_longer: bool = False
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_owner_config(cls, cfg: dict) -> TrainerBackend:
+        """Build the trainer from the owner's settings for it.
+
+        Raises:
+            ValueError: The trainer is not configured; the message says so.
+        """
+        return cls()
+
+    @classmethod
+    def version_stamp(cls, cfg: dict) -> str | None:
+        """What a run records as the trainer's exact version (a commit), or None.
+
+        Measurements are tied to it: a new stamp is a new setup.
+        """
+        return None
+
+    @classmethod
+    def version(cls, cfg: dict) -> str | None:
+        """The trainer's release version, or None when it has none."""
+        return None
+
+    # ------------------------------------------------------------------
+    # Reconstruction without an instance
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    @abstractmethod
+    def handle_for(
+        work_dir: str,
+        job_id: str,
+        job_name: str,
+        pid: int | None = None,
+        training_folder: str | None = None,
+    ) -> TrainingHandle:
+        """Derive a run's :class:`TrainingHandle` from its persisted fields.
+
+        Paths only. It must return the same paths for the same inputs across
+        restarts and upgrades, or a live run is not found again.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def peaks_folder(work_dir: str) -> str | None:
+        """Where the trainer writes its allocator peaks; None: polls only."""
+        return None
+
+    @staticmethod
+    def kept_checkpoints(
+        handle: TrainingHandle, final_step: int | None = None
+    ) -> dict[int, str]:
+        """The checkpoints a run can be trained on from, ``{step: path}``."""
+        return {}
+
+    @staticmethod
+    def carry_on_from(
+        handle: TrainingHandle, step: int, final_step: int | None = None
+    ) -> str | None:
+        """Leave *step* the newest checkpoint, for Train longer.
+
+        Only called when :attr:`supports_train_longer` is set.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def template_from_rendered(config: dict) -> dict:
+        """A run's rendered config turned back into its template.
+
+        Only called when :attr:`supports_train_longer` is set.
+        """
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Where a run lands, and whether a recipe is offered
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def run_folders(
+        cls,
+        cfg: dict,
+        work_dir: str,
+        job_uuid: str,
+        ensure_source_folder: Callable[[str], str],
+    ) -> tuple[str | None, str]:
+        """``(training_folder, dataset_dir)`` for a new run.
+
+        *ensure_source_folder* registers a folder as the model shelf's
+        ``source`` folder when it has none, and answers the one to use. The
+        default keeps the run under ``<work_dir>/output`` and the dataset in
+        ``<work_dir>/dataset``.
+
+        Raises:
+            RuntimeError: The run cannot be placed; the message says why.
+        """
+        return None, os.path.join(work_dir, "dataset")
+
+    @classmethod
+    def offer_refusal(cls, preset: dict, cfg: dict) -> str | None:
+        """Why this trainer, set up as *cfg*, cannot train *preset*; None: it can."""
+        return None
+
+    # ------------------------------------------------------------------
+    # Live-view reads
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def status_line(handle: TrainingHandle) -> str:
+        """The trainer's own status line for a running run, or ""."""
+        return ""
+
+    @staticmethod
+    def step_times(handle: TrainingHandle) -> list[tuple[int, float]]:
+        """``(step, wall_time)`` of every logged step, oldest first."""
+        return []
+
+    @staticmethod
+    def running_phase(info: str | None, step: int) -> str:
+        """The phase a running run is in, from its status line and step.
+
+        One of ``loading``, ``caching``, ``training``, ``previews``,
+        ``saving`` (:data:`pixlstash.training.live_view.PHASES`).
+        """
+        return "training" if step > 0 else "loading"
+
+    @staticmethod
+    def preview_progress(info: str | None) -> dict | None:
+        """``{"drawing": n, "total": m}`` while previews are drawn, else None."""
+        return None
+
+    @staticmethod
+    def downloading(log_path: str) -> bool:
+        """Whether the trainer is fetching a model, from its log."""
+        return False
+
+    @staticmethod
+    def sample_settings(rendered_config: dict | None) -> dict:
+        """The run's preview and save settings, from its rendered config.
+
+        Returns:
+            ``{sample_every, save_every, prompts, layer_offloading,
+            offload_percent}``.
+        """
+        return {
+            "sample_every": None,
+            "save_every": None,
+            "prompts": [],
+            "layer_offloading": False,
+            "offload_percent": None,
+        }
+
+    @staticmethod
+    def failure_summary(info: str | None, step: int) -> str:
+        """One readable sentence for why a run failed."""
+        lines = (info or "").strip().splitlines()
+        return lines[0].strip() if lines else "Training failed."
+
+    @staticmethod
+    def is_oom(text: str) -> bool:
+        """Whether the trainer's output says it ran out of memory."""
+        return False
+
+    # ------------------------------------------------------------------
+    # Config patches the service applies
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def probe_overrides(steps: int, values: dict) -> dict | None:
+        """The locked patch that turns a run into a short memory probe.
+
+        *values* are the run's resolved recipe values. None: this trainer
+        cannot probe, and the run trains with its recipe's seed profile.
+        """
+        return None
+
+    @staticmethod
+    def preview_pass_overrides(step: int, checkpoint_path: str) -> dict | None:
+        """The locked patch that draws the previews of one kept checkpoint.
+
+        None: this trainer cannot, and a run whose previews were deferred is
+        imported without them.
+        """
+        return None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     @abstractmethod
     def prepare(self, spec: TrainingSpec) -> TrainingHandle:

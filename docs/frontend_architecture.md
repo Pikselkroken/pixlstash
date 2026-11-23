@@ -7304,7 +7304,7 @@ previews*; while it imports there is nothing to stop.
 how it went (the failure, the loss, the samples) and the rail what it was made
 of (set-up, the pictures it trained on, the checkpoints it left), so nothing
 is said in both; see the rail's *On Training runs* below. A failure is one
-notice: the backend's one-sentence `error` (`live_view.failure_summary`) in
+notice: the backend's one-sentence `error` (the training plugin's `failure_summary`) in
 bold, with the trainer's whole text (`report`, host paths redacted) behind
 *Full message* and *Copy* when it says more. A step the run never reached is a
 quiet dashed cell; one it passed without a picture says "not drawn", and the

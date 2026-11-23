@@ -66,7 +66,7 @@ from pixlstash.services.model_mover import (
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, describe_adapter
 from pixlstash.utils.path_utils import resolve_path_within
-from pixlstash.utils.aitoolkit_run import Checkpoint, read_run
+from pixlstash.utils.training_run_folder import Checkpoint, read_run
 
 logger = get_logger(__name__)
 
@@ -288,7 +288,7 @@ class RunImporter:
             relpath = f"{subfolder}/{name}" if subfolder else name
             try:
                 # Containment (#776) on the write path, and **reachable**:
-                # ``basename`` flattens the name and ``aitoolkit_run`` only ever
+                # ``basename`` flattens the name and ``training_run_folder`` only ever
                 # yields ``scandir`` entry names, but ``resolve_path_within``
                 # calls ``realpath``, so a *symlink standing at the destination
                 # filename* is refused here. A dangling one is refused **only**

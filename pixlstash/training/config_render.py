@@ -13,7 +13,7 @@ never be reached through an override, because :func:`validate_tunables` refuses
 any key outside the allow-list before the merge happens.
 
 No trainer-specific behaviour beyond the placeholder names lives here; the
-adapter (:mod:`pixlstash.training.local_ai_toolkit`) is responsible for
+adapter (:mod:`pixlstash.training_plugins.ai_toolkit.adapter`) is responsible for
 injecting the resolved per-job paths via these arguments and for writing the
 result to disk.
 """

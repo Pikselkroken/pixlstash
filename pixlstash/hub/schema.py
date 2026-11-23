@@ -787,7 +787,8 @@ CREATE TABLE IF NOT EXISTS training_run (
     comfyui_quit           TEXT,
     continued_from_step    INTEGER,
     continued_at           TEXT,
-    set_aside_take         TEXT
+    set_aside_take         TEXT,
+    trainer                TEXT
 )
 """
 
@@ -2299,6 +2300,8 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         ("continued_from_step", "INTEGER"),
         ("continued_at", "TEXT"),
         ("set_aside_take", "TEXT"),
+        # The training plugin that trains the run (#2453); NULL is ai-toolkit.
+        ("trainer", "TEXT"),
     ):
         if column not in run_columns:
             conn.execute(f"ALTER TABLE training_run ADD COLUMN {column} {ddl}")

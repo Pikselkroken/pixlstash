@@ -1,7 +1,7 @@
 """Faithful stand-in for ai-toolkit's ``run.py`` for GPU-free tests.
 
 This reproduces, in miniature, exactly the on-disk side effects PixlStash's
-``LocalAiToolkit`` adapter depends on (see
+``AiToolkitPlugin`` adapter depends on (see
 ``pixlstash/data/ai-toolkit-jobs/SEAM.md`` and ai-toolkit's
 ``toolkit/logging_aitk.py`` for the real schema):
 

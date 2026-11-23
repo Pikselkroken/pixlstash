@@ -70,7 +70,7 @@ from pixlstash.routes.model_imports import (
     model_sample_path_within,
     sample_path_within,
 )
-from pixlstash.training.local_ai_toolkit import LocalAiToolkit
+from pixlstash.training_plugins.ai_toolkit.adapter import AiToolkitPlugin
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.services.model_kind_suggestions import (
     loader_offers,
@@ -5952,7 +5952,7 @@ def test_clearing_refuses_a_run_a_job_still_writes_into(
     shelf_env, import_folders, run_trash
 ):
     uuid = "0123456789abcdef0123456789abcdef"
-    save_root = LocalAiToolkit.handle_for(
+    save_root = AiToolkitPlugin.handle_for(
         "", uuid, "Busy run", training_folder=str(import_folders.output_root)
     ).save_root
     run_dir = import_folders.output_root / os.path.basename(save_root)

@@ -130,7 +130,7 @@ from pixlstash.services.trash_undo import (
     take,
 )
 from pixlstash.utils.adapter_header import FILE_ENGINE
-from pixlstash.utils.aitoolkit_run import is_sample_filename
+from pixlstash.utils.training_run_folder import is_sample_filename
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
 from pixlstash.utils.system_utils import TRASH_NAME
 from pixlstash.utils.trash_restore import NotInTrash, fingerprint, restore_from_trash
