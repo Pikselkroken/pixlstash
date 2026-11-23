@@ -246,3 +246,39 @@ def test_a_server_starts_with_its_config_under_a_symlinked_directory(tmp_path):
     # And the scan that gates startup sees the same file rather than reporting
     # "no issues" about a path nothing opens.
     assert not find_startup_permission_issues(server_config, None)
+
+
+def _hub_with_active_library(path: str, library: str) -> None:
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE library (path TEXT, is_active INT, attached INT)")
+    connection.execute("INSERT INTO library VALUES (?, 1, 1)", (library,))
+    connection.commit()
+    connection.close()
+    os.chmod(path, 0o600)
+
+
+def test_the_active_library_is_read_only_from_the_hub_that_was_checked(
+    tmp_path, monkeypatch
+):
+    """R3-3: ``_active_library_root`` verifies the hub before its first row.
+
+    A hub replaced while SQLite opens it must not decide which library the
+    permission scan walks; the read reports no active library instead.
+    """
+    tmp_path.chmod(0o700)
+    hub_path = str(tmp_path / "hub.db")
+    decoy = str(tmp_path / "decoy.db")
+    _hub_with_active_library(hub_path, "/home/me/library")
+    _hub_with_active_library(decoy, "/home/me/elsewhere")
+
+    assert startup_permissions._active_library_root(hub_path) == "/home/me/library"
+
+    real_connect = sqlite3.connect
+
+    def swapping_connect(database, *args, **kwargs):
+        os.replace(decoy, hub_path)
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", swapping_connect)
+
+    assert startup_permissions._active_library_root(hub_path) is None

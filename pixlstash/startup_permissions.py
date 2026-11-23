@@ -231,6 +231,7 @@ def _active_library_root(hub_path: str) -> str | None:
         connection = sqlite3.connect(
             sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=5
         )
+        guard.verify_after_open()
         row = connection.execute(
             "SELECT path FROM library WHERE is_active = 1 AND attached = 1 LIMIT 1"
         ).fetchone()
