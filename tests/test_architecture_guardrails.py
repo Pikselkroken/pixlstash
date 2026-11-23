@@ -2892,15 +2892,19 @@ def test_tests_close_the_server_not_only_its_vault():
 def test_dockerfiles_install_every_runtime_dependency():
     """A dependency added to ``pyproject.toml`` must reach the images too.
 
-    All three Dockerfiles hand-maintain their ``pip install`` list and then run
-    ``pip install --no-deps -e .``, so a new dependency is silently absent from
-    the built image and only shows up as a ``ModuleNotFoundError`` at start-up.
-    That is how ``send2trash`` reached the demo image and crashed it on import.
+    The images used to hand-maintain their ``pip install`` lists, so a new
+    dependency was silently absent from the built image and only showed up as a
+    ``ModuleNotFoundError`` at start-up: that is how ``send2trash`` crashed the
+    demo image on import. Every Dockerfile now installs pyproject.toml's own
+    dependency list, so what can still go wrong is a Dockerfile that stops
+    doing that, or one that filters a name out of the list (the GPU image drops
+    torch, torchvision and onnxruntime to install its CUDA builds) without
+    installing that name explicitly.
 
-    The check is a substring one on purpose: aliases like
-    ``opencv-python-headless`` and ``onnxruntime-gpu`` legitimately satisfy a
-    plain name. Only package tokens in ``RUN pip install`` instructions count;
-    dependency names in comments must not satisfy the guardrail.
+    The explicit-install check is a substring one on purpose: aliases like
+    ``onnxruntime-gpu`` legitimately satisfy a plain name. Only package tokens
+    in ``RUN pip install`` instructions count; dependency names in comments
+    must not satisfy the guardrail.
     """
     import tomllib
 
@@ -2938,6 +2942,10 @@ def test_dockerfiles_install_every_runtime_dependency():
                 continue
             skip_next = False
             for token in tokens[install_at + 2 :]:
+                # The install ends at the next shell command: a later
+                # `&& python -c "import onnxruntime"` installs nothing.
+                if token in {"&&", "||", ";", "|"}:
+                    break
                 if skip_next:
                     skip_next = False
                 elif token in {"--index-url", "--extra-index-url", "-i"}:
@@ -2946,16 +2954,30 @@ def test_dockerfiles_install_every_runtime_dependency():
                     packages.append(token.lower().replace("_", "-"))
         return packages
 
+    # A RUN line that reads pyproject's dependency list, and the install of it.
+    reads_pyproject = re.compile(
+        r"^RUN python -c .*tomllib\.load\(.*\['project'\]\['dependencies'\]",
+        re.MULTILINE,
+    )
+    installs_list = re.compile(r"pip install .*-r /tmp/deps\.txt")
     missing = []
     for filename in ("Dockerfile", "Dockerfile.gpu", "Dockerfile.demo"):
-        packages = installed_packages(
-            (REPO_ROOT / filename).read_text(encoding="utf-8")
-        )
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        if not (reads_pyproject.search(text) and installs_list.search(text)):
+            missing.append(f"{filename}: does not install pyproject.toml's list")
+            continue
+        filtered = {
+            name.lower().replace("_", "-")
+            for group in re.findall(r"grep -v -E '\^\(([^)]*)\)", text)
+            for name in group.split("|")
+        }
+        packages = installed_packages(text)
         missing += [
             f"{filename}: {name}"
-            for name in sorted(names)
+            for name in sorted(filtered & names)
             if not any(name in package for package in packages)
         ]
+        assert filtered <= names, f"{filename} filters names pyproject lacks"
 
     assert not missing, (
         "these runtime dependencies are never installed in the image, so the "
