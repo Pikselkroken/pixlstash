@@ -40,6 +40,7 @@ from pixlstash.vault import Vault
 from pixlstash import trusted_sqlite as trusted_sqlite_module
 from tests.windows_acl_vectors import (
     AUTHENTICATED_USERS,
+    ME,
     SOMEONE_ELSE,
     allow,
     install_fake_windows_security,
@@ -2828,5 +2829,48 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
             library = prepare_legacy_identity(hub, folder)
             assert bootstrap_module._copy_legacy_identity_if_needed(hub, library)
             assert hub.fetchone("SELECT username FROM user")[0] == "owner"
+        finally:
+            hub.close()
+
+    def test_a_vault_swapped_right_after_its_owner_was_read_is_not_imported(
+        self, paths, windows, monkeypatch
+    ):
+        """R3-1, the reviewer's reproduction: the owner check and the read must
+        be about one object. A planted, foreign-owned copy is renamed over the
+        vault right after the third look at its owner - on the old code, just
+        after the separate pre-check passed on the legitimate file."""
+        hub_path, folder = paths
+        resolved = os.path.realpath(folder)
+        vault_path = os.path.join(resolved, "vault.db")
+        planted = os.path.join(resolved, "planted.db")
+        shutil.copyfile(vault_path, planted)
+        conn = sqlite3.connect(planted)
+        conn.execute("UPDATE user SET password_hash = 'attackers-hash'")
+        conn.commit()
+        conn.close()
+        foreign_inode = os.stat(planted).st_ino
+        looks = 0
+
+        def read(path):
+            nonlocal looks
+            inode = os.lstat(path).st_ino
+            answer = security(owner=SOMEONE_ELSE if inode == foreign_inode else ME)
+            if path == vault_path:
+                looks += 1
+                if looks == 3:
+                    os.replace(planted, vault_path)
+            return answer
+
+        hub = HubDatabase(hub_path)
+        try:
+            windows()
+            monkeypatch.setattr(trusted_sqlite_module, "_read_windows_security", read)
+            with pytest.raises(HubBootstrapError):
+                prepare_legacy_identity(hub, folder)
+            assert looks >= 3, "the swap never happened"
+            assert (
+                hub.fetchone("SELECT COUNT(*) FROM identity_migration_operation")[0]
+                == 0
+            )
         finally:
             hub.close()

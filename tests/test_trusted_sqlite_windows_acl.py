@@ -17,6 +17,7 @@ to everyone - must stay silent.
 """
 
 import ctypes
+import sqlite3
 import errno
 import os
 import struct
@@ -763,6 +764,9 @@ class _FakeWin32:
         self.descriptors = {}
         self.created = []
         self.create_code = 0
+        self.opened = []
+        self.opened_path = None
+        self.file_info = {}
 
     def namespace(self):
         return types.SimpleNamespace(
@@ -855,10 +859,37 @@ class _FakeWin32:
         return descriptor["control"] & 0x1000 == 0x1000, self.acls[descriptor["dacl"]]
 
     def CreateFileW(self, path, access, share, sa, disposition, flags, template):
+        if disposition == 3:  # OPEN_EXISTING: the sidecar lock-down's handle
+            self.opened.append((path, access, flags))
+            self.opened_path = path
+            return 777
         self.created.append((path, access, disposition, flags, self._attributes(sa)))
         if self.create_code:
             return trusted_sqlite._INVALID_HANDLE_VALUE
         return 4242
+
+    def GetFileInformationByHandle(self, handle, out):
+        """By default the truth about the opened file, from the real filesystem."""
+        real = os.lstat(self.opened_path)
+        info = out._obj
+        info.dwFileAttributes = self.file_info.get("attributes", 0x80)
+        info.nNumberOfLinks = self.file_info.get("links", real.st_nlink)
+        index = self.file_info.get("index", real.st_ino)
+        info.nFileIndexHigh = index >> 32
+        info.nFileIndexLow = index & 0xFFFFFFFF
+        info.dwVolumeSerialNumber = self.file_info.get(
+            "serial", real.st_dev & 0xFFFFFFFF
+        )
+        return 1
+
+    def GetSecurityInfo(self, handle, kind, info, owner, group, dacl, sacl, sd):
+        owner._obj.value = ctypes.addressof(self.owner) if self.owner else None
+        sd._obj.value = 0x2000
+        return 0
+
+    def SetSecurityInfo(self, handle, kind, info, owner, group, dacl, sacl):
+        self.set_calls.append((handle, info))
+        return self.set_code
 
     def CreateDirectoryW(self, path, sa):
         self.created.append((path, self._attributes(sa)))
@@ -868,6 +899,7 @@ class _FakeWin32:
         return 1
 
     def SetNamedSecurityInfoW(self, path, kind, info, owner, group, dacl, sacl):
+        """Only for the round-3 code; nothing current may reach it."""
         self.set_calls.append((path, info))
         return self.set_code
 
@@ -1065,18 +1097,92 @@ class TestCreationOverAFakeApi:
         assert _warned(caplog, "InitializeAcl failed with Windows error")
 
 
-class TestSidecarWriterOverAFakeApi:
-    def test_a_sidecar_gets_three_full_control_entries_protected(self, fake_win32):
-        fake = fake_win32()
+class TestSidecarLockDownOverAFakeApi:
+    """R3-2: the sidecar is re-DACLed through a handle on the checked file only.
 
-        trusted_sqlite._apply_private_windows_dacl(
-            "C:\\lib\\vault.db-wal", is_directory=False
-        )
+    Driven through ``_validate_file`` (what the sidecar loop calls) on real
+    files, with ``os.name`` forced to ``nt`` and the fake API answering
+    ``GetFileInformationByHandle`` from the real filesystem.
+    """
 
+    @pytest.fixture
+    def sidecar(self, tmp_path, fake_win32, monkeypatch):
+        path = tmp_path / "vault.db-journal"
+        path.write_bytes(b"")
+        fake = fake_win32([_ace_bytes(0x0, 0, FULL_CONTROL, ME)])
+        monkeypatch.setattr(os, "name", "nt")
+        return str(path), fake
+
+    def test_our_unprotected_sidecar_is_locked_down_on_its_handle(self, sidecar):
+        path, fake = sidecar
+
+        trusted_sqlite._validate_file(path, private=False, sidecar=True)
+
+        ((opened, access, flags),) = fake.opened
+        assert opened == path
+        assert access == 0x00060000  # READ_CONTROL | WRITE_DAC
+        assert flags & 0x00200000 and flags & 0x02000000
+        assert fake.set_calls == [(777, 0x80000004)]  # the handle, PROTECTED | DACL
         assert fake.added == [(0, mask, sid) for mask, sid in OWNER_ONLY]
-        ((path, info),) = fake.set_calls
-        assert path == "C:\\lib\\vault.db-wal"
-        assert info == 0x80000004  # PROTECTED_DACL | DACL
+
+    def test_a_hard_link_to_another_file_is_not_rewritten(
+        self, tmp_path, fake_win32, monkeypatch, caplog
+    ):
+        """The reviewer's reproduction: a planted ``-journal`` hard-linked to a
+        photo of the user's. Rewriting it would rewrite the photo's DACL."""
+        photo = tmp_path / "family-shared.jpg"
+        photo.write_bytes(b"jpeg")
+        journal = tmp_path / "vault.db-journal"
+        os.link(photo, journal)
+        fake = fake_win32([_ace_bytes(0x0, 0, FULL_CONTROL, ME)])
+        monkeypatch.setattr(os, "name", "nt")
+
+        trusted_sqlite._validate_file(str(journal), private=False, sidecar=True)
+
+        assert fake.set_calls == []
+        assert _warned(caplog, "it has 2 names")
+
+    @pytest.mark.parametrize("attributes", [0x10, 0x400], ids=["directory", "reparse"])
+    def test_a_directory_or_reparse_point_is_not_rewritten(
+        self, sidecar, attributes, caplog
+    ):
+        path, fake = sidecar
+        fake.file_info["attributes"] = attributes
+
+        trusted_sqlite._validate_file(path, private=False, sidecar=True)
+
+        assert fake.set_calls == []
+        assert _warned(caplog, "not a regular file")
+
+    @pytest.mark.parametrize("field", ["index", "serial"])
+    def test_a_file_swapped_after_the_check_is_not_rewritten(
+        self, sidecar, field, caplog
+    ):
+        path, fake = sidecar
+        fake.file_info[field] = 0xDEAD
+
+        trusted_sqlite._validate_file(path, private=False, sidecar=True)
+
+        assert fake.set_calls == []
+        assert _warned(caplog, "replaced while it was being checked")
+
+    def test_a_sidecar_the_handle_shows_another_account_owns_is_not_rewritten(
+        self, sidecar, monkeypatch
+    ):
+        path, fake = sidecar
+        foreign = ctypes.create_string_buffer(_sid_bytes(SOMEONE_ELSE))
+        fake.keep.append(foreign)
+
+        def foreign_owner(handle, kind, info, owner, group, dacl, sacl, sd):
+            owner._obj.value = ctypes.addressof(foreign)
+            sd._obj.value = 0x2000
+            return 0
+
+        fake.GetSecurityInfo = foreign_owner
+
+        trusted_sqlite._validate_file(path, private=False, sidecar=True)
+
+        assert fake.set_calls == []
 
     def test_the_reader_reports_a_protected_descriptor(self, fake_win32):
         fake = fake_win32([])
@@ -1084,20 +1190,83 @@ class TestSidecarWriterOverAFakeApi:
 
         assert trusted_sqlite._read_windows_security("C:\\v.db-wal").dacl_protected
 
-    def test_a_lock_down_failure_is_a_warning_with_path_and_code(
-        self, fake_win32, caplog
-    ):
-        fake = fake_win32([_ace_bytes(0x0, 0, FULL_CONTROL, ME)])
+    def test_a_lock_down_failure_is_a_warning_with_path_and_code(self, sidecar, caplog):
+        path, fake = sidecar
         fake.set_code = 5
 
-        trusted_sqlite._check_windows_acl(
-            "C:\\lib\\vault.db-wal", kind="file", sidecar=True
+        trusted_sqlite._validate_file(path, private=False, sidecar=True)
+
+        assert _warned(caplog, f"Did not restrict SQLite sidecar {path}")
+        assert _warned(caplog, "SetSecurityInfo failed with Windows error 5")
+
+
+class TestTheLoginImportRequiresATrustedOwner:
+    """R3-1: ``require_trusted_owner`` refuses inside the file validation."""
+
+    @pytest.fixture
+    def vault(self, tmp_path, monkeypatch):
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "vault.db")
+        sqlite3.connect(path).close()
+        monkeypatch.setattr(os, "name", "nt")
+        return path
+
+    def test_a_foreign_owned_vault_is_refused_only_when_asked(
+        self, vault, monkeypatch, caplog
+    ):
+        install_fake_windows_security(
+            monkeypatch, {vault: security(owner=SOMEONE_ELSE)}
         )
 
-        assert _warned(
-            caplog, "Could not restrict SQLite sidecar C:\\lib\\vault.db-wal"
+        with trusted_sqlite.checked_read_connection(vault):
+            pass
+        assert _warned(caplog, f"{vault} is owned by {SOMEONE_ELSE}")
+
+        with pytest.raises(TrustedSQLiteLocationError, match="does not import a login"):
+            with trusted_sqlite.checked_read_connection(
+                vault, require_trusted_owner=True
+            ):
+                pass
+
+    def test_a_foreign_owned_vault_is_refused_at_open_before_sqlite_runs(
+        self, vault, monkeypatch
+    ):
+        install_fake_windows_security(
+            monkeypatch, {vault: security(owner=SOMEONE_ELSE)}
         )
-        assert _warned(caplog, "SetNamedSecurityInfoW failed with Windows error 5")
+
+        with pytest.raises(TrustedSQLiteLocationError, match="does not import a login"):
+            TrustedSQLiteLocation.open(vault, require_trusted_owner=True)
+
+    def test_a_foreign_sidecar_that_appears_after_open_is_refused_at_verify(
+        self, vault, monkeypatch
+    ):
+        install_fake_windows_security(monkeypatch)
+        guard = TrustedSQLiteLocation.open(vault, require_trusted_owner=True)
+        try:
+            with open(vault + "-wal", "wb"):
+                pass
+            install_fake_windows_security(
+                monkeypatch, {vault + "-wal": security(owner=SOMEONE_ELSE)}
+            )
+            with pytest.raises(TrustedSQLiteLocationError, match="does not import"):
+                guard.verify_after_open()
+        finally:
+            guard.close()
+
+    def test_our_own_vault_in_a_loose_folder_is_read(self, vault, monkeypatch):
+        loose = security(
+            dacl=profile_default_dacl() + (allow(EVERYONE, FULL_CONTROL, flags=0x03),)
+        )
+        install_fake_windows_security(
+            monkeypatch, {vault: loose, os.path.dirname(vault): loose}
+        )
+
+        with trusted_sqlite.checked_read_connection(
+            vault, require_trusted_owner=True
+        ) as connection:
+            assert connection.execute("SELECT 1").fetchone() == (1,)
 
 
 def _icacls(*args: str) -> None:

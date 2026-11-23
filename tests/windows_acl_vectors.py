@@ -96,8 +96,9 @@ def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME
         os.mkdir(path, 0o700)
         created.append((str(path), True))
 
-    def lock_down(path: str, *, is_directory: bool) -> None:
+    def lock_down(path: str, expected, user_sid: str, volume_serial) -> bool:
         locked.append(str(path))
+        return True
 
     created: list[tuple[str, bool]] = []
     locked: list[str] = []
@@ -107,7 +108,7 @@ def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME
     monkeypatch.setattr(
         trusted_sqlite, "_windows_create_private_directory", create_directory
     )
-    monkeypatch.setattr(trusted_sqlite, "_apply_private_windows_dacl", lock_down)
+    monkeypatch.setattr(trusted_sqlite, "_lock_down_sidecar_by_handle", lock_down)
     monkeypatch.setattr(trusted_sqlite, "_notices_logged", set())
     seen.created = created
     seen.locked = locked

@@ -42,7 +42,6 @@ from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
     checked_read_connection,
-    require_trusted_owner_for_identity_import,
 )
 from pixlstash.services.portable_identity import sanitize_vault_connection
 
@@ -626,8 +625,7 @@ def prepare_legacy_identity(hub: HubDatabase, folder: str) -> Library:
                 "reauthorize it."
             )
     try:
-        require_trusted_owner_for_identity_import(vault_path)
-        with checked_read_connection(vault_path) as vault:
+        with checked_read_connection(vault_path, require_trusted_owner=True) as vault:
             user, _tokens, digest = _identity_payload(vault)
     except (sqlite3.Error, TrustedSQLiteLocationError) as exc:
         raise HubBootstrapError(
@@ -661,8 +659,7 @@ def _copy_legacy_identity_if_needed(hub: HubDatabase, library: Library) -> bool:
         )
 
     try:
-        require_trusted_owner_for_identity_import(vault_path)
-        with checked_read_connection(vault_path) as vault:
+        with checked_read_connection(vault_path, require_trusted_owner=True) as vault:
             vault.row_factory = sqlite3.Row
             user_row, token_rows, digest = _identity_payload(vault)
     except (sqlite3.Error, TrustedSQLiteLocationError) as exc:

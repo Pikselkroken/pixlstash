@@ -87,9 +87,12 @@ the group answer - supplementary members only, and NSS resolved in this process
 * **Sidecars.** In a folder PixlStash created, the ``-wal``/``-shm``/
   ``-journal`` SQLite makes inherit the folder's owner-only entries. In a
   folder the user chose they inherit that folder's permissions - the user's
-  choice - so each guarded open and ``verify_after_open`` gives a sidecar this
-  account owns the protected owner-only DACL if it does not carry it already
-  (``_lock_down_sidecar``). The folder itself is never touched.
+  choice. A sidecar seen at a guarded open or ``verify_after_open`` that this
+  account owns is given the protected owner-only DACL if it does not carry it
+  already (``_lock_down_sidecar``), through a handle on exactly the checked
+  file: a regular file with one link, at the volume and file index just
+  ``lstat``-ed. One created later keeps the folder's permissions until the
+  next open sees it. The folder itself is never touched.
 * **Opening.** Every ``TrustedSQLiteLocation`` open reads each object's owner
   SID and DACL (``_read_windows_security``, a thin ctypes reader over
   advapi32/kernel32) and ``classify_windows_acl`` - a pure function of owner
@@ -146,9 +149,11 @@ Windows error code, or the missing volume flag - and the open proceeds. That
 function is the single switch: making it raise turns these into refusals.
 
 Importing a login out of a legacy vault is the one exception to "report, do
-not refuse": ``require_trusted_owner_for_identity_import`` refuses on Windows
-when the legacy vault or a sidecar is owned by another account, since a
-replacement is always the planter's. Write access is still only reported.
+not refuse": that read passes ``require_trusted_owner=True``, which refuses on
+Windows a legacy vault or sidecar owned by another account - inside the file
+validation, at open and again in ``verify_after_open``, on the same objects
+whose identity is checked before the first row - since a replacement is always
+the planter's. Write access is still only reported.
 
 Every Windows notice is logged once per volume serial, path and text, so a
 different drive mounted at the same letter is reported again. What refuses on
@@ -663,29 +668,140 @@ def _accept_unverifiable_windows_acl(
     )
 
 
-def _lock_down_sidecar(path: str, security: _WindowsSecurity, user_sid: str) -> bool:
+def _lock_down_sidecar(
+    path: str,
+    security: _WindowsSecurity,
+    user_sid: str,
+    expected: os.stat_result | None,
+) -> bool:
     """Give a sidecar this account owns the protected owner-only DACL.
 
     Only a ``-wal``/``-shm``/``-journal`` beside a database being opened, only
     when this account owns it, and only when its DACL is not protected already
-    - never the folder, never the database file the user placed there.
-    Returns True when the DACL was replaced; a failure is logged once with the
-    path and the Windows error and the sidecar keeps what it had.
+    - never the folder, never the database file the user placed there. The
+    rewrite goes through a handle on exactly the file that was just checked
+    (``_lock_down_sidecar_by_handle``), never through the name: another
+    account that can write a loose folder could otherwise point the name at a
+    hard link to one of the user's own files and have *its* DACL rewritten.
+    Returns True when the DACL was replaced.
     """
-    if security.dacl_protected or security.is_volume_root:
+    if expected is None or security.dacl_protected or security.is_volume_root:
         return False
     if _normalise_sid(security.owner_sid) != _normalise_sid(user_sid):
         return False
-    try:
-        _apply_private_windows_dacl(path, is_directory=False)
-    except _UnverifiableWindowsAcl as exc:
+    return _lock_down_sidecar_by_handle(
+        path, expected, user_sid, security.volume_serial
+    )
+
+
+def _lock_down_sidecar_by_handle(
+    path: str, expected: os.stat_result, user_sid: str, volume_serial: int | None
+) -> bool:
+    """Open *path* without following it, prove it is the checked file, re-DACL it.
+
+    The handle (``READ_CONTROL | WRITE_DAC``, ``FILE_FLAG_OPEN_REPARSE_POINT |
+    FILE_FLAG_BACKUP_SEMANTICS``) must be a regular file - not a directory, not
+    a reparse point - with exactly one link, on the volume and at the file
+    index the ``lstat`` just checked, still owned by this account and not yet
+    protected; only then does ``SetSecurityInfo`` write the owner-only DACL on
+    that handle. Anything else is skipped with a once-per-key log line naming
+    the reason, and the file keeps the permissions it had.
+    """
+
+    def skip(reason: str) -> bool:
         _log_notice_once(
             path,
-            security.volume_serial,
-            f"Could not restrict SQLite sidecar {path} to this account "
-            f"({exc.reason}); it keeps the permissions it was created with.",
+            volume_serial,
+            f"Did not restrict SQLite sidecar {path} to this account ({reason}); "
+            "it keeps the permissions it was created with.",
         )
         return False
+
+    try:
+        api = _win32()
+        handle = api.CreateFileW(
+            path,
+            _READ_CONTROL | _WRITE_DAC,
+            _FILE_SHARE_ALL,
+            None,
+            _OPEN_EXISTING,
+            _FILE_FLAG_OPEN_REPARSE_POINT | _FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        )
+        if handle in (None, _INVALID_HANDLE_VALUE):
+            return skip(_win_error("CreateFileW", ctypes.get_last_error()))
+        try:
+            info = _ByHandleFileInformation()
+            if not api.GetFileInformationByHandle(handle, ctypes.byref(info)):
+                return skip(
+                    _win_error("GetFileInformationByHandle", ctypes.get_last_error())
+                )
+            if info.dwFileAttributes & (
+                _FILE_ATTRIBUTE_DIRECTORY | _FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                return skip("it is not a regular file")
+            if info.nNumberOfLinks != 1:
+                return skip(f"it has {info.nNumberOfLinks} names, so it is shared")
+            index = (info.nFileIndexHigh << 32) | info.nFileIndexLow
+            if (info.dwVolumeSerialNumber, index) != (
+                expected.st_dev & 0xFFFFFFFF,
+                expected.st_ino & 0xFFFFFFFFFFFFFFFF,
+            ):
+                return skip("it was replaced while it was being checked")
+            owner = ctypes.c_void_p()
+            descriptor = ctypes.c_void_p()
+            code = api.GetSecurityInfo(
+                handle,
+                _SE_FILE_OBJECT,
+                _OWNER_SECURITY_INFORMATION,
+                ctypes.byref(owner),
+                None,
+                None,
+                None,
+                ctypes.byref(descriptor),
+            )
+            if code:
+                return skip(_win_error("GetSecurityInfo", code))
+            try:
+                if not owner.value or _normalise_sid(
+                    _sid_to_string(api, owner.value)
+                ) != _normalise_sid(user_sid):
+                    return skip("another account owns it")
+                control = ctypes.c_uint16(0)
+                revision = ctypes.c_uint32(0)
+                if not api.GetSecurityDescriptorControl(
+                    descriptor.value, ctypes.byref(control), ctypes.byref(revision)
+                ):
+                    return skip(
+                        _win_error(
+                            "GetSecurityDescriptorControl", ctypes.get_last_error()
+                        )
+                    )
+                if control.value & _SE_DACL_PROTECTED:
+                    return False
+            finally:
+                _local_free(api, descriptor.value, "security descriptor")
+            acl = _build_private_acl(api, is_directory=False)
+            code = api.SetSecurityInfo(
+                handle,
+                _SE_FILE_OBJECT,
+                _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                acl,
+                None,
+            )
+            if code:
+                return skip(_win_error("SetSecurityInfo", code))
+        finally:
+            if not api.CloseHandle(handle):
+                logger.warning(
+                    "CloseHandle on sidecar %s failed with Windows error %d.",
+                    path,
+                    ctypes.get_last_error(),
+                )
+    except _UnverifiableWindowsAcl as exc:
+        return skip(exc.reason)
     logger.info("Restricted SQLite sidecar %s to this account.", path)
     return True
 
@@ -697,7 +813,13 @@ def _is_drive_root(path: str) -> bool:
 
 
 def _check_windows_acl(
-    path: str, *, kind: str, private: bool = False, sidecar: bool = False
+    path: str,
+    *,
+    kind: str,
+    private: bool = False,
+    sidecar: bool = False,
+    expected: os.stat_result | None = None,
+    require_trusted_owner: bool = False,
 ) -> None:
     """Report, never refuse, when *path*'s owner or DACL admits another account.
 
@@ -709,14 +831,18 @@ def _check_windows_acl(
     sidecar loop tolerates and the main file treats like a failed ``lstat``.
 
     A *sidecar* this account owns whose DACL is not already the protected
-    owner-only one is given it first (``_lock_down_sidecar``): SQLite created
-    it with whatever the folder hands new files, and it carries the same pages
-    as the database.
+    owner-only one is given it first (``_lock_down_sidecar``, on the file whose
+    ``lstat`` is *expected*): SQLite created it with whatever the folder hands
+    new files, and it carries the same pages as the database.
+
+    With *require_trusted_owner* an owner outside this account, ``SYSTEM``,
+    ``Administrators`` and ``TrustedInstaller`` refuses instead of warning -
+    for the one read that imports a login (``checked_read_connection``).
     """
     try:
         security = _read_windows_security(path)
         user_sid = _windows_user_sid()
-        if sidecar and _lock_down_sidecar(path, security, user_sid):
+        if sidecar and _lock_down_sidecar(path, security, user_sid, expected):
             security = _read_windows_security(path)
     except _UnverifiableWindowsAcl as exc:
         _accept_unverifiable_windows_acl(path, exc.reason, exc.volume_serial)
@@ -733,6 +859,14 @@ def _check_windows_acl(
     # Never suggest rewriting the permissions of a whole drive.
     drive_root = security.is_volume_root or _is_drive_root(path)
     quoted = f'"{path}"'
+    if not verdict.owner_trusted and require_trusted_owner:
+        raise TrustedSQLiteLocationError(
+            f"{path} is owned by "
+            f"{_describe_sid(_normalise_sid(security.owner_sid))}, not this "
+            f"account ({user_sid}), SYSTEM or Administrators. PixlStash does not "
+            "import a login from a database another account owns; if this is "
+            f"your old library, take ownership with: takeown /F {quoted}"
+        )
     if not verdict.owner_trusted:
         fix = "" if drive_root else f" If it should be yours: takeown /F {quoted}"
         _log_notice_once(
@@ -813,6 +947,11 @@ _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _INVALID_HANDLE_VALUE = (1 << (8 * ctypes.sizeof(ctypes.c_void_p))) - 1
 _ERROR_FILE_EXISTS = 80
 _ERROR_ALREADY_EXISTS = 183
+_READ_CONTROL = 0x00020000
+_OPEN_EXISTING = 3
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+_FILE_ATTRIBUTE_DIRECTORY = 0x10
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 # A SID's fixed part: revision, sub-authority count, 6-byte authority.
 _SID_HEADER_BYTES = 8
 
@@ -835,6 +974,24 @@ class _AclSizeInformation(ctypes.Structure):
 
 class _TokenUser(ctypes.Structure):
     _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", ctypes.c_uint32)]
+
+
+class _ByHandleFileInformation(ctypes.Structure):
+    # FILETIME is two DWORDs, so DWORD-aligned: no padding after the first
+    # field, 52 bytes in all. _pack_ must precede _fields_ to take effect.
+    _pack_ = 4
+    _fields_ = [
+        ("dwFileAttributes", ctypes.c_uint32),
+        ("ftCreationTime", ctypes.c_uint64),
+        ("ftLastAccessTime", ctypes.c_uint64),
+        ("ftLastWriteTime", ctypes.c_uint64),
+        ("dwVolumeSerialNumber", ctypes.c_uint32),
+        ("nFileSizeHigh", ctypes.c_uint32),
+        ("nFileSizeLow", ctypes.c_uint32),
+        ("nNumberOfLinks", ctypes.c_uint32),
+        ("nFileIndexHigh", ctypes.c_uint32),
+        ("nFileIndexLow", ctypes.c_uint32),
+    ]
 
 
 class _SecurityAttributes(ctypes.Structure):
@@ -911,18 +1068,6 @@ def _win32() -> types.SimpleNamespace:
             dword,
             void_p,
         ),
-        SetNamedSecurityInfoW=bind(
-            advapi32,
-            "SetNamedSecurityInfoW",
-            dword,
-            ctypes.c_wchar_p,
-            ctypes.c_int,
-            dword,
-            void_p,
-            void_p,
-            void_p,
-            void_p,
-        ),
         GetSecurityDescriptorControl=bind(
             advapi32,
             "GetSecurityDescriptorControl",
@@ -955,6 +1100,34 @@ def _win32() -> types.SimpleNamespace:
             void_p,
             dword,
             dword,
+            void_p,
+        ),
+        GetFileInformationByHandle=bind(
+            kernel32, "GetFileInformationByHandle", bool_, void_p, void_p
+        ),
+        GetSecurityInfo=bind(
+            advapi32,
+            "GetSecurityInfo",
+            dword,
+            void_p,
+            ctypes.c_int,
+            dword,
+            out_p,
+            out_p,
+            out_p,
+            out_p,
+            out_p,
+        ),
+        SetSecurityInfo=bind(
+            advapi32,
+            "SetSecurityInfo",
+            dword,
+            void_p,
+            ctypes.c_int,
+            dword,
+            void_p,
+            void_p,
+            void_p,
             void_p,
         ),
         CreateDirectoryW=bind(
@@ -1263,32 +1436,6 @@ def _build_private_acl(
             _local_free(api, sid, "SID")
 
 
-def _apply_private_windows_dacl(path: str, *, is_directory: bool) -> None:
-    """Replace an existing object's DACL with the protected owner-only one.
-
-    Used only for a SQLite sidecar this account owns (``_lock_down_sidecar``);
-    what PixlStash creates itself is created locked (``create_private_file``,
-    ``create_private_directory``). Inheritance from the folder is switched
-    off, so the folder no longer decides who can write the object.
-
-    Raises:
-        _UnverifiableWindowsAcl: any Windows call failed, naming it.
-    """
-    api = _win32()
-    acl = _build_private_acl(api, is_directory=is_directory)
-    code = api.SetNamedSecurityInfoW(
-        path,
-        _SE_FILE_OBJECT,
-        _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
-        None,
-        None,
-        acl,
-        None,
-    )
-    if code:
-        raise _UnverifiableWindowsAcl(_win_error("SetNamedSecurityInfoW", code))
-
-
 def _private_security_attributes(
     path: str, *, is_directory: bool
 ) -> tuple[_SecurityAttributes | None, list]:
@@ -1524,7 +1671,11 @@ def _validate_namespace(canonical_path: str) -> None:
 
 
 def _validate_file(
-    path: str, *, private: bool, sidecar: bool = False
+    path: str,
+    *,
+    private: bool,
+    sidecar: bool = False,
+    require_trusted_owner: bool = False,
 ) -> os.stat_result:
     try:
         info = os.lstat(path)
@@ -1542,7 +1693,14 @@ def _validate_file(
         # from the read-only attribute and reads 0o666 for an ordinary file, so
         # the POSIX checks below would refuse every file. The owner SID and the
         # DACL carry the same answer.
-        _check_windows_acl(path, kind="file", private=private, sidecar=sidecar)
+        _check_windows_acl(
+            path,
+            kind="file",
+            private=private,
+            sidecar=sidecar,
+            expected=info,
+            require_trusted_owner=require_trusted_owner,
+        )
         return info
     if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
         raise TrustedSQLiteLocationError(
@@ -1566,7 +1724,9 @@ def _validate_file(
     return info
 
 
-def _validate_sidecars(canonical: str, *, private: bool) -> None:
+def _validate_sidecars(
+    canonical: str, *, private: bool, require_trusted_owner: bool = False
+) -> None:
     """Validate every existing ``-wal``/``-shm``/``-journal`` beside *canonical*.
 
     A sidecar that VANISHES between the existence probe and the ``lstat`` is
@@ -1583,7 +1743,12 @@ def _validate_sidecars(canonical: str, *, private: bool) -> None:
         if not os.path.lexists(sidecar):
             continue
         try:
-            _validate_file(sidecar, private=private, sidecar=True)
+            _validate_file(
+                sidecar,
+                private=private,
+                sidecar=True,
+                require_trusted_owner=require_trusted_owner,
+            )
         except TrustedSQLiteLocationError as exc:
             if isinstance(exc.__cause__, FileNotFoundError):
                 logger.info(
@@ -1652,6 +1817,7 @@ class TrustedSQLiteLocation:
     parent_identity: tuple[int, int]
     private: bool = False
     pin: int = -1
+    require_trusted_owner: bool = False
 
     @classmethod
     def open(
@@ -1661,7 +1827,16 @@ class TrustedSQLiteLocation:
         private: bool = False,
         create: bool = False,
         trusted_root: str | None = None,
+        require_trusted_owner: bool = False,
     ) -> "TrustedSQLiteLocation":
+        """Validate *path* and its namespace before SQLite opens it.
+
+        *require_trusted_owner* refuses, on Windows, a main file or sidecar
+        owned by another account (POSIX refuses a foreign ``st_uid`` always),
+        here and again in :meth:`verify_after_open` - the same objects whose
+        identity is verified before the first row is read. Only the legacy
+        login import asks for it; everything else reports ownership.
+        """
         if private and trusted_root is None:
             raise TypeError(
                 "private=True requires trusted_root=: pass the directory the "
@@ -1715,13 +1890,28 @@ class TrustedSQLiteLocation:
             else:
                 os.close(created_fd)
         parent_identity = _identity(os.lstat(os.path.dirname(canonical)))
-        expected = _validate_file(canonical, private=private)
-        _validate_sidecars(canonical, private=private)
+        expected = _validate_file(
+            canonical, private=private, require_trusted_owner=require_trusted_owner
+        )
+        _validate_sidecars(
+            canonical, private=private, require_trusted_owner=require_trusted_owner
+        )
         pin = _pin_inode(canonical, expected)
-        return cls(canonical, _identity(expected), parent_identity, private, pin)
+        return cls(
+            canonical,
+            _identity(expected),
+            parent_identity,
+            private,
+            pin,
+            require_trusted_owner,
+        )
 
     def verify_after_open(self) -> None:
-        current = _validate_file(self.path, private=False)
+        current = _validate_file(
+            self.path,
+            private=False,
+            require_trusted_owner=self.require_trusted_owner,
+        )
         if _identity(current) != self.identity:
             raise TrustedSQLiteLocationError(
                 f"SQLite file {self.path} changed while it was being opened."
@@ -1747,7 +1937,11 @@ class TrustedSQLiteLocation:
         # The sidecars SQLite just created are new entries in a directory we
         # have re-verified as unwritable by anyone else. Validate them directly
         # anyway: this is the check that actually catches a hostile sidecar.
-        _validate_sidecars(self.path, private=self.private)
+        _validate_sidecars(
+            self.path,
+            private=self.private,
+            require_trusted_owner=self.require_trusted_owner,
+        )
 
     def close(self) -> None:
         """Release the inode pin; never a descriptor that holds or drops locks."""
@@ -1764,7 +1958,7 @@ class TrustedSQLiteLocation:
 
 @contextlib.contextmanager
 def checked_read_connection(
-    path: str, *, timeout: float = 5.0
+    path: str, *, timeout: float = 5.0, require_trusted_owner: bool = False
 ) -> Iterator[sqlite3.Connection]:
     """A read-only connection to *path*, opened through the same checks.
 
@@ -1774,13 +1968,16 @@ def checked_read_connection(
     ``sqlite3.connect``, and ``verify_after_open`` compares the file's
     ``(st_dev, st_ino)`` again before the caller reads a row. No descriptor
     other than SQLite's own is opened on the file, so the live engine's POSIX
-    locks survive the read.
+    locks survive the read. *require_trusted_owner* is passed to
+    :meth:`TrustedSQLiteLocation.open` (the legacy login import only).
 
     Raises:
         TrustedSQLiteLocationError: the location failed a check.
         sqlite3.Error: SQLite could not open the file.
     """
-    with TrustedSQLiteLocation.open(path) as guard:
+    with TrustedSQLiteLocation.open(
+        path, require_trusted_owner=require_trusted_owner
+    ) as guard:
         connection = sqlite3.connect(
             sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=timeout
         )
@@ -1789,48 +1986,3 @@ def checked_read_connection(
             yield connection
         finally:
             connection.close()
-
-
-def require_trusted_owner_for_identity_import(path: str) -> None:
-    """Refuse to import a login out of *path* if another account owns it.
-
-    Where the user keeps a library is their choice, so on Windows other
-    accounts' *write* access is reported, never refused. Copying a password
-    hash and tokens out of a legacy vault into the hub is a different act: a
-    replacement planted by another account is owned by that account, while a
-    legitimate legacy vault on this computer is owned by this user (or by
-    SYSTEM/Administrators). So for that import only, the vault file and every
-    existing sidecar must be owned by a trusted principal. Write access is
-    still not refused - an in-place edit by an account that can write a loose
-    folder is the location the user chose. A path whose permissions cannot be
-    read is reported as everywhere else and not refused. No-op off Windows,
-    where the guarded read already refuses a foreign ``st_uid``.
-
-    Raises:
-        TrustedSQLiteLocationError: a file is owned by another account.
-    """
-    if os.name != "nt":
-        return
-    canonical = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
-    for candidate in (canonical, *(canonical + s for s in _SIDECAR_SUFFIXES)):
-        if candidate != canonical and not os.path.lexists(candidate):
-            continue
-        try:
-            security = _read_windows_security(candidate)
-            user_sid = _windows_user_sid()
-        except _UnverifiableWindowsAcl as exc:
-            _accept_unverifiable_windows_acl(candidate, exc.reason, exc.volume_serial)
-            continue
-        except TrustedSQLiteLocationError as exc:
-            if candidate != canonical and isinstance(exc.__cause__, FileNotFoundError):
-                continue
-            raise
-        verdict = classify_windows_acl(security.owner_sid, user_sid, (), write_rights=0)
-        if not verdict.owner_trusted:
-            raise TrustedSQLiteLocationError(
-                f"{candidate} is owned by "
-                f"{_describe_sid(_normalise_sid(security.owner_sid))}, not this "
-                f"account ({user_sid}), SYSTEM or Administrators. PixlStash does "
-                "not import a login from a database another account owns; if "
-                f'this is your old library, take ownership with: takeown /F "{candidate}"'
-            )
