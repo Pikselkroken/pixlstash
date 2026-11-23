@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.139",
+ "version": "0.1.142",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -375,6 +375,69 @@
      "url": "https://huggingface.co/VAST-AI/TripoSplat/resolve/main/diffusion_models/triposplat_fp16.safetensors",
      "directory": "diffusion_models",
      "sha256": "c870b97ac1d6bc9177608a5ec625e19ef9f3c5019aa68f64b0fb7803abcd6d20"
+    }
+   ]
+  },
+  {
+   "name": "3d_ultratex_texture_3d_model",
+   "title": "UltraTex: Texture a 3D Model",
+   "description": "Texture an untextured mesh from a single reference image. UltraTex renders the mesh into six world-normal views, paints albedo and metallic/roughness with two UltraTex LoRA passes on FLUX.2 Klein 9B, then bakes the result onto the mesh UVs and exports a PBR GLB with its PNG maps.",
+   "kind": "3d",
+   "tags": [
+    "3D",
+    "3D Texturing"
+   ],
+   "models": [
+    "UltraTex",
+    "FLUX.2 Klein"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.46.0",
+   "requires_custom_nodes": false,
+   "size": 13207024435,
+   "usage": 0,
+   "files": [
+    {
+     "name": "flux-2-klein-base-9b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/diffusion_models/flux-2-klein-base-9b_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "6cb081e6ad1bc876f5edaf757ce36ec1419969e8b97e6dc0771cd3ff7d864771"
+    },
+    {
+     "name": "ultratex_flux2_klein_9b_albedo_lora_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/loras/ultratex_flux2_klein_9b_albedo_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "3b1915177a81bc2ab43f501355bf39113df0128e6cbc6fedf8b8621d5e06a01c"
+    },
+    {
+     "name": "ultratex_flux2_klein_9b_metallic_roughness_lora_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/loras/ultratex_flux2_klein_9b_metallic_roughness_lora_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "13e94f5a30a789b1e3e76d8c96cbba5f52fb2f68411e56377f382e145da23fc1"
+    },
+    {
+     "name": "flux-2-klein-9b_empty_prompt.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/embeddings/flux-2-klein-9b_empty_prompt.safetensors",
+     "directory": "embeddings",
+     "sha256": "e669c60cb10b22a71b4fd5b7150595cc95090bd7958abe4a8e6917a482957de7"
+    },
+    {
+     "name": "ultratex_flux2_vae_fp32.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/vae/ultratex_flux2_vae_fp32.safetensors",
+     "directory": "vae",
+     "sha256": "48d3b69e2c4667ea8d26972d67b28cdf4e0d63fa25b39dd2bb2849041ddc5a1f"
+    },
+    {
+     "name": "flux-2-klein-9b_distill_lora_avg_rank_345_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/UltraTex/resolve/main/loras/flux-2-klein-9b_distill_lora_avg_rank_345_bf16.safetensors",
+     "directory": "loras",
+     "sha256": "a9a237e964289a842db1d900c46fb949d15cab9b46f87c950e6b53454fb3d882"
+    },
+    {
+     "name": "birefnet.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors",
+     "directory": "background_removal",
+     "sha256": "9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154"
     }
    ]
   },
@@ -4232,6 +4295,51 @@
    ]
   },
   {
+   "name": "image_minimax_h3_image_character_swap",
+   "title": "MiniMax-H3-Image: Character Swap",
+   "description": "Swap the person in a photo for a character from a reference image. The adapter reads the picture as <Picture 1> and the character as <Picture 2>, keeps the pose, framing and lighting of the shot, and carries over the reference character's face, costume and materials. Built on MiniMax-H3-Image with the h3_image_character_swap_v1 LoRA at strength 1.0.",
+   "kind": "edit",
+   "tags": [
+    "Image",
+    "Image Edit",
+    "Character Replacement"
+   ],
+   "models": [
+    "MiniMax H3 Image"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.45.0",
+   "requires_custom_nodes": false,
+   "size": 66679367270,
+   "usage": 0,
+   "files": [
+    {
+     "name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+    },
+    {
+     "name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+    },
+    {
+     "name": "minimax_h3_image_vae_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/main/vae/minimax_h3_image_vae_fp16.safetensors",
+     "directory": "vae",
+     "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+    },
+    {
+     "name": "h3_image_character_swap_v1.safetensors",
+     "url": "https://huggingface.co/akatz-ai/MiniMax-H3-Image-Character-Swap-LoRA/resolve/main/h3_image_character_swap_v1.safetensors",
+     "directory": "loras",
+     "sha256": "68378574bede5ca9d7d69df8bb8f8d9f7860d07ea45b26d9c67a7babf50d330f"
+    }
+   ]
+  },
+  {
    "name": "image_minimax_h3_image_edit",
    "title": "MiniMax-H3-Image: Image Edit",
    "description": "Edit a picture by describing the change. MiniMax-H3-Image reads the source as <Picture 1> and rewrites only what the instruction asks for, keeping the rest of the frame intact, so one checkpoint handles both text-to-image and reference-guided edits at about 16 MP. Ideal for swapping products, props or vehicles in a shot, changing a material, or restyling a still frame.",
@@ -5858,6 +5966,78 @@
      "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors?download=true",
      "directory": "checkpoints",
      "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b"
+    }
+   ]
+  },
+  {
+   "name": "image_sensenova_u16_image_edit",
+   "title": "SenseNova U1.6: Image Edit",
+   "description": "Edit a photo with SenseNova-U1.6 by attaching it as a reference and describing the change; the same 8B multimodal backbone reads the source, reworks it and returns the edit at the source's own resolution, with a self-correction pass that re-checks the result against the prompt before returning it.",
+   "kind": "edit",
+   "tags": [
+    "Image Edit",
+    "Int8"
+   ],
+   "models": [
+    "SenseNova U1.6"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.46.0",
+   "requires_custom_nodes": false,
+   "size": 29420525978,
+   "usage": 0,
+   "files": [
+    {
+     "name": "sensenova_u1.6_8b_mot_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/checkpoints/sensenova_u1.6_8b_mot_int8_convrot.safetensors",
+     "directory": "checkpoints"
+    },
+    {
+     "name": "sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/loras/sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
+     "directory": "loras"
+    },
+    {
+     "name": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "32707d01b427e488af252b95c551989aad59f9fec611a694f5db6bde7f0f1f6c"
+    }
+   ]
+  },
+  {
+   "name": "image_sensenova_u16_t2i",
+   "title": "SenseNova U1.6: Text to Image",
+   "description": "Turn a written scene into a finished image with SenseNova-U1.6, an 8B multimodal model that understands and generates in one backbone. It reads the prompt, fills in the visual detail and returns a 4-megapixel image at the aspect ratio you pick, with a self-correction pass that re-checks the result against the prompt before it comes back.",
+   "kind": "image",
+   "tags": [
+    "Text to Image",
+    "Int8"
+   ],
+   "models": [
+    "SenseNova U1.6"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.46.0",
+   "requires_custom_nodes": false,
+   "size": 0,
+   "usage": 0,
+   "files": [
+    {
+     "name": "sensenova_u1.6_8b_mot_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/checkpoints/sensenova_u1.6_8b_mot_int8_convrot.safetensors",
+     "directory": "checkpoints"
+    },
+    {
+     "name": "sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/loras/sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
+     "directory": "loras"
+    },
+    {
+     "name": "qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "9182abae56fe05459840a86d22abd21f972061c92fce032630af680c8c5178d3"
     }
    ]
   },
@@ -7868,6 +8048,43 @@
      "url": "https://huggingface.co/Comfy-Org/RelayVSR/resolve/main/vae/relayvsr_flash_vae_x4_fp32.safetensors",
      "directory": "vae",
      "sha256": "7b8b8c99275fd5c4501b0589cc7b4c4506456a5df83160ef4e207e147b30f714"
+    }
+   ]
+  },
+  {
+   "name": "utility_rmbg3_remove_background",
+   "title": "Remove Background: RMBG 3.0",
+   "description": "RMBG 3.0 renders a soft grayscale alpha matte instead of a hard mask, so hair, glass, veils and liquid keep real transparency. A vision model writes the matting instruction from your image; add one sentence about the material to refine it.",
+   "kind": "image",
+   "tags": [
+    "Remove Background"
+   ],
+   "models": [
+    "RMBG 3.0"
+   ],
+   "open_source": true,
+   "min_comfyui_version": "0.46.0",
+   "requires_custom_nodes": false,
+   "size": 13636521165,
+   "usage": 0,
+   "files": [
+    {
+     "name": "rmbg3_int8_convrot.safetensors",
+     "url": "https://huggingface.co/briaai/RMBG-3.0-Comfy/resolve/main/diffusion_models/rmbg3_int8_convrot.safetensors",
+     "directory": "diffusion_models",
+     "sha256": "bc29b9a87ed378596c5ca5bc0c5bdfaa8aabc8415d33f3c767f9a3cbd9fd566d"
+    },
+    {
+     "name": "qwen3vl_4b_int8_convrot.safetensors",
+     "url": "https://huggingface.co/briaai/RMBG-3.0-Comfy/resolve/main/text_encoders/qwen3vl_4b_int8_convrot.safetensors",
+     "directory": "text_encoders",
+     "sha256": "32de113cbf8282b02cbff0794b637b9d6676da09314a1db5a30bcea9bf4ee01c"
+    },
+    {
+     "name": "flux2-vae.safetensors",
+     "url": "https://huggingface.co/briaai/RMBG-3.0-Comfy/resolve/main/vae/flux2-vae.safetensors",
+     "directory": "vae",
+     "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
     }
    ]
   },
