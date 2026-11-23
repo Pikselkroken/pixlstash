@@ -49,6 +49,8 @@ from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import makedirs_private
+from pixlstash.trusted_sqlite import restrict_new_path_to_owner
 from pixlstash.services.library_backup_service import (
     human_bytes,
 )
@@ -609,7 +611,7 @@ def _preserve_current_config(plan: RestorePlan) -> bool:
     ]
     if not present:
         return False
-    os.makedirs(plan.preserved_dir, mode=0o700, exist_ok=True)
+    makedirs_private(plan.preserved_dir)
     for name in present:
         source = os.path.join(plan.config_dir, name)
         try:
@@ -766,6 +768,8 @@ def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
     try:
         shutil.copyfile(source, temp_path)
         os.chmod(temp_path, RESTORED_FILE_MODE)
+        # The temp becomes the live hub; on Windows the mode means nothing.
+        restrict_new_path_to_owner(temp_path, is_directory=False)
     except OSError as exc:
         try:
             os.unlink(temp_path)

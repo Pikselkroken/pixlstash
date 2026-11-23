@@ -49,16 +49,26 @@ def profile_default_dacl(user: str = ME) -> tuple[WindowsAce, ...]:
     )
 
 
+class _Seen(list):
+    """The paths read, plus ``restricted``: the paths the writer was asked to lock."""
+
+    restricted: list
+
+
 def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME):
     """Make the guard's Windows reader answer from vectors instead of advapi32.
 
     Every path gets the profile default, owned by *user*, unless *overrides*
     maps its string form to a ``_WindowsSecurity`` or to an exception to raise.
+    The DACL writer is replaced too, recording ``(path, is_directory)`` on the
+    returned list's ``restricted`` attribute, and the once-per-finding notice
+    memory is cleared so each test sees its own warnings.
+
     Returns the list of paths read, so a test can show which objects the guard
     actually asked about.
     """
     overrides = {str(key): value for key, value in (overrides or {}).items()}
-    seen: list[str] = []
+    seen = _Seen()
 
     def read(path: str):
         seen.append(path)
@@ -71,8 +81,15 @@ def install_fake_windows_security(monkeypatch, overrides=None, *, user: str = ME
             owner_sid=user, dacl=profile_default_dacl(user)
         )
 
+    def restrict(path: str, *, is_directory: bool) -> None:
+        restricted.append((str(path), is_directory))
+
+    restricted: list[tuple[str, bool]] = []
     monkeypatch.setattr(trusted_sqlite, "_read_windows_security", read)
     monkeypatch.setattr(trusted_sqlite, "_windows_user_sid", lambda: user)
+    monkeypatch.setattr(trusted_sqlite, "_apply_private_windows_dacl", restrict)
+    monkeypatch.setattr(trusted_sqlite, "_windows_notices_logged", set())
+    seen.restricted = restricted
     return seen
 
 

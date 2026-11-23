@@ -39,6 +39,7 @@ from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
+    restrict_new_path_to_owner,
 )
 
 logger = get_logger(__name__)
@@ -115,6 +116,8 @@ def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]
             os.fchmod(fd, HUB_FILE_MODE)
     finally:
         os.close(fd)
+    # The Windows counterpart of the 0600 above: this process created the file.
+    restrict_new_path_to_owner(path, is_directory=False)
     return True, (info.st_dev, info.st_ino)
 
 
@@ -166,12 +169,11 @@ def canonical_hub_path(path: str) -> str:
     pre-resolving the ancestors would hand ``TrustedSQLiteLocation.open`` a
     redirect-free path and defeat ``_reject_symlinked_path`` on an ancestor
     junction -- the redirect an unprivileged account can create with only
-    directory write access (``mklink /J``).  The namespace walk does judge each
-    directory's owner and DACL on ``nt``, but it cannot do so on a volume that
-    keeps no ACLs (FAT32/exFAT), and ``check_file_mode``'s mode-600 check has no
-    Windows form, so Windows keeps refusing ancestor redirects rather than
-    following them; see the W19 record in ``docs/backend_architecture.md``
-    section 13.
+    directory write access (``mklink /J``).  The namespace walk reads each
+    directory's owner and DACL on ``nt`` but only reports what it finds, and
+    ``check_file_mode``'s mode-600 check has no Windows form, so Windows keeps
+    refusing ancestor redirects rather than following them; see the W19 record
+    in ``docs/backend_architecture.md`` section 13.
     """
     absolute = os.path.abspath(os.path.expanduser(path))
     if os.name == "nt":

@@ -7,7 +7,8 @@ main file or pre-position a sidecar, hold a no-follow guard, open SQLite by the
 canonical path, and compare identities before doing decisive work.
 
 **Mode bits warn; everything else refuses.** Ownership, symlinks, junctions and
-non-regular files are refused outright. A loose mode (group/world-writable
+non-regular files are refused outright (on Windows, ownership and every other
+permission finding is reported instead; see "Windows" below). A loose mode (group/world-writable
 directory or file, a credential file wider than 0600) is logged as a WARNING
 with the ``chmod`` that fixes it, and the open goes ahead. Refusing on mode
 alone took the app down twice for nobody's benefit (a 0775 directory under a
@@ -66,83 +67,86 @@ the group answer - supplementary members only, and NSS resolved in this process
 - are recorded as accepted risk beside W17 in ``docs/backend_architecture.md``
 §13.
 
-**Windows: the same verdict, read from the ACL.** ``st_mode`` and ``st_uid``
-are synthesised on Windows (an ordinary file reads 0o666 and ``st_uid`` is
-always 0), so the owner and "who can write" questions are answered from the
-security descriptor instead. ``_read_windows_security`` is a thin ctypes reader
-over advapi32/kernel32 (``GetNamedSecurityInfoW``, ``GetAce``, the process
-token's user SID); ``classify_windows_acl`` is the decision, a pure function of
-owner SID, user SID and ACE list, so the classification runs on the Linux gate
-with synthetic ACLs and the reader runs against real files on the Windows lane.
-Per object, mirroring POSIX:
+**Windows: what PixlStash creates is locked down; what it finds is reported.**
+``st_mode`` and ``st_uid`` are synthesised on Windows (an ordinary file reads
+0o666 and ``st_uid`` is always 0), so the mode argument to ``os.open`` and
+``mkdir`` protects nothing there. Two things stand in for it:
 
-* **Owner** must be the current user or one of the OS's own principals -
-  ``SYSTEM``, ``BUILTIN\\Administrators``, ``NT SERVICE\\TrustedInstaller`` -
-  the analogue of ``st_uid in (uid, 0)``. Anything else refuses, on every
-  directory of the walk and on the file and each sidecar.
-* **The directory holding the database** refuses when any other principal holds
-  a right that adds, removes or renames an entry, or takes the ACL over:
-  ``FILE_ADD_FILE``, ``FILE_ADD_SUBDIRECTORY``, ``FILE_DELETE_CHILD``,
+* **Creation.** When PixlStash itself creates a vault, the hub, or a folder
+  through ``mkdir_private``/``makedirs_private``,
+  ``restrict_new_path_to_owner`` gives it a *protected* DACL (inheritance from
+  the parent switched off) granting full control to this account, ``SYSTEM``
+  and ``BUILTIN\\Administrators`` only, with ``(OI)(CI)`` on folders so the
+  ``-wal``/``-shm``/``-journal`` SQLite creates later inherit the same three
+  entries. Only ever on something this process has just created; an existing
+  file or folder keeps the permissions its owner gave it. A failure is a
+  WARNING naming the path and the Windows error.
+* **Opening.** Every ``TrustedSQLiteLocation`` open reads each object's owner
+  SID and DACL (``_read_windows_security``, a thin ctypes reader over
+  advapi32/kernel32) and ``classify_windows_acl`` - a pure function of owner
+  SID, user SID and ACE list, tested on the Linux gate with synthetic ACLs -
+  decides who besides this account and the OS could write it. Every finding
+  is a WARNING that names the cause and the ``icacls`` or ``takeown`` command
+  that changes it, and the open goes ahead: where a library lives is the
+  owner's choice.
+
+What counts as "could write", per object, mirroring the POSIX walk:
+
+* **Owner**: anyone but this account, ``SYSTEM``, ``BUILTIN\\Administrators``
+  or ``NT SERVICE\\TrustedInstaller`` (the analogue of ``st_uid in (uid, 0)``).
+  Usual for a drive formatted on another computer.
+* **The directory holding the database**: ``FILE_ADD_FILE``,
+  ``FILE_ADD_SUBDIRECTORY``, ``FILE_DELETE_CHILD``, ``DELETE``, ``WRITE_DAC``,
+  ``WRITE_OWNER``, ``GENERIC_WRITE``, ``GENERIC_ALL``, plus any object-inherit
+  ACE (inherit-only or not) granting a file-write right, because the sidecars
+  SQLite creates later inherit it.
+* **Ancestors**: only rights that remove or rename an *existing* entry or take
+  the ACL over (``FILE_DELETE_CHILD``, ``DELETE``, ``WRITE_DAC``,
+  ``WRITE_OWNER``, ``GENERIC_ALL``). Add-only rights are the Windows form of the
+  sticky bit: ``C:\\`` grants Authenticated Users ``FILE_ADD_SUBDIRECTORY`` on
+  itself, which lets them create ``C:\\Other`` and never replace ``C:\\Users``.
+  ``DELETE`` on a volume root grants nothing (a root cannot be renamed), and no
+  ``icacls`` or ``takeown`` command is ever suggested for a drive root.
+* **The file and every sidecar**: ``FILE_WRITE_DATA``, ``FILE_APPEND_DATA``,
   ``DELETE``, ``WRITE_DAC``, ``WRITE_OWNER``, ``GENERIC_WRITE``,
-  ``GENERIC_ALL``.
-* **Ancestors** refuse only on rights that remove or rename an *existing*
-  entry or take the ACL over (``FILE_DELETE_CHILD``, ``DELETE``,
-  ``WRITE_DAC``, ``WRITE_OWNER``, ``GENERIC_ALL``). Add-only rights are the
-  Windows form of the sticky bit the POSIX walk already accepts above the
-  immediate parent: ``C:\\`` grants Authenticated Users
-  ``FILE_ADD_SUBDIRECTORY`` on itself, which lets them create ``C:\\Other``
-  and never replace ``C:\\Users``.
-* **The file and every sidecar** refuse on ``FILE_WRITE_DATA``,
-  ``FILE_APPEND_DATA``, ``DELETE``, ``WRITE_DAC``, ``WRITE_OWNER``,
-  ``GENERIC_WRITE``, ``GENERIC_ALL``. A credential file (``private=True``)
-  that another principal can *read* warns, as a POSIX mode wider than 0600
-  does.
+  ``GENERIC_ALL``. A credential file (``private=True``) another account can
+  read is reported too, as a POSIX mode wider than 0600 is.
 
-Trusted writers are the user and those three principals; every other SID holding
-a write-equivalent right is "another principal can write", including groups the
-user belongs to (``Users``, ``Authenticated Users``, ``Everyone``), because
-other accounts belong to them too. The default ACLs of ``%APPDATA%``,
-``%LOCALAPPDATA%`` and the profile folders grant only the user, ``SYSTEM`` and
-``Administrators``, so a desktop install - whose hub lives under
-``%APPDATA%\\pixlstash-desktop`` - passes without a message.
+Groups the user belongs to (``Users``, ``Authenticated Users``, ``Everyone``)
+count as other accounts, because other accounts belong to them too. The
+default ACLs of ``%APPDATA%``, ``%LOCALAPPDATA%`` and the profile folders grant
+only the user, ``SYSTEM`` and ``Administrators``, so a desktop install is
+silent.
 
-Writability *refuses* here where the POSIX mode bits only warn, and that is the
-mirror rather than a departure: the mode bit is a proxy for "another principal
-can write" and has been wrong where no such principal existed (the owner's own
-private group), whereas an ACE names the principal. The accepted-risk record for
-mode bits in ``docs/backend_architecture.md`` §13 names an observed second
-principal as the condition under which the check is a refusal. The refusal
-carries the ``icacls`` command that removes the access.
+Conservative readings, each of which can only over-report: a deny ACE never
+cancels an allow (ordering is where ACL checks go wrong); callback and object
+allow ACEs count as if their condition held; an ACE type the reader does not
+know, or one whose SID would run past the ACE's own size, is a stranger with
+full control; a NULL DACL is Everyone with full control; a logon-session SID
+(``S-1-5-5-x-y``) is another account. The ``CREATOR OWNER``/``CREATOR GROUP``
+placeholders grant nothing (on inheritance they become whoever creates the
+child, which for the sidecars is this process) and ``OWNER RIGHTS`` resolves to
+the owner, reported separately.
 
-Conservative readings, each of which can only over-refuse:
+**Paths whose permissions cannot be read.** A FAT32/exFAT volume keeps none
+(``GetVolumeInformationW`` reports no ``FILE_PERSISTENT_ACLS``), a network
+server may not report them, and ``GetNamedSecurityInfoW`` can fail on NTFS too
+(access denied, a sharing violation, a descriptor with no owner).
+``_accept_unverifiable_windows_acl`` logs each with its true cause - the API and
+Windows error code, or the missing volume flag - and the open proceeds. That
+function is the single switch: making it raise turns these into refusals.
 
-* a deny ACE never cancels an allow. Ordering reasoning is where ACL checks go
-  wrong, and an ACL that both grants and denies a stranger write is one worth
-  tidying anyway;
-* callback (conditional) and object allow ACEs count unconditionally, since
-  their condition is not evaluated here;
-* an ACE of a type this code does not know is treated as a stranger with full
-  control, because its SID sits at an offset only its type defines; an NTFS DACL
-  does not carry such entries in practice;
-* a NULL DACL is Everyone with full control, which is what Windows makes of it;
-* a logon-session SID (``S-1-5-5-x-y``) is treated as another principal.
+Every Windows notice is logged once per volume serial, path and text, so a
+different drive mounted at the same letter is reported again. What refuses on
+Windows is what refuses everywhere: redirects (symlinks **and** junctions), a
+non-regular file, an identity that changes across the open, and a path that
+vanishes (a sidecar that vanishes is tolerated, as on POSIX).
 
-Inherit-only ACEs are skipped: they describe children, not the object. The
-``CREATOR OWNER``/``CREATOR GROUP`` placeholders grant nothing on the object
-itself (no token carries them), and ``OWNER RIGHTS`` resolves to the owner,
-which the owner check has already required to be trusted.
-
-**Volumes that cannot answer.** FAT32 and exFAT carry no ACLs
-(``GetVolumeInformationW`` reports no ``FILE_PERSISTENT_ACLS``), and some SMB
-servers fail ``GetNamedSecurityInfoW`` or return a descriptor without an owner.
-Nothing can be verified there, so ``_accept_unverifiable_windows_acl`` logs a
-WARNING naming the path, the API and the error code, and the open proceeds as
-it would without this check - only the redirect, file-type and identity checks
-below apply. That function is the single place that decides; making it raise
-turns those volumes into refusals. ``ERROR_ACCESS_DENIED`` is not one of these
-cases and refuses: the owner always holds ``READ_CONTROL``, so a descriptor
-this account cannot read belongs to somebody else, and accepting it would let
-a hostile owner opt out of the check.
+Short reads outside a database's long-lived engine - the legacy-owner and
+fingerprint checks before migration, and the registry's folder and
+fingerprint readers - go through ``checked_read_connection``, which runs these
+same checks before ``sqlite3.connect`` and ``verify_after_open`` before the
+first row is read.
 
 A ``private=True`` open also requires a mandatory, no-default ``trusted_root``:
 the directory the caller derived the credential store's path from. The check is
@@ -151,8 +155,9 @@ is tautologically true; the parameter exists so that *forgetting* it fails at
 the first test run instead of silently opting out in production. It is not a
 policy on where the owner may put the hub.
 
-**Blast radius, for what remains unverifiable** (an unverifiable volume, or
-tampering after the guard returns):
+**Blast radius, where nothing is enforced** (a database PixlStash did not
+create, sitting in a folder other accounts can write, or on a volume with no
+permissions; or tampering after the guard returns):
 
 * The vault is **authorization-bearing**. ``authz/membership.py`` answers
   "is this picture in that project?" out of the vault, so a substituted vault
@@ -179,13 +184,15 @@ the open plus ``verify_after_open``. The record of what is accepted is
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import functools
 import os
 import shlex
+import sqlite3
 import stat
 import types
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 try:  # POSIX-only; only ever consulted where os.geteuid() also exists.
@@ -196,6 +203,7 @@ except ImportError:  # pragma: no cover - Windows
     pwd = None  # type: ignore[assignment]
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 logger = get_logger(__name__)
 
@@ -379,6 +387,14 @@ WINDOWS_WRITE_RIGHTS = {
     "ancestor": _ANCESTOR_WRITE_RIGHTS,
     "file": _FILE_WRITE_RIGHTS,
 }
+# What an object-inherit ACE on the database's own directory hands every file
+# created in it later - the -wal, -shm and -journal SQLite creates after the
+# check. Only that directory's inheritance reaches them.
+WINDOWS_INHERITED_WRITE_RIGHTS = {
+    "directory": _FILE_WRITE_RIGHTS,
+    "ancestor": 0,
+    "file": 0,
+}
 
 # ACE types (winnt.h). Only the allow family is parsed for a trustee; denies
 # are deliberately never subtracted (module docstring).
@@ -412,6 +428,8 @@ _OBJECT_ACE_TYPES = frozenset(
         _ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE,
     }
 )
+_OBJECT_INHERIT_ACE = 0x01
+_CONTAINER_INHERIT_ACE = 0x02
 _INHERIT_ONLY_ACE = 0x08
 
 _SYSTEM_SID = "S-1-5-18"
@@ -421,9 +439,10 @@ _TRUSTED_INSTALLER_SID = (
 )
 # The analogue of root: principals that own the OS and can already do anything.
 _TRUSTED_OS_SIDS = frozenset({_SYSTEM_SID, _ADMINISTRATORS_SID, _TRUSTED_INSTALLER_SID})
-# Placeholders that grant nothing to a stranger on the object itself: no token
-# carries CREATOR OWNER / CREATOR GROUP, and OWNER RIGHTS resolves to the owner,
-# which the owner check requires to be trusted before any ACE is looked at.
+# Placeholders that grant nothing to a stranger: no token carries CREATOR OWNER
+# / CREATOR GROUP (on inheritance they become whoever creates the child, which
+# for SQLite's sidecars is this process), and OWNER RIGHTS resolves to the
+# owner, which the owner check reports on separately.
 _PLACEHOLDER_SIDS = frozenset({"S-1-3-0", "S-1-3-1", "S-1-3-4"})
 _EVERYONE_SID = "S-1-1-0"
 
@@ -485,6 +504,8 @@ def classify_windows_acl(
     dacl: Sequence[WindowsAce] | None,
     *,
     write_rights: int,
+    inherited_file_rights: int = 0,
+    volume_root: bool = False,
 ) -> WindowsAclVerdict:
     """Decide who other than this user and the OS can write (and read) an object.
 
@@ -498,17 +519,26 @@ def classify_windows_acl(
             grants Everyone full control.
         write_rights: The access mask that counts as "can write" for this kind
             of object (``WINDOWS_WRITE_RIGHTS``).
+        inherited_file_rights: Rights that, granted by an object-inherit ACE
+            (inherit-only or not), reach files created in this directory later
+            (``WINDOWS_INHERITED_WRITE_RIGHTS``). Zero for anything but the
+            database's own directory.
+        volume_root: The object is the root of its volume. A volume root
+            cannot be renamed or deleted, so ``DELETE`` on it grants nothing.
 
     Returns:
-        The verdict; the caller decides what refuses and what warns.
+        The verdict. The caller decides how to report it.
 
-    Conservative by design, every choice can only over-refuse: deny ACEs never
+    Conservative by design, every choice can only over-report: deny ACEs never
     cancel an allow (order reasoning is the trap), callback and object allows
     count as if their condition held, and an ACE type outside the allow/deny
     families is treated as an unknown trustee with full control, because its
-    SID cannot be located without knowing its layout. Inherit-only ACEs are
-    skipped: they do not apply to the object they sit on.
+    SID cannot be located without knowing its layout. An inherit-only ACE does
+    not apply to the object it sits on, so it counts only through
+    *inherited_file_rights*.
     """
+    if volume_root:
+        write_rights &= ~_DELETE
     trusted = {_normalise_sid(user_sid)} | _TRUSTED_OS_SIDS
     owner_trusted = _normalise_sid(owner_sid) in trusted
     if dacl is None:
@@ -521,8 +551,6 @@ def classify_windows_acl(
     writers: list[str] = []
     readers: list[str] = []
     for ace in dacl:
-        if ace.flags & _INHERIT_ONLY_ACE:
-            continue
         if ace.ace_type in _DENY_ACE_TYPES:
             continue
         if ace.ace_type in _ALLOW_ACE_TYPES and ace.sid is not None:
@@ -533,9 +561,12 @@ def classify_windows_acl(
             mask = _GENERIC_ALL
         if trustee in trusted or trustee in _PLACEHOLDER_SIDS:
             continue
-        if mask & write_rights and trustee not in writers:
+        applies_here = not ace.flags & _INHERIT_ONLY_ACE
+        writes = applies_here and mask & write_rights
+        writes_later = ace.flags & _OBJECT_INHERIT_ACE and mask & inherited_file_rights
+        if (writes or writes_later) and trustee not in writers:
             writers.append(trustee)
-        if mask & _FILE_READ_RIGHTS and trustee not in readers:
+        if applies_here and mask & _FILE_READ_RIGHTS and trustee not in readers:
             readers.append(trustee)
     return WindowsAclVerdict(
         owner_trusted=owner_trusted,
@@ -550,114 +581,150 @@ def _describe_sid(sid: str) -> str:
 
 
 class _UnverifiableWindowsAcl(Exception):
-    """The volume or server gave no security descriptor this code can judge."""
+    """The volume or the API gave no security descriptor this code can judge.
 
-    def __init__(self, api: str, error: str) -> None:
-        super().__init__(f"{api}: {error}")
-        self.api = api
-        self.error = error
+    ``reason`` is the true cause, ready to log: the API and Windows error
+    code, or the volume flag that is missing.
+    """
+
+    def __init__(self, reason: str, *, volume_serial: int | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.volume_serial = volume_serial
 
 
 @dataclass(frozen=True)
 class _WindowsSecurity:
     owner_sid: str
     dacl: tuple[WindowsAce, ...] | None
+    volume_serial: int | None = None
+    is_volume_root: bool = False
 
 
-_unverifiable_reported: set[tuple[str, str, str]] = set()
+_windows_notices_logged: set[tuple[int | None, str, str]] = set()
 
 
-def _accept_unverifiable_windows_acl(path: str, api: str, error: str) -> None:
-    """Decide what an unverifiable volume means: today, warn and proceed.
+def _log_windows_notice(path: str, volume_serial: int | None, text: str) -> None:
+    """Log one Windows permission finding, once per volume, path and finding.
 
-    FAT32/exFAT removable drives carry no ACLs at all, and some SMB servers
-    fail ``GetNamedSecurityInfoW`` or answer without an owner. Nothing about
-    who can write such a path can be known, so this neither refuses (which
-    would stop every library on a USB stick from opening) nor passes silently:
-    it logs a WARNING naming the path, the API and the error, once per process
-    per path, and the open continues with only the redirect, file-type and
-    identity checks. This is a product decision kept in one place: raising
-    ``TrustedSQLiteLocationError`` here turns every unverifiable volume into a
-    refusal.
+    Keyed on the volume serial as well as the path, so a different drive
+    mounted at the same letter (a USB stick swapped) is reported again, and on
+    the text, so a changed finding is reported again too.
     """
-    key = (path, api, error)
-    if key in _unverifiable_reported:
+    key = (volume_serial, path, text)
+    if key in _windows_notices_logged:
         return
-    _unverifiable_reported.add(key)
-    logger.warning(
-        "Cannot verify who can write %s: %s failed (%s). The volume carries no "
-        "readable Windows ACL (FAT32/exFAT, or a network server that does not "
-        "report one), so another account could replace the database or its "
-        "WAL/journal files without this check noticing. Opening it anyway; "
-        "keep libraries on an NTFS drive or under your user profile to be "
-        "protected.",
+    _windows_notices_logged.add(key)
+    logger.warning(text)
+
+
+def _accept_unverifiable_windows_acl(
+    path: str, reason: str, volume_serial: int | None = None
+) -> None:
+    """Decide what a path whose permissions cannot be read means: note it, open.
+
+    A FAT32/exFAT volume keeps no permissions at all, a network server may not
+    report them, and ``GetNamedSecurityInfoW`` can fail on an NTFS volume
+    (access denied, a sharing violation). None of these refuses the open; each
+    is logged once with its true cause. This is the one place that decides:
+    raising ``TrustedSQLiteLocationError`` here turns them into refusals.
+    """
+    _log_windows_notice(
         path,
-        api,
-        error,
+        volume_serial,
+        f"Could not read the Windows permissions of {path} ({reason}), so "
+        "PixlStash cannot tell whether other accounts can change it. Opening "
+        "it as usual.",
     )
 
 
+def _is_drive_root(path: str) -> bool:
+    """``C:\\`` or ``\\\\server\\share``: the top of a volume, by its spelling."""
+    drive, rest = os.path.splitdrive(path)
+    return bool(drive) and rest.strip("\\/") == ""
+
+
 def _check_windows_acl(path: str, *, kind: str, private: bool = False) -> None:
-    """Refuse *path* when its owner or DACL lets another principal write it.
+    """Report, never refuse, when *path*'s owner or DACL admits another account.
 
     *kind* is ``"directory"`` (the database's own directory), ``"ancestor"``
     or ``"file"`` (the database or a sidecar); see ``WINDOWS_WRITE_RIGHTS``.
-    Runs before any ``sqlite3.connect`` because it is called from the same
-    namespace walk and file checks POSIX uses.
+    Every finding is a WARNING that names the cause and the ``icacls`` or
+    ``takeown`` command that changes it; where a library lives is the owner's
+    choice. Only a path that vanished raises (from the reader), which the
+    sidecar loop tolerates and the main file treats like a failed ``lstat``.
     """
     try:
         security = _read_windows_security(path)
     except _UnverifiableWindowsAcl as exc:
-        _accept_unverifiable_windows_acl(path, exc.api, exc.error)
+        _accept_unverifiable_windows_acl(path, exc.reason, exc.volume_serial)
         return
-    user_sid = _windows_user_sid()
+    try:
+        user_sid = _windows_user_sid()
+    except _UnverifiableWindowsAcl as exc:
+        _accept_unverifiable_windows_acl(
+            path, f"this account's SID: {exc.reason}", security.volume_serial
+        )
+        return
     verdict = classify_windows_acl(
         security.owner_sid,
         user_sid,
         security.dacl,
         write_rights=WINDOWS_WRITE_RIGHTS[kind],
+        inherited_file_rights=WINDOWS_INHERITED_WRITE_RIGHTS[kind],
+        volume_root=security.is_volume_root,
     )
-    noun = "file" if kind == "file" else "directory"
+    serial = security.volume_serial
+    # Never suggest rewriting the permissions of a whole drive.
+    drive_root = security.is_volume_root or _is_drive_root(path)
     quoted = f'"{path}"'
     if not verdict.owner_trusted:
-        raise TrustedSQLiteLocationError(
-            f"SQLite {noun} {path} is owned by "
-            f"{_describe_sid(_normalise_sid(security.owner_sid))}, not this user "
-            f"({user_sid}), SYSTEM, Administrators or TrustedInstaller. If it is "
-            f"yours, take ownership with: takeown /F {quoted}"
+        fix = "" if drive_root else f" If it should be yours: takeown /F {quoted}"
+        _log_windows_notice(
+            path,
+            serial,
+            f"{path} is owned by "
+            f"{_describe_sid(_normalise_sid(security.owner_sid))}, not this "
+            f"account ({user_sid}), SYSTEM or Administrators; that is usual for a "
+            "drive or folder made on another computer. Opening it as usual." + fix,
         )
     if verdict.writers:
-        who = ", ".join(_describe_sid(sid) for sid in verdict.writers)
         if verdict.null_dacl:
-            fix = f"icacls {quoted} /reset"
-            what = "has no access list at all, so everyone can write it"
+            what = "has no permission list, so every account can change it"
+            fix = "" if drive_root else f" To limit it: icacls {quoted} /reset"
         else:
+            who = ", ".join(_describe_sid(sid) for sid in verdict.writers)
+            what = f"can also be changed by {who}"
             removable = " ".join(
                 f"*{sid}" for sid in verdict.writers if sid.startswith("S-")
             )
-            fix = (
-                f"icacls {quoted} /inheritance:d and then "
-                f"icacls {quoted} /remove:g {removable}"
-                if removable
-                else f"icacls {quoted} (inspect and remove the entry)"
-            )
-            what = f"can be written by {who}"
-        raise TrustedSQLiteLocationError(
-            f"SQLite {noun} {path} {what}, so another account could replace "
-            "the database or plant a WAL/journal file SQLite would replay. "
-            f"Remove that access with: {fix} - or move the library into a "
-            "folder under your user profile."
+            if drive_root:
+                fix = (
+                    " To keep it to your account, keep the library in a folder "
+                    "of its own rather than at the top of the drive."
+                )
+            elif removable:
+                fix = (
+                    f" To keep it to your account: icacls {quoted} "
+                    f"/inheritance:d and then icacls {quoted} /remove:g {removable}"
+                )
+            else:
+                fix = f" Its entries can be inspected with: icacls {quoted}"
+        _log_windows_notice(
+            path,
+            serial,
+            f"{path} {what}, who could then replace the database or add a "
+            "WAL/journal file it would read. Opening it as usual." + fix,
         )
     if private and kind == "file" and verdict.readers:
-        logger.warning(
-            "SQLite credential file %s can be read by %s; other accounts can "
-            "read it. Restrict it with: icacls %s /inheritance:d and then "
-            "icacls %s /remove:g %s",
+        readers = " ".join(f"*{sid}" for sid in verdict.readers if sid.startswith("S-"))
+        _log_windows_notice(
             path,
-            ", ".join(_describe_sid(sid) for sid in verdict.readers),
-            quoted,
-            quoted,
-            " ".join(f"*{sid}" for sid in verdict.readers if sid.startswith("S-")),
+            serial,
+            f"Credential file {path} can be read by "
+            f"{', '.join(_describe_sid(sid) for sid in verdict.readers)}. To "
+            f"keep it to your account: icacls {quoted} /inheritance:d and then "
+            f"icacls {quoted} /remove:g {readers}",
         )
 
 
@@ -676,8 +743,12 @@ _ACE_OBJECT_TYPE_PRESENT = 0x1
 _ACE_INHERITED_OBJECT_TYPE_PRESENT = 0x2
 _ERROR_FILE_NOT_FOUND = 2
 _ERROR_PATH_NOT_FOUND = 3
-_ERROR_ACCESS_DENIED = 5
 _ERROR_INSUFFICIENT_BUFFER = 122
+_ACL_REVISION = 2
+_FILE_ALL_ACCESS = 0x001F01FF
+_PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+# A SID's fixed part: revision, sub-authority count, 6-byte authority.
+_SID_HEADER_BYTES = 8
 
 
 class _AceHeader(ctypes.Structure):
@@ -751,6 +822,33 @@ def _win32() -> types.SimpleNamespace:
             dword,
             ctypes.POINTER(dword),
         ),
+        GetLengthSid=bind(advapi32, "GetLengthSid", dword, void_p),
+        ConvertStringSidToSidW=bind(
+            advapi32, "ConvertStringSidToSidW", bool_, ctypes.c_wchar_p, out_p
+        ),
+        InitializeAcl=bind(advapi32, "InitializeAcl", bool_, void_p, dword, dword),
+        AddAccessAllowedAceEx=bind(
+            advapi32,
+            "AddAccessAllowedAceEx",
+            bool_,
+            void_p,
+            dword,
+            dword,
+            dword,
+            void_p,
+        ),
+        SetNamedSecurityInfoW=bind(
+            advapi32,
+            "SetNamedSecurityInfoW",
+            dword,
+            ctypes.c_wchar_p,
+            ctypes.c_int,
+            dword,
+            void_p,
+            void_p,
+            void_p,
+            void_p,
+        ),
         GetCurrentProcess=bind(kernel32, "GetCurrentProcess", void_p),
         CloseHandle=bind(kernel32, "CloseHandle", bool_, void_p),
         LocalFree=bind(kernel32, "LocalFree", void_p, void_p),
@@ -801,10 +899,10 @@ def _local_free(api: types.SimpleNamespace, pointer: int | None, what: str) -> N
 
 def _sid_to_string(api: types.SimpleNamespace, sid: int) -> str:
     if not sid or not api.IsValidSid(sid):
-        raise TrustedSQLiteLocationError("Windows returned an invalid SID.")
+        raise _UnverifiableWindowsAcl("Windows returned an invalid SID")
     out = ctypes.c_void_p()
     if not api.ConvertSidToStringSidW(sid, ctypes.byref(out)):
-        raise TrustedSQLiteLocationError(
+        raise _UnverifiableWindowsAcl(
             _win_error("ConvertSidToStringSidW", ctypes.get_last_error())
         )
     try:
@@ -817,18 +915,17 @@ def _sid_to_string(api: types.SimpleNamespace, sid: int) -> str:
 def _windows_user_sid() -> str:
     """The process token's user SID, ``S-1-...``; constant for the process.
 
-    A failure here is not a property of any volume, so it refuses rather than
-    going through the unverifiable-volume decision: without our own SID no
-    owner or ACE can be judged.
+    Raises:
+        _UnverifiableWindowsAcl: the token could not be read; nothing can be
+            judged without it, and that is reported like any unreadable path.
     """
     api = _win32()
     token = ctypes.c_void_p()
     if not api.OpenProcessToken(
         api.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)
     ):
-        raise TrustedSQLiteLocationError(
-            "Could not determine the current Windows user: "
-            + _win_error("OpenProcessToken", ctypes.get_last_error())
+        raise _UnverifiableWindowsAcl(
+            _win_error("OpenProcessToken", ctypes.get_last_error())
         )
     try:
         needed = ctypes.c_uint32(0)
@@ -837,17 +934,13 @@ def _windows_user_sid() -> str:
         ):
             code = ctypes.get_last_error()
             if code != _ERROR_INSUFFICIENT_BUFFER or not needed.value:
-                raise TrustedSQLiteLocationError(
-                    "Could not determine the current Windows user: "
-                    + _win_error("GetTokenInformation", code)
-                )
+                raise _UnverifiableWindowsAcl(_win_error("GetTokenInformation", code))
         buffer = ctypes.create_string_buffer(needed.value)
         if not api.GetTokenInformation(
             token, _TOKEN_USER_CLASS, buffer, needed.value, ctypes.byref(needed)
         ):
-            raise TrustedSQLiteLocationError(
-                "Could not determine the current Windows user: "
-                + _win_error("GetTokenInformation", ctypes.get_last_error())
+            raise _UnverifiableWindowsAcl(
+                _win_error("GetTokenInformation", ctypes.get_last_error())
             )
         return _normalise_sid(_sid_to_string(api, _TokenUser.from_buffer(buffer).Sid))
     finally:
@@ -858,21 +951,21 @@ def _windows_user_sid() -> str:
             )
 
 
-def _volume_has_persistent_acls(api: types.SimpleNamespace, volume_root: str) -> bool:
-    """Whether the volume keeps ACLs at all; asked per call, never cached.
+def _volume_info(api: types.SimpleNamespace, volume_root: str) -> tuple[int, int]:
+    """``(serial, flags)`` of the volume at *volume_root*; asked per call.
 
-    A drive letter can be re-pointed at another volume while the process runs
-    (a USB stick swapped), so a cached answer could describe a volume that is
-    no longer there.
+    Never cached: a drive letter can be re-pointed at another volume while the
+    process runs (a USB stick swapped), and the serial is what tells them apart.
     """
+    serial = ctypes.c_uint32(0)
     flags = ctypes.c_uint32(0)
     if not api.GetVolumeInformationW(
-        volume_root, None, 0, None, None, ctypes.byref(flags), None, 0
+        volume_root, None, 0, ctypes.byref(serial), None, ctypes.byref(flags), None, 0
     ):
         raise _UnverifiableWindowsAcl(
-            "GetVolumeInformationW", _win_code(ctypes.get_last_error())
+            _win_error("GetVolumeInformationW", ctypes.get_last_error())
         )
-    return bool(flags.value & _FILE_PERSISTENT_ACLS)
+    return serial.value, flags.value
 
 
 def _volume_root(api: types.SimpleNamespace, path: str) -> str:
@@ -880,7 +973,7 @@ def _volume_root(api: types.SimpleNamespace, path: str) -> str:
     buffer = ctypes.create_unicode_buffer(max(len(path), 260) + 64)
     if not api.GetVolumePathNameW(path, buffer, len(buffer)):
         raise _UnverifiableWindowsAcl(
-            "GetVolumePathNameW", _win_code(ctypes.get_last_error())
+            _win_error("GetVolumePathNameW", ctypes.get_last_error())
         )
     return buffer.value
 
@@ -901,7 +994,16 @@ def _ace_sid_offset(
     else:
         # ACCESS_ALLOWED_ACE and the callback form: header, Mask, SidStart.
         offset = 8
-    if offset >= header.AceSize or not api.IsValidSid(ace + offset):
+    # Every byte of the SID must lie inside this ACE: a SID that runs past
+    # AceSize would be read out of the next ACE, or past the ACL.
+    if offset + _SID_HEADER_BYTES > header.AceSize:
+        return None
+    sub_authorities = ctypes.c_ubyte.from_address(ace + offset + 1).value
+    if offset + _SID_HEADER_BYTES + 4 * sub_authorities > header.AceSize:
+        return None
+    if not api.IsValidSid(ace + offset):
+        return None
+    if offset + api.GetLengthSid(ace + offset) > header.AceSize:
         return None
     return offset
 
@@ -914,16 +1016,14 @@ def _read_dacl(api: types.SimpleNamespace, dacl: int) -> tuple[WindowsAce, ...]:
         ctypes.sizeof(info),
         _ACL_SIZE_INFORMATION_CLASS,
     ):
-        raise TrustedSQLiteLocationError(
+        raise _UnverifiableWindowsAcl(
             _win_error("GetAclInformation", ctypes.get_last_error())
         )
     aces: list[WindowsAce] = []
     for index in range(info.AceCount):
         pointer = ctypes.c_void_p()
         if not api.GetAce(dacl, index, ctypes.byref(pointer)):
-            raise TrustedSQLiteLocationError(
-                _win_error("GetAce", ctypes.get_last_error())
-            )
+            raise _UnverifiableWindowsAcl(_win_error("GetAce", ctypes.get_last_error()))
         ace = pointer.value
         header = _AceHeader.from_address(ace)
         mask = ctypes.c_uint32.from_address(ace + 4).value
@@ -940,18 +1040,20 @@ def _read_windows_security(path: str) -> _WindowsSecurity:
     """Owner SID and DACL of *path*, read with ``GetNamedSecurityInfoW``.
 
     Raises:
-        _UnverifiableWindowsAcl: the volume keeps no ACLs, or the call failed
-            for any reason but the two below, or the descriptor carries no
-            owner (the unverifiable-volume case).
+        _UnverifiableWindowsAcl: the volume keeps no ACLs, or any Windows call
+            failed (access denied included), or the descriptor carries no
+            owner; the reason names the API and error code.
         TrustedSQLiteLocationError: the path vanished (chained from
-            ``FileNotFoundError``, which the sidecar loop tolerates), access to
-            the descriptor was denied, or a Windows API failed while walking a
-            descriptor it did return.
+            ``FileNotFoundError``, which the sidecar loop tolerates).
     """
     api = _win32()
-    if not _volume_has_persistent_acls(api, _volume_root(api, path)):
+    root = _volume_root(api, path)
+    serial, flags = _volume_info(api, root)
+    if not flags & _FILE_PERSISTENT_ACLS:
         raise _UnverifiableWindowsAcl(
-            "GetVolumeInformationW", "volume does not keep FILE_PERSISTENT_ACLS"
+            "the volume keeps no file permissions (no FILE_PERSISTENT_ACLS, "
+            "as on FAT32/exFAT)",
+            volume_serial=serial,
         )
     owner = ctypes.c_void_p()
     dacl = ctypes.c_void_p()
@@ -971,29 +1073,116 @@ def _read_windows_security(path: str) -> _WindowsSecurity:
             f"Could not inspect SQLite path {path}: "
             + _win_error("GetNamedSecurityInfoW", code)
         ) from FileNotFoundError(code, "not found", path)
-    if code == _ERROR_ACCESS_DENIED:
-        # Not an unverifiable volume: the owner always holds READ_CONTROL, so
-        # an object whose descriptor this account cannot read is one somebody
-        # else controls. Treating it as unverifiable would let a hostile owner
-        # opt out of the check by denying us READ_CONTROL.
-        raise TrustedSQLiteLocationError(
-            f"Cannot read who can write SQLite path {path} "
-            f"({_win_error('GetNamedSecurityInfoW', code)}); an object whose "
-            "permissions this account cannot read is not one it controls."
-        )
     if code:
-        raise _UnverifiableWindowsAcl("GetNamedSecurityInfoW", _win_code(code))
+        raise _UnverifiableWindowsAcl(
+            _win_error("GetNamedSecurityInfoW", code), volume_serial=serial
+        )
     try:
         if not owner.value:
             raise _UnverifiableWindowsAcl(
-                "GetNamedSecurityInfoW", "the security descriptor has no owner"
+                "GetNamedSecurityInfoW returned a security descriptor with no owner",
+                volume_serial=serial,
             )
-        return _WindowsSecurity(
-            owner_sid=_sid_to_string(api, owner.value),
-            dacl=None if not dacl.value else _read_dacl(api, dacl.value),
-        )
+        try:
+            return _WindowsSecurity(
+                owner_sid=_sid_to_string(api, owner.value),
+                dacl=None if not dacl.value else _read_dacl(api, dacl.value),
+                volume_serial=serial,
+                is_volume_root=os.path.normcase(path.rstrip("\\/"))
+                == os.path.normcase(root.rstrip("\\/")),
+            )
+        except _UnverifiableWindowsAcl as exc:
+            raise _UnverifiableWindowsAcl(exc.reason, volume_serial=serial) from exc
     finally:
         _local_free(api, descriptor.value, "security descriptor")
+
+
+def _apply_private_windows_dacl(path: str, *, is_directory: bool) -> None:
+    """Replace *path*'s DACL with a protected one: this account, SYSTEM, Admins.
+
+    Inheritance from the parent is switched off, so the folder the object sits
+    in no longer decides who can write it. On a directory the three ACEs carry
+    ``(OI)(CI)``, so what SQLite creates inside later - the ``-wal``, ``-shm``
+    and ``-journal`` sidecars - inherits the same three entries.
+
+    Raises:
+        _UnverifiableWindowsAcl: any Windows call failed; the reason names the
+            API and the error code.
+    """
+    api = _win32()
+    _serial, flags = _volume_info(api, _volume_root(api, path))
+    if not flags & _FILE_PERSISTENT_ACLS:
+        logger.info(
+            "Not restricting %s to this account: its volume keeps no file "
+            "permissions (no FILE_PERSISTENT_ACLS, as on FAT32/exFAT).",
+            path,
+        )
+        return
+    sids = list(dict.fromkeys((_windows_user_sid(), _SYSTEM_SID, _ADMINISTRATORS_SID)))
+    binary: list[int] = []
+    try:
+        for sid in sids:
+            pointer = ctypes.c_void_p()
+            if not api.ConvertStringSidToSidW(sid, ctypes.byref(pointer)):
+                raise _UnverifiableWindowsAcl(
+                    _win_error("ConvertStringSidToSidW", ctypes.get_last_error())
+                )
+            binary.append(pointer.value)
+        # ACL header (8) plus, per ACCESS_ALLOWED_ACE, header and mask (8) and
+        # the SID; DWORD-aligned as InitializeAcl requires.
+        size = 8 + sum(8 + api.GetLengthSid(sid) for sid in binary)
+        size = (size + 3) & ~3
+        acl = ctypes.create_string_buffer(size)
+        if not api.InitializeAcl(acl, size, _ACL_REVISION):
+            raise _UnverifiableWindowsAcl(
+                _win_error("InitializeAcl", ctypes.get_last_error())
+            )
+        inherit = (_OBJECT_INHERIT_ACE | _CONTAINER_INHERIT_ACE) if is_directory else 0
+        for sid in binary:
+            if not api.AddAccessAllowedAceEx(
+                acl, _ACL_REVISION, inherit, _FILE_ALL_ACCESS, sid
+            ):
+                raise _UnverifiableWindowsAcl(
+                    _win_error("AddAccessAllowedAceEx", ctypes.get_last_error())
+                )
+        code = api.SetNamedSecurityInfoW(
+            path,
+            _SE_FILE_OBJECT,
+            _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            acl,
+            None,
+        )
+        if code:
+            raise _UnverifiableWindowsAcl(_win_error("SetNamedSecurityInfoW", code))
+    finally:
+        for sid in binary:
+            _local_free(api, sid, "SID")
+
+
+def restrict_new_path_to_owner(path: str, *, is_directory: bool) -> None:
+    """On Windows, lock a file or folder PixlStash just created to this account.
+
+    The Windows counterpart of creating it ``0600``/``0700``: the mode argument
+    to ``os.open``/``mkdir`` means nothing there (before Python 3.13), so the
+    object would otherwise inherit whatever its parent folder grants. Call it
+    only on something this process has just created - never on a folder or
+    file the owner already had. A no-op elsewhere. A failure is logged as a
+    WARNING with the path and the Windows error and the object keeps the
+    permissions it inherited.
+    """
+    if os.name != "nt":
+        return
+    try:
+        _apply_private_windows_dacl(path, is_directory=is_directory)
+    except _UnverifiableWindowsAcl as exc:
+        logger.warning(
+            "Could not restrict %s to this account (%s); it keeps the "
+            "permissions inherited from its folder.",
+            path,
+            exc.reason,
+        )
 
 
 def _is_redirect(path: str) -> bool:
@@ -1220,6 +1409,7 @@ class TrustedSQLiteLocation:
                 ) from exc
             else:
                 os.close(created_fd)
+                restrict_new_path_to_owner(canonical, is_directory=False)
         parent_identity = _identity(os.lstat(os.path.dirname(canonical)))
         expected = _validate_file(canonical, private=private)
         _validate_sidecars(canonical, private=private)
@@ -1284,3 +1474,30 @@ class TrustedSQLiteLocation:
 
     def __exit__(self, *_args) -> None:
         self.close()
+
+
+@contextlib.contextmanager
+def checked_read_connection(
+    path: str, *, timeout: float = 5.0
+) -> Iterator[sqlite3.Connection]:
+    """A read-only connection to *path*, opened through the same checks.
+
+    For a short read of a vault or hub outside its long-lived engine: the
+    namespace, file and sidecars are validated before ``sqlite3.connect``,
+    and ``verify_after_open`` runs before the caller reads a row. The
+    connection closes before the guard does, because closing any descriptor on
+    the file drops this process's POSIX locks on it.
+
+    Raises:
+        TrustedSQLiteLocationError: the location failed a check.
+        sqlite3.Error: SQLite could not open the file.
+    """
+    with TrustedSQLiteLocation.open(path) as guard:
+        connection = sqlite3.connect(
+            sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=timeout
+        )
+        try:
+            guard.verify_after_open()
+            yield connection
+        finally:
+            connection.close()

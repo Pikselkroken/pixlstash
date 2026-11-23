@@ -32,6 +32,7 @@ from rapidfuzz.distance import Levenshtein
 import numpy as np
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.trusted_sqlite import restrict_new_path_to_owner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.tag_reset_registry import TagResetRegistry
 from pixlstash.utils.sqlite_uri import sqlite_url
@@ -1129,11 +1130,20 @@ class VaultDatabase:
             # Pre-create the database file 0600. Left to SQLite, a missing
             # database is created at 0644 & ~umask - group/world-readable
             # under the Debian/Ubuntu default umask 002. Doing it here covers
-            # every construction site, guarded or not. Without O_EXCL a lost
-            # race simply opens the other creator's file; the mode argument is
-            # ignored for an existing file.
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            os.close(os.open(self._db_path, flags, 0o600))
+            # every construction site, guarded or not. O_EXCL so that only the
+            # creator restricts it on Windows (where the mode means nothing):
+            # a lost race leaves the other creator's file as it is.
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                os.close(os.open(self._db_path, flags, 0o600))
+            except FileExistsError:
+                logger.debug(
+                    "Vault %s appeared before this process created it; another "
+                    "opener won the race, its file is used as it is.",
+                    self._db_path,
+                )
+            else:
+                restrict_new_path_to_owner(self._db_path, is_directory=False)
 
         self._engine = create_configured_engine(self._db_path)
 

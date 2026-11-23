@@ -18,7 +18,11 @@ from typing import Iterable
 
 from platformdirs import user_config_dir
 
-from pixlstash.trusted_sqlite import TrustedSQLiteLocation, TrustedSQLiteLocationError
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+    restrict_new_path_to_owner,
+)
 from pixlstash.utils.sqlite_uri import sqlite_file_uri
 
 
@@ -42,7 +46,9 @@ def mkdir_private(path: Path) -> None:
     ``Path.mkdir(parents=True, mode=0o700)`` applies the requested mode only to
     the leaf.  Under umask ``0002`` its missing parents still become ``0775``.
     Existing directories are never changed here; repairing them requires an
-    explicit user decision through :func:`repair_permission_issues`.
+    explicit user decision through :func:`repair_permission_issues`. On
+    Windows, where the mode means nothing, each directory this call creates is
+    restricted to this account instead (``restrict_new_path_to_owner``).
     """
 
     missing: list[Path] = []
@@ -53,7 +59,35 @@ def mkdir_private(path: Path) -> None:
             break
         current = current.parent
     for directory in reversed(missing):
-        directory.mkdir(mode=0o700, exist_ok=True)
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            # Another process made it in the meantime: not ours to restrict.
+            if not directory.is_dir():
+                raise
+            continue
+        restrict_new_path_to_owner(str(directory), is_directory=True)
+
+
+def makedirs_private(path: str | os.PathLike[str]) -> None:
+    """``os.makedirs(path, mode=0o700, exist_ok=True)``, locking what it creates.
+
+    Raises exactly as ``os.makedirs`` does - an empty path or an existing file
+    still fails - and every component it actually creates is restricted to this
+    account on Windows, as :func:`mkdir_private` does. Existing directories are
+    left as they are.
+    """
+    missing: list[str] = []
+    current = os.path.abspath(os.fspath(path)) if os.fspath(path) else ""
+    while current and not os.path.lexists(current):
+        missing.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    for directory in reversed(missing):
+        restrict_new_path_to_owner(directory, is_directory=True)
 
 
 @dataclass(frozen=True)

@@ -895,12 +895,12 @@ class TestHostileSidecarRefusal:
       the sidecar loop deleted.
 
     Windows: ``st_mode``/``st_uid`` are synthesised there, so the sidecar's
-    owner SID and DACL carry the verdict instead. Under the suite's ``nt``
-    simulation the ctypes reader is replaced by vectors
-    (``tests/windows_acl_vectors.py``) and the last tests below assert the
-    refusal and its positive control; the reader itself is exercised against
-    real files in ``tests/test_trusted_sqlite_windows_acl.py`` on the Windows
-    lane.
+    owner SID and DACL are read instead, and - by the owner's decision - a
+    sidecar another account can write is reported, not refused. Under the
+    suite's ``nt`` simulation the ctypes reader is replaced by vectors
+    (``tests/windows_acl_vectors.py``) and the last tests below assert that
+    report, naming the sidecar, and its silent positive control; the reader
+    itself is exercised in ``tests/test_trusted_sqlite_windows_acl.py``.
     """
 
     @staticmethod
@@ -998,14 +998,14 @@ class TestHostileSidecarRefusal:
             first.close()
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
-    def test_windows_refuses_a_sidecar_another_principal_can_write(
-        self, tmp_path, monkeypatch, suffix
+    def test_windows_reports_a_sidecar_another_principal_can_write(
+        self, tmp_path, monkeypatch, suffix, caplog
     ):
-        """On ``nt`` the sidecar's DACL is judged, and an Everyone grant refuses.
+        """On ``nt`` the sidecar's DACL is read, and an Everyone grant is reported.
 
         Only the sidecar is hostile: the directory and the main file answer
-        with the profile default, so the refusal can only come from the
-        sidecar loop, and it comes from ``open()`` - before any connect.
+        with the profile default, so the report can only come from the sidecar
+        loop, and it comes from ``open()`` - before any connect.
         """
         path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
         monkeypatch.setattr(os, "name", "nt")
@@ -1018,16 +1018,14 @@ class TestHostileSidecarRefusal:
             },
         )
 
-        with pytest.raises(TrustedSQLiteLocationError) as raised:
-            TrustedSQLiteLocation.open(
-                path, private=True, trusted_root=os.path.dirname(path)
-            )
-        assert sidecar in str(raised.value)
-        assert "Everyone" in str(raised.value)
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+        assert _warned(caplog, f"{sidecar} can also be changed by Everyone")
 
     @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
     def test_windows_opens_a_sidecar_with_the_profile_default_acl(
-        self, tmp_path, monkeypatch, suffix
+        self, tmp_path, monkeypatch, suffix, caplog
     ):
         """The other direction: SQLite's own sidecars inherit the profile ACL."""
         path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
@@ -1038,6 +1036,7 @@ class TestHostileSidecarRefusal:
             path, private=True, trusted_root=os.path.dirname(path)
         ).close()
         assert sidecar in seen
+        assert not _warned(caplog, sidecar)
 
     def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
         self, tmp_path, monkeypatch
