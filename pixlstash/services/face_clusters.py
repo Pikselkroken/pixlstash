@@ -15,6 +15,9 @@ picked as who the person *is*.
   "typical" means.
 * :func:`ranked_by_likeness` ranks every face against one chosen face: the
   cluster view's centred ranking. Nothing is stored.
+* :func:`seeded_cluster` ranks every face against the centre of picked
+  pictures' faces, and :func:`probable_faces` finds unassigned faces near that
+  centre: the cluster view's "From your picks". Nothing is stored.
 * The **reference cluster** is stored as picture ids at the moment of the pick
   (``CharacterReferenceMember``) and frozen: a picture added later never
   joins it. An id whose picture is deleted or no longer carries the person's
@@ -152,9 +155,7 @@ def cluster_faces(
             unclustered.append(faces[indices[0]][0])
             continue
         vecs = units[indices]
-        sims = vecs @ vecs.T
-        n = len(indices)
-        cohesion = float((sims.sum() - n) / (n * (n - 1)))
+        cohesion = _cohesion(vecs)
         members = sorted(
             zip((faces[i][0] for i in indices), centrality(vecs), strict=True),
             key=lambda m: (-m[1], m[0]),
@@ -162,6 +163,47 @@ def cluster_faces(
         clusters.append(Cluster(members, cohesion, centroid(vecs)))
     clusters.sort(key=lambda c: (-len(c.members), c.members[0][0]))
     return clusters, sorted(unclustered)
+
+
+def _cohesion(units: np.ndarray) -> float:
+    """The mean likeness between every two of the unit *units*; 1.0 for one."""
+    n = len(units)
+    if n < 2:
+        return 1.0
+    return float(((units @ units.T).sum() - n) / (n * (n - 1)))
+
+
+def seeded_cluster(
+    faces: list[tuple[int, np.ndarray]], seed_ids
+) -> tuple[Cluster, list[int]]:
+    """Every one of *faces* ranked by likeness to the centre of the seeds' faces.
+
+    The centroid of the seeds ranks faces in the same order as their mean
+    likeness to each seed (that mean is ``|m|`` times the centroid likeness, ``m``
+    the seeds' mean), so one centre serves both readings.
+
+    Args:
+        faces: ``(picture_id, embedding)``, one face per picture.
+        seed_ids: The picked picture ids.
+
+    Returns:
+        ``(cluster, ignored)``: the cluster's members are all of *faces*, most
+        alike first, its cohesion how well the seeds hold together; *ignored*
+        the seed ids with no face in *faces*.
+
+    Raises:
+        ValueError: No seed has a face in *faces*.
+    """
+    wanted = set(seed_ids)
+    seeds = [vec for pid, vec in faces if pid in wanted]
+    if not seeds:
+        raise ValueError(f"None of the seeds {sorted(wanted)} has a face here")
+    ignored = sorted(wanted - {pid for pid, _ in faces})
+    centre = centroid(seeds)
+    cluster = Cluster(
+        ranked_by_likeness(faces, centre), _cohesion(_unit(seeds)), centre
+    )
+    return cluster, ignored
 
 
 @dataclass
@@ -227,6 +269,73 @@ def person_faces(
     # Embeddings of another width (a pack change mid-refresh) cannot be compared.
     width = Counter(face.vector.size for face in out).most_common(1)
     return [face for face in out if width and face.vector.size == width[0][0]]
+
+
+def _unassigned_rows(session: Session, character_id: int, model_pack: str | None):
+    """Unassigned faces with an embedding, on live pictures with no face of the
+    person; filtered by *model_pack* as :func:`person_faces` filters."""
+    carrying = select(Face.picture_id).where(Face.character_id == character_id)
+    rows = session.exec(
+        select(
+            Face.id,
+            Face.picture_id,
+            Face.features,
+            Face.model_pack,
+            Picture.score,
+            Picture.source_picture_id,
+            Picture.format,
+            Picture.width,
+            Picture.height,
+            Picture.thumbnail_width,
+            Picture.thumbnail_height,
+            Picture.orientation,
+        )
+        .join(Picture, Face.picture_id == Picture.id)
+        .where(
+            Face.character_id.is_(None),
+            Face.features.is_not(None),
+            Picture.deleted.is_(False),
+            Face.picture_id.not_in(carrying),
+        )
+    ).all()
+    packs = {row[3] for row in rows}
+    if model_pack and packs != {None}:
+        rows = [row for row in rows if row[3] == model_pack]
+    return rows
+
+
+def probable_faces(
+    vault,
+    character_id: int,
+    model_pack: str | None,
+    centre: np.ndarray,
+    floor: float = STRICTNESS["loose"],
+    limit: int = 200,
+) -> list[tuple[int, PersonFace, float]]:
+    """Unassigned faces that look like *centre*: "probably" the person.
+
+    The best face of each picture without one of the person's, at or above
+    *floor*, most alike first, at most *limit*.
+
+    Returns:
+        ``(face_id, face, likeness)`` for each.
+    """
+    # ponytail: full scan of unassigned faces; a vector index if libraries pass ~100k faces
+    rows = vault.db.run_immediate_read_task(_unassigned_rows, character_id, model_pack)
+    best: dict[int, tuple[int, PersonFace, float]] = {}
+    for face_id, pid, features, _pack, score, source, fmt, *shape in rows:
+        vec = vector(features)
+        # Embeddings of another width cannot be compared.
+        if vec is None or vec.size != centre.size:
+            continue
+        value = likeness(vec, centre)
+        if value >= floor and (pid not in best or value > best[pid][2]):
+            best[pid] = (
+                face_id,
+                PersonFace(pid, vec, score, source, fmt, *shape),
+                value,
+            )
+    return sorted(best.values(), key=lambda m: (-m[2], m[1].picture_id))[:limit]
 
 
 def sheet_panels(faces: list[PersonFace]) -> set[int]:

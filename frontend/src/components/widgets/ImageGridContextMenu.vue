@@ -765,6 +765,23 @@
                 COMPARE_NOTES[compareBlockReason]
               }}</span>
             </button>
+            <!-- Mirrors SelectionMenu.vue. -->
+            <button
+              class="ctx-item"
+              :disabled="!!seedClusterReason"
+              data-testid="start-cluster"
+              @click="delegate('start-cluster')"
+            >
+              <Tooltip
+                :text="seedClusterReason || `Group ${seedPersonName}'s faces that look like these`"
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-account-search-outline</v-icon>
+              Start a cluster from these…
+              <span v-if="seedClusterReason" class="ctx-meta">{{
+                SEED_NOTES[seedClusterReason]
+              }}</span>
+            </button>
           </div>
         </div>
         <div class="ctx-sep" />
@@ -883,6 +900,7 @@ import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import { COMPARE_NOTES } from "../../utils/compare";
+import { SEED_NOTES } from "../../utils/seedCluster";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { isVideo } from "../../utils/media";
 import { serverIsOnThisMachine } from "../../utils/serverLocation";
@@ -931,6 +949,9 @@ const props = defineProps({
   rotateBlockReason: { type: String, default: null },
   // Why Compare is greyed (`compareBlockReason`), or null for two pictures.
   compareBlockReason: { type: String, default: null },
+  // Why "Start a cluster from these…" is greyed, and the person it groups.
+  seedClusterReason: { type: String, default: null },
+  seedPersonName: { type: String, default: null },
   // Reason string when at least one selected picture is frozen by a locked set;
   // gates the label-data actions (tag / auto-tag / description / delete) and is
   // shown as their tooltip. Null when nothing in the selection is locked.
@@ -1005,6 +1026,7 @@ const emit = defineEmits([
   "run-workflow",
   "edit-pictures",
   "compare-pictures",
+  "start-cluster",
   "use-as-input",
   "segment",
   "detect-faces",

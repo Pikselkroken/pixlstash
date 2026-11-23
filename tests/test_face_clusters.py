@@ -1,5 +1,7 @@
 """Face clusters, on synthetic embeddings (no server)."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -9,10 +11,13 @@ from pixlstash.services import face_clusters
 from pixlstash.services.face_clusters import (
     NotThePersonsFace,
     centrality,
+    centroid,
     cluster_faces,
+    probable_faces,
     ranked_by_likeness,
     reference_cluster_faces,
     reference_cluster_ids,
+    seeded_cluster,
     set_reference_cluster,
     vector,
 )
@@ -67,6 +72,106 @@ def test_ranked_by_likeness_puts_the_centre_first_and_its_twin_above_others():
         order.index(p) for p in range(1, 6)
     )
     assert ranked_by_likeness([], centre) == []
+
+
+def test_a_seeded_cluster_ranks_every_face_by_the_picks_centre():
+    a, b = _person(), _person()
+    faces = _faces_of(a, range(1, 9)) + _faces_of(b, range(11, 16))
+    cluster, ignored = seeded_cluster(faces, [1, 2, 3, 77])
+    assert ignored == [77]
+    assert sorted(pid for pid, _ in cluster.members) == sorted(p for p, _ in faces)
+    values = [v for _, v in cluster.members]
+    assert values == sorted(values, reverse=True)
+    order = [pid for pid, _ in cluster.members]
+    assert max(order.index(p) for p in range(1, 9)) < min(
+        order.index(p) for p in range(11, 16)
+    )
+    by_id = dict(faces)
+    expected = centroid([by_id[1], by_id[2], by_id[3]])
+    assert cluster.centroid == pytest.approx(expected)
+    assert 0 < cluster.cohesion < 1
+
+
+def test_the_seeds_centroid_ranks_as_their_mean_likeness():
+    """Why the seeded cluster ranks by one centre (#2738): mean likeness to each
+    seed is the centroid likeness times a constant, so the order is the same."""
+    a = _person()
+    faces = _faces_of(a, range(1, 30), spread=1.2)
+    seeds = [1, 5, 9, 14]
+    cluster, _ = seeded_cluster(faces, seeds)
+    units = {pid: vec / np.linalg.norm(vec) for pid, vec in faces}
+    mean = {
+        pid: float(np.mean([units[pid] @ units[s] for s in seeds])) for pid in units
+    }
+    assert [pid for pid, _ in cluster.members] == sorted(
+        units, key=lambda pid: (-mean[pid], pid)
+    )
+
+
+def test_a_single_seed_holds_together_perfectly_and_no_seed_is_refused():
+    faces = _faces_of(_person(), range(1, 5))
+    cluster, ignored = seeded_cluster(faces, [2])
+    assert cluster.cohesion == 1.0 and ignored == []
+    assert cluster.members[0] == (2, pytest.approx(1.0))
+    with pytest.raises(ValueError):
+        seeded_cluster(faces, [98, 99])
+
+
+def test_probable_faces_are_unassigned_look_alikes_on_other_pictures():
+    """The best unassigned face a picture, never on a picture with the person's
+    face, nor someone else's face, nor below the floor (an in-memory vault)."""
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    a, stranger = _person(), _person()
+    with Session(engine) as session:
+        person, other = Character(name="Wren"), Character(name="Ida")
+        session.add_all([person, other])
+        pictures = [Picture() for _ in range(6)]
+        session.add_all(pictures)
+        session.commit()
+        hers, alike, twice, others, far, gone = (p.id for p in pictures)
+        pictures[5].deleted = True
+
+        def face(pid, index, vec, character=None):
+            return Face(
+                picture_id=pid,
+                face_index=index,
+                character_id=character,
+                features=vec.astype(np.float32).tobytes(),
+            )
+
+        near = a + RNG.standard_normal(DIM) * 0.2
+        session.add_all(
+            [
+                face(hers, 0, a, person.id),
+                face(hers, 1, near),  # beside her own face: already ranked
+                face(alike, 0, near),
+                # Two look-alikes on one picture: the better one counts.
+                face(twice, 0, a + RNG.standard_normal(DIM) * 0.1),
+                face(twice, 1, near),
+                face(others, 0, near, other.id),
+                face(far, 0, stranger),
+                face(gone, 0, near),
+                face(alike, 1, a[: DIM // 2]),  # another width: not comparable
+            ]
+        )
+        session.commit()
+        vault = SimpleNamespace(
+            db=SimpleNamespace(
+                run_immediate_read_task=lambda fn, *args: fn(session, *args)
+            )
+        )
+        found = probable_faces(vault, person.id, None, a)
+        assert [f.picture_id for _, f, _ in found] == [twice, alike]
+        twice_face = session.exec(
+            select(Face).where(Face.picture_id == twice, Face.face_index == 0)
+        ).one()
+        assert found[0][0] == twice_face.id
+        assert all(value >= 0.35 for *_, value in found)
+        assert [
+            f.picture_id
+            for _, f, _ in probable_faces(vault, person.id, None, a, limit=1)
+        ] == [twice]
 
 
 def test_a_single_face_is_unclustered():

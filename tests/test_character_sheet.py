@@ -1538,6 +1538,85 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
     missing = client.get(f"{clusters_url}&centre=999999")
     assert missing.status_code == 422, missing.text
 
+    # #2738: seeded from picked pictures. Two more pictures, neither hers: one
+    # with an unassigned look-alike of B, one with another person's B-like face.
+    files = []
+    for n in range(2):
+        buffer = io.BytesIO()
+        _sheet([("x", 60 + 50 * n, 0, 300)], size=(640, 384)).save(buffer, "PNG")
+        files.append(("file", (f"seedextra{n}.png", buffer.getvalue(), "image/png")))
+    status = upload_pictures_and_wait(client, files)
+    assert status["status"] == "completed", status
+    look_alike, others = (r["picture_id"] for r in status["results"])
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        read = client.post(url, json={"picture_ids": [look_alike, others]}).json()
+        if all(sheet["faces_read"] for sheet in read["sheets"]):
+            break
+        time.sleep(0.5)
+    other_id = _new_character(client, "Cluster Ida's double")
+
+    def add_look_alikes(session):
+        for pid, character, owner in (
+            (look_alike, None, look_alike),
+            (others, other_id, others),
+            # Beside her own face: already ranked, never "probably" too.
+            (b_ids[0], None, b_ids[0]),
+        ):
+            session.add(
+                Face(
+                    picture_id=owner,
+                    face_index=101,
+                    character_id=character,
+                    features=(b + rng.normal(size=512) * 0.3)
+                    .astype(np.float32)
+                    .tobytes(),
+                    model_pack=DEFAULT_MODEL_PACK,
+                )
+            )
+        session.commit()
+
+    client.server.vault.db.run_task(add_look_alikes)
+    seeds = [b_ids[0], b_ids[1], others]
+    seeded_body = client.get(
+        clusters_url + "".join(f"&seed={pid}" for pid in seeds)
+    ).json()
+    # The automatic clusters keep their order: "Cluster N" is still the filter's.
+    assert seeded_body["clusters"] == client.get(clusters_url).json()["clusters"]
+    assert seeded_body["seeds_ignored"] == [others]
+    seeded = seeded_body["seeded"]
+    assert seeded["is_reference"] is False and seeded["size"] == 9
+    by_pid = {m["picture_id"]: m for m in seeded["members"]}
+    assert {pid for pid, m in by_pid.items() if m["pinned"]} == set(b_ids[:2])
+    order = [m["picture_id"] for m in seeded["members"]]
+    assert max(order.index(pid) for pid in b_ids) < min(
+        order.index(pid) for pid in a_ids
+    )
+    values = [m["centrality"] for m in seeded["members"]]
+    assert values == sorted(values, reverse=True)
+    probable = by_pid[look_alike]
+    assert probable["probable"] and not probable["pinned"]
+    face_id = client.server.vault.db.run_task(
+        lambda session: session.exec(
+            select(Face.id).where(Face.picture_id == look_alike, Face.face_index == 101)
+        ).one()
+    )
+    assert probable["face_id"] == face_id
+    assert others not in by_pid
+    assert not by_pid[b_ids[0]]["probable"] and by_pid[b_ids[0]]["face_id"] is None
+    assert all(
+        m["probable"] is False for m in by_pid.values() if m["picture_id"] in ids
+    )
+    # A picked look-alike is left out, never also "probably" theirs.
+    picked = client.get(f"{clusters_url}&seed={b_ids[0]}&seed={look_alike}").json()
+    assert picked["seeds_ignored"] == [look_alike]
+    assert look_alike not in {m["picture_id"] for m in picked["seeded"]["members"]}
+    assert client.get(clusters_url).json()["seeded"] is None
+    nobody = client.get(f"{clusters_url}&seed={look_alike}&seed=999999")
+    assert nobody.status_code == 422, nobody.text
+    too_many = client.get(clusters_url + "&seed=1" * 501)
+    assert too_many.status_code == 422, too_many.text
+
     cluster_url = f"{API_PREFIX}/characters/{character_id}/reference-cluster"
     put = client.put(cluster_url, json={"picture_ids": b_ids})
     assert put.status_code == 200, put.text
