@@ -2669,11 +2669,8 @@ class TestLegacyAndRegistryReadsAreChecked:
             bootstrap_hub(folder, hub_path)
         monkeypatch.undo()
 
-        reopened = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as reopened:
             assert reopened.fetchone("SELECT COUNT(*) FROM user")[0] == 0
-        finally:
-            reopened.close()
 
     def test_an_ordinary_legacy_migration_still_copies_the_owner(self, paths):
         hub_path, folder = paths
@@ -2756,13 +2753,10 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
     def test_a_foreign_owned_legacy_vault_is_not_prepared(self, paths, windows):
         hub_path, folder = paths
         vault_path = os.path.join(os.path.realpath(folder), "vault.db")
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             windows({vault_path: security(owner=SOMEONE_ELSE)})
             with pytest.raises(HubBootstrapError, match="does not import a login"):
                 prepare_legacy_identity(hub, folder)
-        finally:
-            hub.close()
 
     @pytest.mark.parametrize("suffix", ["-wal", "-journal"])
     def test_a_foreign_owned_sidecar_is_not_imported_from(self, paths, windows, suffix):
@@ -2770,13 +2764,10 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
         vault_path = os.path.join(os.path.realpath(folder), "vault.db")
         with open(vault_path + suffix, "wb"):
             pass
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             windows({vault_path + suffix: security(owner=SOMEONE_ELSE)})
             with pytest.raises(HubBootstrapError, match="does not import a login"):
                 prepare_legacy_identity(hub, folder)
-        finally:
-            hub.close()
 
     def test_a_vault_of_ours_in_a_folder_others_can_write_is_prepared(
         self, paths, windows, caplog
@@ -2784,8 +2775,7 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
         """The other direction: an ordinary ``D:\\\\`` folder must still upgrade."""
         hub_path, folder = paths
         resolved = os.path.realpath(folder)
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             modify = profile_default_dacl() + (
                 allow(AUTHENTICATED_USERS, 0x001301BF, flags=0x03),
             )
@@ -2796,8 +2786,6 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
                 }
             )
             library = prepare_legacy_identity(hub, folder)
-        finally:
-            hub.close()
 
         assert library.identity_migration_state == "pending"
         assert any(
@@ -2810,27 +2798,21 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
     ):
         hub_path, folder = paths
         vault_path = os.path.join(os.path.realpath(folder), "vault.db")
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             windows()
             library = prepare_legacy_identity(hub, folder)
             windows({vault_path: security(owner=SOMEONE_ELSE)})
             with pytest.raises(HubBootstrapError, match="does not import a login"):
                 bootstrap_module._copy_legacy_identity_if_needed(hub, library)
             assert hub.fetchone("SELECT COUNT(*) FROM user")[0] == 0
-        finally:
-            hub.close()
 
     def test_a_vault_of_ours_is_copied(self, paths, windows):
         hub_path, folder = paths
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             windows()
             library = prepare_legacy_identity(hub, folder)
             assert bootstrap_module._copy_legacy_identity_if_needed(hub, library)
             assert hub.fetchone("SELECT username FROM user")[0] == "owner"
-        finally:
-            hub.close()
 
     def test_a_vault_swapped_right_after_its_owner_was_read_is_not_imported(
         self, paths, windows, monkeypatch
@@ -2861,8 +2843,7 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
                     os.replace(planted, vault_path)
             return answer
 
-        hub = HubDatabase(hub_path)
-        try:
+        with HubDatabase(hub_path) as hub:
             windows()
             monkeypatch.setattr(trusted_sqlite_module, "_read_windows_security", read)
             with pytest.raises(HubBootstrapError):
@@ -2872,5 +2853,3 @@ class TestAWindowsLegacyLoginIsImportedOnlyFromThisAccountsFiles:
                 hub.fetchone("SELECT COUNT(*) FROM identity_migration_operation")[0]
                 == 0
             )
-        finally:
-            hub.close()
