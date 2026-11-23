@@ -1969,7 +1969,9 @@ def checked_read_connection(
     ``(st_dev, st_ino)`` again before the caller reads a row. No descriptor
     other than SQLite's own is opened on the file, so the live engine's POSIX
     locks survive the read. *require_trusted_owner* is passed to
-    :meth:`TrustedSQLiteLocation.open` (the legacy login import only).
+    :meth:`TrustedSQLiteLocation.open` (the legacy login import only); with it
+    the caller reads inside one read transaction whose snapshot - and so
+    whose ``-wal`` - is fixed before ``verify_after_open`` checks it.
 
     Raises:
         TrustedSQLiteLocationError: the location failed a check.
@@ -1982,7 +1984,18 @@ def checked_read_connection(
             sqlite_file_uri(guard.path, read_only=True), uri=True, timeout=timeout
         )
         try:
+            if require_trusted_owner:
+                # SQLite opens an existing -wal, and fixes the snapshot it
+                # reads, at the first read of a transaction - not at connect.
+                # Begin that transaction and read once *before* the check, so
+                # verify_after_open judges the -wal this read actually uses; a
+                # -wal planted afterwards is outside the snapshot the caller
+                # reads, which is held until the caller is done.
+                connection.execute("BEGIN")
+                connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
             guard.verify_after_open()
             yield connection
         finally:
+            if connection.in_transaction:
+                connection.rollback()
             connection.close()

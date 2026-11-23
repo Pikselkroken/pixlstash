@@ -20,6 +20,7 @@ import ctypes
 import sqlite3
 import errno
 import os
+import shutil
 import struct
 import subprocess
 import types
@@ -1254,6 +1255,73 @@ class TestTheLoginImportRequiresATrustedOwner:
                 guard.verify_after_open()
         finally:
             guard.close()
+
+    def test_an_owner_change_on_the_same_file_after_open_is_refused_at_verify(
+        self, vault, monkeypatch
+    ):
+        """R4-2: the identity pin proves it is the same file, not the same
+        owner. An account with WRITE_OWNER, or the take-ownership privilege,
+        can make the approved file its own between open and verify; for a
+        login import that owner change is itself the signal."""
+        install_fake_windows_security(monkeypatch)
+        guard = TrustedSQLiteLocation.open(vault, require_trusted_owner=True)
+        try:
+            install_fake_windows_security(
+                monkeypatch, {vault: security(owner=SOMEONE_ELSE)}
+            )
+            with pytest.raises(TrustedSQLiteLocationError, match="does not import"):
+                guard.verify_after_open()
+        finally:
+            guard.close()
+
+    def test_a_wal_planted_after_the_check_is_not_what_the_import_reads(
+        self, tmp_path, monkeypatch
+    ):
+        """R4-1, the reviewer's reproduction: SQLite opens a -wal at the first
+        read, not at connect. One planted between ``verify_after_open`` and
+        the caller's first row - the attacker's frames, owned by them - must
+        not be what the import reads."""
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        vault = str(directory / "vault.db")
+        connection = sqlite3.connect(vault)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE user (name TEXT)")
+        connection.execute("INSERT INTO user VALUES ('legit-owner')")
+        connection.commit()
+        connection.close()
+        assert not os.path.exists(vault + "-wal")
+        attacker = tmp_path / "attacker"
+        attacker.mkdir(mode=0o700)
+        shutil.copyfile(vault, attacker / "vault.db")
+        theirs = sqlite3.connect(str(attacker / "vault.db"))
+        theirs.execute("PRAGMA wal_autocheckpoint=0")
+        theirs.execute("UPDATE user SET name = 'attacker'")
+        theirs.commit()
+        planted = str(tmp_path / "planted-wal")
+        shutil.copyfile(str(attacker / "vault.db-wal"), planted)
+        theirs.close()
+        planted_inode = os.stat(planted).st_ino
+        monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
+        monkeypatch.setattr(
+            trusted_sqlite,
+            "_read_windows_security",
+            lambda path: security(
+                owner=SOMEONE_ELSE if os.lstat(path).st_ino == planted_inode else ME
+            ),
+        )
+
+        try:
+            with trusted_sqlite.checked_read_connection(
+                vault, require_trusted_owner=True
+            ) as read:
+                os.replace(planted, vault + "-wal")
+                row = read.execute("SELECT name FROM user").fetchone()
+        except TrustedSQLiteLocationError:
+            row = None
+
+        assert row != ("attacker",)
 
     def test_our_own_vault_in_a_loose_folder_is_read(self, vault, monkeypatch):
         loose = security(
