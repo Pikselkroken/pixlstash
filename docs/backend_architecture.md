@@ -4885,7 +4885,15 @@ locked: `create_private_file` (`CreateFileW`, `CREATE_NEW`,
 `create_private_directory` (`CreateDirectoryW`) pass a `SECURITY_ATTRIBUTES`
 whose DACL is *protected* (nothing inherited) and grants full control to this
 account, `SYSTEM` and `BUILTIN\Administrators` only, `(OI)(CI)` on folders.
-There is no instant at which the object carries its folder's permissions. An
+There is no instant at which the object carries its folder's permissions.
+Every path reaching `os.open`/`mkdir` there (and the guard's inode pin) first
+goes through `_safe_resolved_path`: the directory resolved with `realpath`,
+then `fullmatch` against `[^\x00\n]+` - the repository's CodeQL-recognised
+path-injection barrier, as in `routes/filesystem.py`. The final name is
+deliberately not resolved, or the barrier would follow the link
+`O_NOFOLLOW`/`FILE_FLAG_OPEN_REPARSE_POINT` refuse. Who may name such a path
+is the authz gate's job: every route that takes a host folder is owner-only
+(§16.3). An
 existing file or folder is never touched, and a folder another process created
 in the meantime is left as it was made. If the descriptor cannot be built, a
 WARNING names the path and the Windows error and the object is created as its
@@ -4896,7 +4904,9 @@ makes inherit the folder's owner-only entries. In a folder the user chose they
 inherit that folder's permissions - the user's choice. A sidecar *seen at a
 guarded open* (or in `verify_after_open`) that this account owns is given the
 protected owner-only DACL if it does not carry one already
-(`_lock_down_sidecar`). The rewrite goes through a handle opened with
+(`_lock_down_sidecar`) - after its findings are reported from the permissions
+it arrived with, so a hostile entry is never fixed out of sight. The rewrite
+goes through a handle opened with
 `FILE_FLAG_OPEN_REPARSE_POINT`, and only when `GetFileInformationByHandle`
 shows a regular file with one link at the volume serial and file index just
 `lstat`-ed, still owned by this account (`GetSecurityInfo`); then
