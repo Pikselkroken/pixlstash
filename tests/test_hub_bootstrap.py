@@ -2558,3 +2558,160 @@ class TestOpeningTheRegisteredVault:
         assert not os.path.exists(vault_path), "the replacement is made by the open"
         # Without this the new vault would be refused for carrying no fingerprint.
         assert double._hub_bootstrap.library.vault_uuid is None
+
+
+class TestLegacyAndRegistryReadsAreChecked:
+    """Every short read of a vault goes through the same checks as its open.
+
+    These readers used to call ``sqlite3.connect`` on the path directly, so a
+    vault the guarded open would refuse - here one owned by another account -
+    still had its owner, tokens, fingerprint and folders read, and its identity
+    copied into the hub. Each now opens through ``checked_read_connection``.
+    The foreign owner is faked on the vault's own ``lstat`` (the attacker's
+    artifact), not via ``os.geteuid``, so the directory checks are untouched
+    and only the file check can refuse. Every refusal is paired with the
+    ordinary read still working.
+    """
+
+    @staticmethod
+    def _foreign_owned(monkeypatch, vault_path):
+        real_lstat = os.lstat
+        target = os.path.realpath(vault_path)
+
+        class _ForeignOwnerStat:
+            def __init__(self, info):
+                self._info = info
+                self.st_uid = info.st_uid + 1
+
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda p, *a, **k: (
+                _ForeignOwnerStat(real_lstat(p, *a, **k))
+                if str(p) == target
+                else real_lstat(p, *a, **k)
+            ),
+        )
+
+        def no_connect(*_args, **_kwargs):
+            raise AssertionError("sqlite3.connect ran before the location check")
+
+        monkeypatch.setattr(sqlite3, "connect", no_connect)
+
+    def test_a_legacy_owner_is_found_in_an_ordinary_vault(self, paths):
+        _hub_path, folder = paths
+
+        assert bootstrap_module._legacy_owner_present(os.path.join(folder, "vault.db"))
+
+    def test_a_foreign_owned_legacy_vault_is_not_offered(self, paths, monkeypatch):
+        _hub_path, folder = paths
+        vault_path = os.path.join(folder, "vault.db")
+        self._foreign_owned(monkeypatch, vault_path)
+
+        assert not bootstrap_module._legacy_owner_present(vault_path)
+
+    def test_a_foreign_owned_legacy_vault_cannot_be_prepared(self, paths, monkeypatch):
+        hub_path, folder = paths
+        hub = HubDatabase(hub_path)
+        try:
+            self._foreign_owned(monkeypatch, os.path.join(folder, "vault.db"))
+            with pytest.raises(HubBootstrapError, match="not this user"):
+                prepare_legacy_identity(hub, folder)
+        finally:
+            monkeypatch.undo()
+            hub.close()
+
+    def test_preparation_reads_the_owner_through_the_checks_itself(
+        self, paths, monkeypatch
+    ):
+        """Not only through ``validate_vault_folder`` ahead of it: the read that
+        hashes the owner and tokens is checked on its own account."""
+        hub_path, folder = paths
+        vault_path = os.path.join(os.path.realpath(folder), "vault.db")
+        hub = HubDatabase(hub_path)
+        try:
+            monkeypatch.setattr(
+                bootstrap_module, "validate_vault_folder", lambda _folder: vault_path
+            )
+            self._foreign_owned(monkeypatch, vault_path)
+            with pytest.raises(HubBootstrapError, match="not this user"):
+                prepare_legacy_identity(hub, folder)
+        finally:
+            monkeypatch.undo()
+            hub.close()
+
+    def test_a_vault_that_turns_foreign_after_approval_is_not_copied(
+        self, paths, monkeypatch
+    ):
+        hub_path, folder = paths
+        hub = HubDatabase(hub_path)
+        prepare_legacy_identity(hub, folder)
+        hub.close()
+
+        real_connect = sqlite3.connect
+        self._foreign_owned(monkeypatch, os.path.join(folder, "vault.db"))
+        # bootstrap_hub opens the hub itself; only the vault read must not run.
+        monkeypatch.setattr(sqlite3, "connect", real_connect)
+        with pytest.raises(HubBootstrapError, match="not this user"):
+            bootstrap_hub(folder, hub_path)
+        monkeypatch.undo()
+
+        reopened = HubDatabase(hub_path)
+        try:
+            assert reopened.fetchone("SELECT COUNT(*) FROM user")[0] == 0
+        finally:
+            reopened.close()
+
+    def test_an_ordinary_legacy_migration_still_copies_the_owner(self, paths):
+        hub_path, folder = paths
+
+        result = bootstrap_upgrade(folder, hub_path)
+        try:
+            assert result.migrated
+            assert result.hub.fetchone("SELECT username FROM user")[0] == "owner"
+        finally:
+            result.engine.close()
+            result.hub.close()
+
+    def test_a_fingerprint_is_checked_only_on_a_vault_that_passes(
+        self, paths, monkeypatch
+    ):
+        hub_path, folder = paths
+        result = bootstrap_upgrade(folder, hub_path)
+        library = result.library
+        result.engine.close()
+        result.hub.close()
+
+        prevalidate_library_fingerprint(library)
+
+        self._foreign_owned(monkeypatch, library.vault_path)
+        with pytest.raises(HubBootstrapError, match="not this user"):
+            prevalidate_library_fingerprint(library)
+
+    def test_registry_readers_go_through_the_checks(self, paths, monkeypatch):
+        from pixlstash.hub import registry as registry_module
+        from pixlstash.trusted_sqlite import TrustedSQLiteLocationError
+
+        _hub_path, folder = paths
+        conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+        conn.execute("UPDATE library_settings SET library_uuid = 'fp-1'")
+        conn.execute("CREATE TABLE import_folder (id INTEGER PRIMARY KEY, folder TEXT)")
+        conn.execute("INSERT INTO import_folder (folder) VALUES ('/home/me/inbox')")
+        conn.commit()
+        conn.close()
+
+        assert registry_module.validate_vault_folder(folder)
+        assert read_vault_uuid(folder) == "fp-1"
+        assert registry_module.read_vault_folder_roots(folder) == ["/home/me/inbox"]
+
+        self._foreign_owned(monkeypatch, os.path.join(folder, "vault.db"))
+        with pytest.raises(registry_module.UntrustedVaultError) as raised:
+            registry_module.validate_vault_folder(folder)
+        assert isinstance(raised.value, LibraryError)
+        assert isinstance(raised.value, TrustedSQLiteLocationError)
+        assert not isinstance(raised.value, registry_module.NotAVaultError)
+        assert read_vault_uuid(folder) is None
+        assert registry_module.read_vault_folder_roots(folder) == []
