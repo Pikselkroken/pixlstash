@@ -638,6 +638,11 @@ class TestCreationIsLockedDown:
             makedirs_private(str(blocker))
         assert windows.created == []
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="asserts the POSIX branch never reaches the Windows creators; on "
+        "Windows reaching them is the point, and the real-ACL class covers it",
+    )
     def test_nothing_windows_runs_off_windows(self, tmp_path, monkeypatch):
         def boom(*_args, **_kwargs):
             raise AssertionError("a Windows creator ran on POSIX")
@@ -655,6 +660,32 @@ def _touch(path: str) -> None:
     """Create an empty file; ``Path`` cannot be built while ``os.name`` is faked."""
     with open(path, "wb"):
         pass
+
+
+class TestTheCreationPathsAreWellFormed:
+    """The path barrier in front of ``os.open``/``mkdir`` (CodeQL path-injection)."""
+
+    @pytest.mark.parametrize("bad", ["", "lib/vault\n.db", "lib/vault\x00.db"])
+    def test_an_empty_or_control_character_path_is_refused(self, tmp_path, bad):
+        with pytest.raises(OSError) as raised:
+            trusted_sqlite._safe_resolved_path(str(tmp_path / bad) if bad else bad)
+        assert raised.value.errno == errno.EINVAL
+
+    @pytest.mark.skipif(os.name == "nt", reason="creates a POSIX symlink")
+    def test_only_the_directory_is_resolved_never_the_final_name(self, tmp_path):
+        """Resolving the leaf would follow the link O_NOFOLLOW exists to refuse."""
+        real = tmp_path / "real"
+        real.mkdir()
+        via = tmp_path / "via"
+        via.symlink_to(real, target_is_directory=True)
+        (real / "leaf").symlink_to(tmp_path / "elsewhere")
+
+        resolved = trusted_sqlite._safe_resolved_path(str(via / "leaf"))
+
+        assert resolved == str(real / "leaf")
+        with pytest.raises(FileExistsError):
+            trusted_sqlite.create_private_file(str(via / "leaf"))
+        assert not (tmp_path / "elsewhere").exists()
 
 
 class TestSidecarsAreLockedDown:
@@ -889,7 +920,19 @@ class _FakeWin32:
         return 0
 
     def SetSecurityInfo(self, handle, kind, info, owner, group, dacl, sacl):
+        """Succeeding, the file then reads back as Windows would show it: only
+        the owner-only entries, protected."""
         self.set_calls.append((handle, info))
+        if not self.set_code:
+            self.aces = [
+                ctypes.create_string_buffer(entry, len(entry))
+                for entry in (
+                    _ace_bytes(0x0, 0, FULL_CONTROL, sid)
+                    for sid in (ME, SYSTEM, ADMINISTRATORS)
+                )
+            ]
+            self.keep.extend(self.aces)
+            self.protected = True
         return self.set_code
 
     def CreateDirectoryW(self, path, sa):
@@ -1126,6 +1169,29 @@ class TestSidecarLockDownOverAFakeApi:
         assert fake.set_calls == [(777, 0x80000004)]  # the handle, PROTECTED | DACL
         assert fake.added == [(0, mask, sid) for mask, sid in OWNER_ONLY]
 
+    def test_a_hostile_entry_is_reported_before_the_sidecar_is_locked_down(
+        self, tmp_path, fake_win32, monkeypatch, caplog
+    ):
+        """The Windows lane's finding: the lock-down ran first, stripped the
+        Everyone entry, and the re-read found nothing to report - a hostile
+        ACL fixed out of sight. What the sidecar arrived with is reported, then
+        it is locked down."""
+        path = str(tmp_path / "hub.db-wal")
+        with open(path, "wb") as handle:
+            handle.write(b"hostile frames")
+        fake = fake_win32(
+            [
+                _ace_bytes(0x0, 0, FULL_CONTROL, ME),
+                _ace_bytes(0x0, 0, FILE_WRITE_DATA, EVERYONE),
+            ]
+        )
+        monkeypatch.setattr(os, "name", "nt")
+
+        trusted_sqlite._validate_file(path, private=True, sidecar=True)
+
+        assert _warned(caplog, f"{path} can also be changed by Everyone")
+        assert fake.set_calls == [(777, 0x80000004)]
+
     def test_a_hard_link_to_another_file_is_not_rewritten(
         self, tmp_path, fake_win32, monkeypatch, caplog
     ):
@@ -1201,6 +1267,25 @@ class TestSidecarLockDownOverAFakeApi:
         assert _warned(caplog, "SetSecurityInfo failed with Windows error 5")
 
 
+def _plant(planted: str, target: str) -> bool:
+    """Put the attacker's file at *target* the only ways an account can.
+
+    Where no ``-wal`` exists yet it is a plain rename, on every platform. Where
+    SQLite already holds one open, POSIX lets it be replaced (SQLite keeps
+    reading the unlinked original); Windows refuses with ``ERROR_ACCESS_DENIED``,
+    because SQLite opens it without ``FILE_SHARE_DELETE`` - that form of the
+    attack does not exist there, and the refusal is the outcome. Returns
+    whether the file was planted.
+    """
+    try:
+        os.replace(planted, target)
+    except PermissionError:
+        if os.name != "nt":
+            raise
+        return False
+    return True
+
+
 class TestTheLoginImportRequiresATrustedOwner:
     """R3-1: ``require_trusted_owner`` refuses inside the file validation."""
 
@@ -1244,8 +1329,7 @@ class TestTheLoginImportRequiresATrustedOwner:
         self, vault, monkeypatch
     ):
         install_fake_windows_security(monkeypatch)
-        guard = TrustedSQLiteLocation.open(vault, require_trusted_owner=True)
-        try:
+        with TrustedSQLiteLocation.open(vault, require_trusted_owner=True) as guard:
             with open(vault + "-wal", "wb"):
                 pass
             install_fake_windows_security(
@@ -1253,8 +1337,6 @@ class TestTheLoginImportRequiresATrustedOwner:
             )
             with pytest.raises(TrustedSQLiteLocationError, match="does not import"):
                 guard.verify_after_open()
-        finally:
-            guard.close()
 
     def test_an_owner_change_on_the_same_file_after_open_is_refused_at_verify(
         self, vault, monkeypatch
@@ -1264,15 +1346,12 @@ class TestTheLoginImportRequiresATrustedOwner:
         can make the approved file its own between open and verify; for a
         login import that owner change is itself the signal."""
         install_fake_windows_security(monkeypatch)
-        guard = TrustedSQLiteLocation.open(vault, require_trusted_owner=True)
-        try:
+        with TrustedSQLiteLocation.open(vault, require_trusted_owner=True) as guard:
             install_fake_windows_security(
                 monkeypatch, {vault: security(owner=SOMEONE_ELSE)}
             )
             with pytest.raises(TrustedSQLiteLocationError, match="does not import"):
                 guard.verify_after_open()
-        finally:
-            guard.close()
 
     def test_a_wal_planted_after_the_check_is_not_what_the_import_reads(
         self, tmp_path, monkeypatch
@@ -1316,7 +1395,7 @@ class TestTheLoginImportRequiresATrustedOwner:
             with trusted_sqlite.checked_read_connection(
                 vault, require_trusted_owner=True
             ) as read:
-                os.replace(planted, vault + "-wal")
+                _plant(planted, vault + "-wal")
                 row = read.execute("SELECT name FROM user").fetchone()
         except TrustedSQLiteLocationError:
             row = None

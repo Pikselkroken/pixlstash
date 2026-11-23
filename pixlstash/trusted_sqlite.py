@@ -208,6 +208,7 @@ import ctypes
 import errno
 import functools
 import os
+import re
 import secrets
 import shlex
 import sqlite3
@@ -831,9 +832,11 @@ def _check_windows_acl(
     sidecar loop tolerates and the main file treats like a failed ``lstat``.
 
     A *sidecar* this account owns whose DACL is not already the protected
-    owner-only one is given it first (``_lock_down_sidecar``, on the file whose
+    owner-only one is then given it (``_lock_down_sidecar``, on the file whose
     ``lstat`` is *expected*): SQLite created it with whatever the folder hands
-    new files, and it carries the same pages as the database.
+    new files, and it carries the same pages as the database. The findings are
+    reported first, from the permissions the sidecar arrived with, so a hostile
+    entry is never fixed out of sight.
 
     With *require_trusted_owner* an owner outside this account, ``SYSTEM``,
     ``Administrators`` and ``TrustedInstaller`` refuses instead of warning -
@@ -842,8 +845,6 @@ def _check_windows_acl(
     try:
         security = _read_windows_security(path)
         user_sid = _windows_user_sid()
-        if sidecar and _lock_down_sidecar(path, security, user_sid, expected):
-            security = _read_windows_security(path)
     except _UnverifiableWindowsAcl as exc:
         _accept_unverifiable_windows_acl(path, exc.reason, exc.volume_serial)
         return
@@ -915,6 +916,8 @@ def _check_windows_acl(
             f"keep it to your account: icacls {quoted} /inheritance:d and then "
             f"icacls {quoted} /remove:g {readers}",
         )
+    if sidecar:
+        _lock_down_sidecar(path, security, user_sid, expected)
 
 
 # The ctypes reader. Everything below touches the Windows API and is only
@@ -1505,6 +1508,36 @@ def _windows_create_error(api_name: str, code: int, path: str) -> OSError:
     return OSError(errno.EIO, message, path)
 
 
+# Any non-empty string with no NUL or newline, applied with fullmatch() to a
+# path whose directory has been through os.path.realpath(): the repository's
+# CodeQL-recognised path-injection barrier (as in routes/filesystem.py), for
+# the sinks below that a user-chosen library folder reaches. Only the
+# *directory* is resolved: resolving the final component would follow the very
+# symlink O_NOFOLLOW / FILE_FLAG_OPEN_REPARSE_POINT exist to refuse.
+_SAFE_RESOLVED_PATH_RE = re.compile(r"[^\x00\n]+")
+
+
+def _safe_resolved_path(path: str) -> str:
+    """*path* with its directory resolved, as a CodeQL-recognised clean string.
+
+    Who may name the path is decided by the authz gate (every route that takes
+    a host folder is owner-only, ``§16.3``); this only makes the string itself
+    well-formed - absolute, its directory free of ``..`` and links, no NUL or
+    newline - before it reaches ``os.open``/``mkdir``.
+
+    Raises:
+        OSError: ``EINVAL`` for an empty path or one carrying NUL or newline.
+    """
+    if not path:
+        raise OSError(errno.EINVAL, "Not a usable file path", path)
+    directory, name = os.path.split(os.path.abspath(path))
+    candidate = os.path.join(os.path.realpath(directory), name)
+    matched = _SAFE_RESOLVED_PATH_RE.fullmatch(candidate)
+    if not matched or not name:
+        raise OSError(errno.EINVAL, "Not a usable file path", path)
+    return matched.group(0)
+
+
 def create_private_file(path: str, *, mode: int = 0o600) -> int:
     """Create *path* for this account only and return a read/write descriptor.
 
@@ -1515,10 +1548,11 @@ def create_private_file(path: str, *, mode: int = 0o600) -> int:
     ``FILE_FLAG_OPEN_REPARSE_POINT``, already carrying the protected owner-only
     DACL, so there is no instant at which it has its folder's permissions.
     """
+    safe = _safe_resolved_path(path)
     if os.name != "nt":
         flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        return os.open(path, flags, mode)
-    return _windows_create_private_file(path)
+        return os.open(safe, flags, mode)
+    return _windows_create_private_file(safe)
 
 
 def _windows_create_private_file(path: str) -> int:
@@ -1570,10 +1604,11 @@ def create_private_directory(path: str) -> None:
     the protected owner-only DACL with ``(OI)(CI)``, so the folder is private
     from its first instant and what is created in it later inherits that.
     """
+    safe = _safe_resolved_path(path)
     if os.name != "nt":
-        os.mkdir(path, 0o700)
+        os.mkdir(safe, 0o700)
         return
-    _windows_create_private_directory(path)
+    _windows_create_private_directory(safe)
 
 
 def _windows_create_private_directory(path: str) -> None:
@@ -1777,7 +1812,7 @@ def _pin_inode(path: str, expected: os.stat_result) -> int:
     else:
         return -1
     try:
-        pin = os.open(path, flags)
+        pin = os.open(_safe_resolved_path(path), flags)
     except OSError as exc:
         raise TrustedSQLiteLocationError(
             f"Could not securely guard SQLite file {path}: {exc}"
@@ -1897,14 +1932,21 @@ class TrustedSQLiteLocation:
             canonical, private=private, require_trusted_owner=require_trusted_owner
         )
         pin = _pin_inode(canonical, expected)
-        return cls(
-            canonical,
-            _identity(expected),
-            parent_identity,
-            private,
-            pin,
-            require_trusted_owner,
-        )
+        try:
+            return cls(
+                canonical,
+                _identity(expected),
+                parent_identity,
+                private,
+                pin,
+                require_trusted_owner,
+            )
+        except BaseException:
+            # The pin only escapes inside the object; if building it fails,
+            # nothing else will ever close it.
+            if pin >= 0:
+                os.close(pin)
+            raise
 
     def verify_after_open(self) -> None:
         current = _validate_file(
