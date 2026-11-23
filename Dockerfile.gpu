@@ -97,8 +97,11 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Only runtime system libraries — no build-essential, no python3.12-dev
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Only runtime system libraries: no build-essential, no python3.12-dev.
+# The upgrade first: the CUDA base tag is not rebuilt, so its Ubuntu packages
+# are as old as the tag (#2755) unless the image takes the security updates.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     python3.12 \
     python3.12-venv \
     libgl1 \
