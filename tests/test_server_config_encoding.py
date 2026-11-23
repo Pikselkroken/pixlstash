@@ -16,7 +16,6 @@ import pytest
 
 import pixlstash.app as app_module
 import pixlstash.server as server_module
-from pixlstash.server import Server
 
 LIBRARY = "C:\\Users\\me\\Pictures\\Проба\\Паки"
 
@@ -40,7 +39,7 @@ def desktop_config(tmp_path):
 def test_server_reads_a_non_ascii_library_path_unchanged(desktop_config, monkeypatch):
     monkeypatch.setattr(server_module, "open", _cp1251_open, raising=False)
 
-    config = Server.init_server_config(str(desktop_config))
+    config = server_module.Server.init_server_config(str(desktop_config))
 
     assert config["image_root"] == LIBRARY
 
