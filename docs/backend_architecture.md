@@ -4875,17 +4875,30 @@ Windows ignores the `0600`/`0700` modes PixlStash passes on POSIX, so two
 mechanisms stand in for them (design record: the module docstring of
 `trusted_sqlite.py`).
 
-*Creation.* When PixlStash creates a vault (`TrustedSQLiteLocation.open(...,
-create=True)`, `VaultDatabase`'s pre-create), the hub (`hub/db.py`), the hub a
-restore installs, or a folder through `mkdir_private`/`makedirs_private` (the
+*Creation.* A vault (`TrustedSQLiteLocation.open(..., create=True)`,
+`VaultDatabase`'s pre-create), the hub (`hub/db.py`), the hub a restore
+installs, and every folder made through `mkdir_private`/`makedirs_private` (the
 library root, the config directory, edit-copy, share-copy, import-staging and
-restore-preservation folders), `restrict_new_path_to_owner` sets a *protected*
-DACL: inheritance from the parent off, full control for this account, `SYSTEM`
-and `BUILTIN\Administrators` only, `(OI)(CI)` on folders so the
-`-wal`/`-shm`/`-journal` SQLite creates later inherit the same entries. It runs
-only on something the process has just created, never on an existing file or
-folder, and a failure is a WARNING with the path and the Windows error code.
-This is the protection on Windows.
+restore-preservation folders, and the share batch folder) are created already
+locked: `create_private_file` (`CreateFileW`, `CREATE_NEW`,
+`FILE_FLAG_OPEN_REPARSE_POINT` - the `O_EXCL | O_NOFOLLOW` of Windows) and
+`create_private_directory` (`CreateDirectoryW`) pass a `SECURITY_ATTRIBUTES`
+whose DACL is *protected* (nothing inherited) and grants full control to this
+account, `SYSTEM` and `BUILTIN\Administrators` only, `(OI)(CI)` on folders.
+There is no instant at which the object carries its folder's permissions. An
+existing file or folder is never touched, and a folder another process created
+in the meantime is left as it was made. If the descriptor cannot be built, a
+WARNING names the path and the Windows error and the object is created as its
+folder allows. This is the protection on Windows.
+
+*Sidecars.* In a folder PixlStash created, the `-wal`/`-shm`/`-journal` SQLite
+makes inherit the folder's owner-only entries. In a folder the user chose they
+inherit that folder's permissions, so every guarded open and
+`verify_after_open` gives a sidecar *this account owns* the protected
+owner-only DACL if it does not carry one already (`_lock_down_sidecar`); a
+sidecar SQLite creates after that inherits the folder's permissions until the
+next open does the same. The folder itself and the database file the user
+placed there are never rewritten.
 
 *Opening.* Every guarded open reads each object's owner SID and DACL (ctypes
 against advapi32/kernel32) and the pure `classify_windows_acl` decides who
@@ -4913,12 +4926,24 @@ is a stranger with full control, a NULL DACL is Everyone. The default ACLs of
 What still refuses on Windows is what refuses everywhere: redirects (symlinks
 and junctions), non-regular files, an identity change across the open.
 
+*Importing a login is the exception.* The location principle covers reading a
+library, not copying someone's password hash and tokens into the hub. For the
+legacy identity import only (`prepare_legacy_identity`,
+`_copy_legacy_identity_if_needed`), `require_trusted_owner_for_identity_import`
+refuses on Windows when the legacy vault or any sidecar is owned by an account
+outside the trusted set: a replacement is always the planter's, a legitimate
+legacy vault on this computer is this user's. Other accounts' *write* access
+is still only reported, so an upgrade from an ordinary `D:\` folder goes
+ahead; an in-place edit by an account that can write a loose folder is covered
+by the location principle. An unreadable owner (FAT32/exFAT) is reported and
+not refused.
+
 *Intended behaviour, not risk.* A library the user keeps in a folder other
 accounts can write - a folder at the top of a second NTFS drive inherits
 Authenticated Users *Modify*, a shared or network folder, a FAT32/exFAT stick,
 a drive formatted on another computer - opens as the user chose. SQLite's
-sidecars there inherit that folder's permissions, and the server log says so
-once. Where a library lives is the user's decision.
+sidecars there inherit that folder's permissions until an open locks them down,
+and the server log says so once. Where a library lives is the user's decision.
 
 **Short reads go through the same checks.** Every open of a live vault or hub
 that reads its identity, tokens, fingerprint or folders goes through
@@ -4933,12 +4958,20 @@ raises `UntrustedVaultError`: a `LibraryError` for attach and relocate, a
 `TrustedSQLiteLocationError` for start-up, and never a `NotAVaultError`, so it
 is never offered the start-over recovery.
 
+**No guard ever drops a lock.** POSIX advisory locks belong to the process and
+the inode, so closing any ordinary descriptor on the database releases every
+lock this process holds on it - and `read_vault_folder_roots` reads the
+*active* vault on every create, attach and relocate. `TrustedSQLiteLocation`
+therefore checks with `lstat` and holds no ordinary descriptor: on Linux it
+pins the inode with an `O_PATH` reference, whose `close()` skips POSIX lock
+removal, so an unlink-and-recreate cannot reuse the inode number between the
+check and `verify_after_open`; on Windows a handle (SQLite's locks there are
+per-handle); elsewhere nothing, and inode reuse can hide a same-uid swap, out of
+scope. All six direct callers and the seven `checked_read_connection` readers
+go through it.
+
 **Accepted risk W17 (residue): what PixlStash itself could do better.**
 
-- **Creation is not atomic.** The file or folder exists with its inherited
-  permissions between `os.open`/`mkdir` and `SetNamedSecurityInfoW`. Creating
-  with `CreateFileW`/`CreateDirectoryW` and a `SECURITY_ATTRIBUTES` would close
-  it.
 - **Not everything PixlStash writes is locked down.** Files a restore extracts
   into a library folder (the vault and pictures), backup archives
   (`mkstemp` + `fchmod`, which Windows lacks before Python 3.13), the export
