@@ -29,7 +29,11 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
 )
-from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.image_utils import (
+    STORYBOARD_FRAMES,
+    ImageUtils,
+)
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
@@ -61,9 +65,12 @@ _thumbnail_executor = ThreadPoolExecutor(
 
 def register_routes(router, server):
     thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
+    storyboard_generation_locks: dict[int, asyncio.Lock] = {}
 
     def clear_thumbnail_runtime_cache() -> None:
+        # Keyed by picture id, and ids are reused across libraries.
         thumbnail_generation_locks.clear()
+        storyboard_generation_locks.clear()
 
     # The locks are route-local, so expose their one lifecycle operation to the
     # server's library switch coordinator without exposing the storage itself.
@@ -290,6 +297,91 @@ def register_routes(router, server):
         )
 
         raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    @router.get(
+        "/pictures/storyboards/{id}.webp",
+        summary="Get a video's storyboard",
+        description=(
+            f"Returns {STORYBOARD_FRAMES} evenly spaced frames of a video, first "
+            "to last, laid left to right in one WebP. Generated and cached on "
+            "demand; 404 for a picture that is not a video or whose frames "
+            "cannot all be read."
+        ),
+        response_class=FileResponse,
+        responses={200: {"content": {"image/webp": {}}}},
+    )
+    async def get_storyboard(request: Request, id: int):
+        vault = server.vault
+        generation = getattr(server, "library_generation", 0)
+
+        def fetch_file_path(session: Session, picture_id: int):
+            pics = Picture.find(
+                session,
+                id=picture_id,
+                select_fields=["id", "file_path"],
+                include_deleted=True,
+                include_unimported=True,
+            )
+            return pics[0].file_path if pics else None
+
+        file_path = vault.db.run_immediate_read_task(fetch_file_path, id)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        if not VideoUtils.is_video_file(file_path):
+            raise HTTPException(status_code=404, detail="Picture is not a video")
+
+        cached = ImageUtils.derived_media_path(
+            vault.image_root, file_path, "storyboard"
+        )
+
+        def fresh_cache() -> bool:
+            return bool(
+                cached
+                and os.path.isfile(cached)
+                and not discard_stale_thumbnail(id, file_path, cached)
+            )
+
+        if fresh_cache():
+            return FileResponse(
+                cached, media_type="image/webp", headers=_THUMBNAIL_CACHE_HEADERS
+            )
+
+        lock = storyboard_generation_locks.setdefault(id, asyncio.Lock())
+        async with lock:
+            # Another request may have made it while this one waited.
+            if fresh_cache():
+                return FileResponse(
+                    cached, media_type="image/webp", headers=_THUMBNAIL_CACHE_HEADERS
+                )
+
+            def build_storyboard_blocking() -> bytes | None:
+                source = ImageUtils.resolve_picture_path(vault.image_root, file_path)
+                if not source or not os.path.exists(source):
+                    logger.warning("Storyboard: source file missing: %s", source)
+                    return None
+                frames = VideoUtils.extract_storyboard_frames(source, STORYBOARD_FRAMES)
+                data = ImageUtils.render_storyboard(frames)
+                if data:
+                    ImageUtils.write_derived_media_bytes(
+                        vault.image_root, file_path, "storyboard", data
+                    )
+                return data
+
+            loop = asyncio.get_running_loop()
+            data = await loop.run_in_executor(
+                _thumbnail_executor, build_storyboard_blocking
+            )
+            if generation != getattr(server, "library_generation", 0):
+                raise HTTPException(
+                    status_code=503,
+                    detail="The active library changed while the storyboard was made.",
+                )
+        if not data:
+            # Already logged why: an unreadable frame or a missing file.
+            raise HTTPException(status_code=404, detail="Storyboard not available")
+        return Response(
+            content=data, media_type="image/webp", headers=_THUMBNAIL_CACHE_HEADERS
+        )
 
     @router.post(
         "/pictures/thumbnails",

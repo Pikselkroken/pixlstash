@@ -1063,7 +1063,8 @@ class ReferenceFolderScanTask(BaseTask):
 
         Thumbnails live at ``sha256(file_path)`` under
         ``image_root/.pixlstash-thumbnails`` (``ImageUtils.get_thumbnail_path``),
-        so a followed move renames the bitmap rather than re-rendering it.
+        so a followed move renames the bitmap rather than re-rendering it, and
+        its derived files (a video's storyboard) with it.
         Nothing sweeps that directory by anything but a row's current
         ``file_path``, so a bitmap left at the old name would never be reachable
         and never be collected.
@@ -1074,28 +1075,7 @@ class ReferenceFolderScanTask(BaseTask):
             the rename failed, in which case the caller blanks the dimensions and
             ``MissingThumbnailFinder`` renders a fresh one.
         """
-        image_root = self._db.image_root
-        old_thumb = ImageUtils.find_thumbnail(image_root, old_path)
-        new_thumb = ImageUtils.get_thumbnail_path(image_root, new_path)
-        if not old_thumb or not new_thumb or old_thumb == new_thumb:
-            return bool(old_thumb and old_thumb == new_thumb)
-        try:
-            os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
-            os.replace(old_thumb, new_thumb)
-            return True
-        except OSError as exc:
-            # Not fatal: the picture simply regenerates its thumbnail.  Say so,
-            # because a bitmap stranded at the old name is never collected.
-            logger.warning(
-                "Reference folder %s: could not carry the thumbnail for the move "
-                "%s -> %s (%s); it will be regenerated and %s may be left behind.",
-                self._folder_path,
-                old_path,
-                new_path,
-                exc,
-                old_thumb,
-            )
-            return False
+        return ImageUtils.carry_thumbnail(self._db.image_root, old_path, new_path)
 
     def _match_moved_paths(
         self,

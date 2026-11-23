@@ -469,6 +469,14 @@ def create_router(server) -> APIRouter:
                 return candidate
             counter += 1
 
+    def _carry_cached_files(pairs) -> None:
+        """Carry each moved picture's thumbnail and derived files to its new
+        stored path. Run after the rows are committed, so a rolled-back move
+        leaves them where the rows still point."""
+        image_root = getattr(server.vault, "image_root", None)
+        for old_path, new_path in pairs:
+            ImageUtils.carry_thumbnail(image_root, old_path, new_path)
+
     def _rewrite_path_under_root(path: str | None, old_root: str, new_root: str):
         if not path:
             return None, False
@@ -516,12 +524,13 @@ def create_router(server) -> APIRouter:
         folder_id: int,
         old_root: str,
         new_root: str,
-    ) -> tuple[int, list[int]]:
+    ) -> tuple[int, list[int], list[tuple[str, str]]]:
         pictures = session.exec(
             select(Picture).where(Picture.reference_folder_id == folder_id)
         ).all()
         rewritten = 0
         moved_picture_ids: list[int] = []
+        moved_paths: list[tuple[str, str]] = []
         for pic in pictures:
             path_rewritten = False
             new_path, path_rewritten = _rewrite_path_under_root(
@@ -534,6 +543,7 @@ def create_router(server) -> APIRouter:
                 pic.description_file, old_root, new_root
             )
             if path_rewritten:
+                moved_paths.append((pic.file_path, new_path))
                 pic.file_path = new_path
                 pic.original_file_name = os.path.basename(new_path)
                 rewritten += 1
@@ -547,7 +557,7 @@ def create_router(server) -> APIRouter:
                 pic.description_file_mtime = get_sidecar_mtime(new_description)
             if path_rewritten or tags_rewritten or description_rewritten:
                 session.add(pic)
-        return rewritten, moved_picture_ids
+        return rewritten, moved_picture_ids, moved_paths
 
     def _metadata_types(types: list[str]) -> set[str]:
         allowed = {SIDECAR_TYPE_TAGS, SIDECAR_TYPE_DESCRIPTION, "descriptions"}
@@ -795,6 +805,9 @@ def create_router(server) -> APIRouter:
             )
             refuse_overlapping_folder(candidate, server, server.vault, exclude=current)
 
+        repointed_paths: list[tuple[str, str]] = []
+        dropped_paths: list[str] = []
+
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
             if rf is None:
@@ -835,6 +848,7 @@ def create_router(server) -> APIRouter:
                             )
                         )
                         if path_rewritten:
+                            old_path = pic.file_path
                             pic.file_path = new_path
                             pic.original_file_name = os.path.basename(new_path)
                             rewritten += 1
@@ -843,6 +857,9 @@ def create_router(server) -> APIRouter:
                                     new_sha = ImageUtils.calculate_hash_from_file_path(
                                         new_path
                                     )
+                                    if pic.pixel_sha and new_sha == pic.pixel_sha:
+                                        repointed_paths.append((old_path, new_path))
+                                        old_path = None
                                     if pic.pixel_sha and new_sha != pic.pixel_sha:
                                         unmatched.append(
                                             {
@@ -869,6 +886,10 @@ def create_router(server) -> APIRouter:
                                         "path": new_path,
                                     }
                                 )
+                            if old_path:
+                                # Not the same picture there (or none): its
+                                # cached files describe the old one.
+                                dropped_paths.append(old_path)
                         if tags_rewritten:
                             pic.tags_file = new_tags
                             pic.tags_file_mtime = get_sidecar_mtime(new_tags)
@@ -1000,6 +1021,11 @@ def create_router(server) -> APIRouter:
         rf, relocation_report = server.vault.db.run_task(
             update, priority=DBPriority.IMMEDIATE
         )
+        _carry_cached_files(repointed_paths)
+        for old_path in dropped_paths:
+            ImageUtils.remove_thumbnail(
+                getattr(server.vault, "image_root", None), old_path
+            )
         if relocation_report is not None:
             server.vault.unwatch_reference_folder(folder_id)
             server.vault.watch_reference_folder(folder_id, rf.folder)
@@ -1128,20 +1154,22 @@ def create_router(server) -> APIRouter:
                     raise HTTPException(
                         status_code=404, detail="Reference folder not found."
                     )
-                rewritten, moved_ids = _rewrite_reference_folder_picture_paths(
-                    session,
-                    folder_id,
-                    old_root,
-                    new_root,
+                rewritten, moved_ids, moved_paths = (
+                    _rewrite_reference_folder_picture_paths(
+                        session,
+                        folder_id,
+                        old_root,
+                        new_root,
+                    )
                 )
                 rf.folder = new_root
                 rf.status = ReferenceFolderStatus.ACTIVE
                 rf.last_scanned = None
                 session.add(rf)
                 session.commit()
-                return rewritten, moved_ids
+                return rewritten, moved_ids, moved_paths
 
-            rewritten_count, moved_picture_ids = server.vault.db.run_task(
+            rewritten_count, moved_picture_ids, moved_paths = server.vault.db.run_task(
                 apply_relocation, priority=DBPriority.IMMEDIATE
             )
         except HTTPException:
@@ -1150,6 +1178,9 @@ def create_router(server) -> APIRouter:
         except Exception as exc:
             _rollback_relocation(rollback_moves, destination_existed, new_root)
             raise HTTPException(status_code=500, detail=f"Relocation failed: {exc}")
+
+        # Cached files are keyed by the stored path, so they follow the rows.
+        _carry_cached_files(moved_paths)
 
         try:
             os.rmdir(old_root)
@@ -1402,6 +1433,10 @@ def create_router(server) -> APIRouter:
 
             moved_ids = server.vault.db.run_task(
                 apply_moves, moved, priority=DBPriority.IMMEDIATE
+            )
+            _carry_cached_files(
+                (record["source_path"], move["file_path"])
+                for record, move in zip(records, moved)
             )
         except HTTPException:
             for destination, source in reversed(rollback_moves):

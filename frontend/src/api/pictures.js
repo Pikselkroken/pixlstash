@@ -39,6 +39,27 @@ export function pictureThumbnailUrl(id, { version } = {}) {
 }
 
 /**
+ * The URL a browser loads a video's storyboard from: its frames, first to
+ * last, laid left to right in one WebP. An `<img src>` or a CSS background,
+ * so the share token is appended by hand as for the thumbnail.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {number|string} [options.version] - the thumbnail's cache-buster,
+ *   so a rewritten file is fetched again.
+ * @returns {string}
+ */
+export function pictureStoryboardUrl(id, { version } = {}) {
+  const query =
+    version === undefined || version === null
+      ? ""
+      : `?v=${encodeURIComponent(version)}`;
+  return appendShareToken(
+    `${API_BASE_URL}/pictures/storyboards/${id}.webp${query}`,
+  );
+}
+
+/**
  * The URL a browser loads a picture's own file from, by its format ("png",
  * "mp4"). Like the thumbnail URL, an `<img src>` or `<video src>`.
  *

@@ -812,37 +812,12 @@ def _restore_file(current: str, original: str) -> None:
 def _carry_thumbnail(
     image_root: Optional[str], old_stored: str, new_stored: str
 ) -> bool:
-    """Move a moved picture's thumbnail to its new path-derived name.
+    """Move a moved picture's thumbnail (and derived files) to its new name.
 
-    **Both arguments are the STORED form of the path, never the absolute one**,
-    because the thumbnail's name is a hash of exactly that string
-    (``get_thumbnail_path``): a library picture is keyed by its root-relative
-    path and a reference-folder picture by its absolute one, and handing over
-    the other form looks for a name nobody wrote, finds nothing, and strands a
-    bitmap at the old name that nothing ever collects - the sweep only ever
-    looks where a row's *current* path says. ``find_thumbnail`` also brings a
-    pre-#1164 sibling bitmap home before the rename.
+    **Both arguments are the STORED form of the path**; see
+    ``ImageUtils.carry_thumbnail``, which does the work.
     """
-    old_thumb = ImageUtils.find_thumbnail(image_root, old_stored)
-    new_thumb = ImageUtils.get_thumbnail_path(image_root, new_stored)
-    if not old_thumb or not new_thumb:
-        return False
-    if old_thumb == new_thumb:
-        return os.path.exists(new_thumb)
-    try:
-        os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
-        os.replace(old_thumb, new_thumb)
-        return True
-    except OSError as exc:
-        logger.warning(
-            "Layout move: could not carry the thumbnail %s -> %s (%s); it will be "
-            "regenerated and %s may be left behind.",
-            old_thumb,
-            new_thumb,
-            exc,
-            old_thumb,
-        )
-        return False
+    return ImageUtils.carry_thumbnail(image_root, old_stored, new_stored)
 
 
 def describe_drift(

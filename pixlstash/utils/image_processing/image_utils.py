@@ -49,6 +49,17 @@ THUMBNAIL_WEBP_METHOD = 2
 # cap (extreme panoramas). The bitmap is never upscaled beyond the source.
 THUMBNAIL_SHORT_EDGE = 384
 THUMBNAIL_LONG_EDGE_CAP = 1024
+#: A video's storyboard: this many evenly spaced frames, first to last, laid
+#: left to right in one WebP, each scaled to this height (2x for an ~80 CSS px
+#: strip). The lightbox mirrors the count.
+STORYBOARD_FRAMES = 11
+STORYBOARD_TILE_HEIGHT = 160
+#: Files derived from a picture's file and kept beside its thumbnail, keyed by
+#: the same path hash: kind -> (file-name suffix, folder under the library
+#: root). Deleting and moving a picture handle every kind listed here.
+DERIVED_MEDIA_KINDS = {
+    "storyboard": ("_storyboard.webp", THUMBNAIL_DIR_NAME),
+}
 
 
 class ImageUtils:
@@ -230,9 +241,102 @@ class ImageUtils:
 
     @staticmethod
     def _hashed_thumbnail_name(file_path: str) -> str:
+        return ImageUtils._hashed_name(file_path, f"_thumb{THUMBNAIL_EXTENSION}")
+
+    @staticmethod
+    def _hashed_name(file_path: str, suffix: str) -> str:
         path_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
         stem = os.path.splitext(os.path.basename(file_path))[0]
-        return f"{stem}_{path_hash}_thumb{THUMBNAIL_EXTENSION}"
+        return f"{stem}_{path_hash}{suffix}"
+
+    @staticmethod
+    def derived_media_path(
+        image_root: Optional[str], file_path: Optional[str], kind: str
+    ) -> Optional[str]:
+        """Where the *kind* file derived from *file_path* is cached, or ``None``.
+
+        Named like the thumbnail (:meth:`get_thumbnail_path`) with the kind's
+        suffix from ``DERIVED_MEDIA_KINDS``, so it is keyed on the STORED path
+        too and has to be carried when a picture moves
+        (:meth:`carry_derived_media`). ``None`` without a library root: the
+        caller then works in memory and caches nothing.
+        """
+        if not file_path or not image_root:
+            return None
+        suffix, folder = DERIVED_MEDIA_KINDS[kind]
+        return os.path.join(
+            image_root, folder, ImageUtils._hashed_name(file_path, suffix)
+        )
+
+    @staticmethod
+    def carry_derived_media(
+        image_root: Optional[str], old_stored: str, new_stored: str
+    ) -> None:
+        """Rename every derived file of a moved picture to its new path's name.
+
+        Best effort, per kind: a file that is not there is skipped and a rename
+        that fails is logged, because a derived file is regenerated on demand
+        and nothing sweeps one stranded at the old name.
+        """
+        for kind in DERIVED_MEDIA_KINDS:
+            old = ImageUtils.derived_media_path(image_root, old_stored, kind)
+            new = ImageUtils.derived_media_path(image_root, new_stored, kind)
+            if not old or not new or old == new or not os.path.isfile(old):
+                continue
+            try:
+                os.makedirs(os.path.dirname(new), exist_ok=True)
+                os.replace(old, new)
+            except OSError as exc:
+                logger.warning(
+                    "Could not carry the %s %s -> %s (%s); it will be made again "
+                    "and %s may be left behind.",
+                    kind,
+                    old,
+                    new,
+                    exc,
+                    old,
+                )
+
+    @staticmethod
+    def carry_thumbnail(
+        image_root: Optional[str], old_stored: str, new_stored: str
+    ) -> bool:
+        """Move a moved picture's thumbnail and derived files to its new name.
+
+        **Both arguments are the STORED form of the path, never the absolute
+        one**, because every cached file's name is a hash of exactly that
+        string: a library picture is keyed by its root-relative path and a
+        reference-folder picture by its absolute one, and handing over the
+        other form looks for a name nobody wrote and strands the bitmap at the
+        old name, where nothing ever collects it. ``find_thumbnail`` also
+        brings a pre-#1164 sibling bitmap home before the rename.
+
+        Returns:
+            ``True`` when the new path now has the thumbnail, so the caller can
+            keep the stored dimensions; ``False`` when there was nothing to
+            carry or the rename failed, and the thumbnail is regenerated.
+        """
+        ImageUtils.carry_derived_media(image_root, old_stored, new_stored)
+        old_thumb = ImageUtils.find_thumbnail(image_root, old_stored)
+        new_thumb = ImageUtils.get_thumbnail_path(image_root, new_stored)
+        if not old_thumb or not new_thumb:
+            return False
+        if old_thumb == new_thumb:
+            return os.path.exists(new_thumb)
+        try:
+            os.makedirs(os.path.dirname(new_thumb), exist_ok=True)
+            os.replace(old_thumb, new_thumb)
+            return True
+        except OSError as exc:
+            logger.warning(
+                "Could not carry the thumbnail %s -> %s (%s); it will be "
+                "regenerated and %s may be left behind.",
+                old_thumb,
+                new_thumb,
+                exc,
+                old_thumb,
+            )
+            return False
 
     @staticmethod
     def get_thumbnail_path(
@@ -329,7 +433,8 @@ class ImageUtils:
     def remove_thumbnail(image_root: Optional[str], file_path: Optional[str]) -> int:
         """Delete the thumbnail for *file_path* wherever it is; count removed.
 
-        Both the current home and every legacy location, so deleting a picture
+        Its derived files (``DERIVED_MEDIA_KINDS``) go with it. Both the
+        current home and every legacy location, so deleting a picture
         indexed before #1164 does not leave its bitmap behind in the owner's
         folder. Failures are logged, not raised: the picture is already gone
         and a stray bitmap is the lesser problem.
@@ -337,6 +442,10 @@ class ImageUtils:
         removed = 0
         candidates = [ImageUtils.get_thumbnail_path(image_root, file_path)]
         candidates += ImageUtils.legacy_thumbnail_paths(image_root, file_path)
+        candidates += [
+            ImageUtils.derived_media_path(image_root, file_path, kind)
+            for kind in DERIVED_MEDIA_KINDS
+        ]
         for path in dict.fromkeys(p for p in candidates if p):
             if not os.path.isfile(path):
                 continue
@@ -365,35 +474,53 @@ class ImageUtils:
         if not thumbnail:
             return None
         thumb_path = ImageUtils.get_thumbnail_path(image_root, file_path)
-        if not thumb_path:
+        return ImageUtils._write_atomic(thumb_path, thumbnail)
+
+    @staticmethod
+    def write_derived_media_bytes(
+        image_root: Optional[str], file_path: Optional[str], kind: str, data: bytes
+    ) -> Optional[str]:
+        """Write a derived file atomically and return its path, or None."""
+        if not data:
             return None
-        thumb_dir = os.path.dirname(thumb_path)
+        path = ImageUtils.derived_media_path(image_root, file_path, kind)
+        return ImageUtils._write_atomic(path, data)
+
+    @staticmethod
+    def _write_atomic(path: Optional[str], data: bytes) -> Optional[str]:
+        """Write *data* to *path* through a temp file and ``os.replace``.
+
+        Returns the path, or ``None`` (logged) when the write failed.
+        """
+        if not path:
+            return None
+        directory = os.path.dirname(path)
         tmp_path = None
         try:
-            os.makedirs(thumb_dir, exist_ok=True)
+            os.makedirs(directory, exist_ok=True)
             # delete=False so we can os.replace it; same dir guarantees the
             # rename stays on one filesystem (a cross-device rename is not
             # atomic and would raise).
             with tempfile.NamedTemporaryFile(
-                dir=thumb_dir,
+                dir=directory,
                 prefix=".thumb-",
-                suffix=THUMBNAIL_EXTENSION,
+                suffix=os.path.splitext(path)[1],
                 delete=False,
             ) as handle:
                 tmp_path = handle.name
-                handle.write(thumbnail)
+                handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp_path, thumb_path)
-            return thumb_path
+            os.replace(tmp_path, path)
+            return path
         except Exception as exc:
-            logger.warning("Failed to write thumbnail %s: %s", thumb_path, exc)
+            logger.warning("Failed to write %s: %s", path, exc)
             if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError as rm_err:
                     logger.warning(
-                        "Failed to remove temp thumbnail %s: %s", tmp_path, rm_err
+                        "Failed to remove temp file %s: %s", tmp_path, rm_err
                     )
             return None
 
@@ -744,6 +871,35 @@ class ImageUtils:
         except Exception as e:
             logger.error(f"Error rendering thumbnail: {e}")
             return None
+
+    @staticmethod
+    def render_storyboard(
+        frames: list, tile_height: int = STORYBOARD_TILE_HEIGHT
+    ) -> Optional[bytes]:
+        """Lay *frames* left to right, each scaled to *tile_height*, as WebP.
+
+        Every frame of a clip shares one size, so the tiles are equal and the
+        client can address tile ``i`` as ``i / (count - 1)`` of the sprite's
+        width. Returns ``None`` (logged) for no frames or a failed encode.
+        """
+        if not frames:
+            return None
+        first = frames[0]
+        # WebP holds at most 16383 px a side: a very wide clip gets lower tiles,
+        # and one so wide that even 1px tiles overflow gets narrower ones.
+        tile_height = max(
+            1, min(tile_height, (16383 * first.height) // (first.width * len(frames)))
+        )
+        tile_w = max(
+            1, min(16383 // len(frames), first.width * tile_height // first.height)
+        )
+        sheet = Image.new("RGB", (tile_w * len(frames), tile_height))
+        for i, frame in enumerate(frames):
+            tile = frame.convert("RGB").resize(
+                (tile_w, tile_height), resample=Image.LANCZOS
+            )
+            sheet.paste(tile, (i * tile_w, 0))
+        return ImageUtils._encode_thumbnail(sheet)
 
     @staticmethod
     def generate_thumbnail_bytes(

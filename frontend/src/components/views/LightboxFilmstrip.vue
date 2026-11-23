@@ -2,7 +2,18 @@
   <!-- A band under the stage (#2163): the neighbouring pictures at their own
        aspect ratios, the one on screen ringed in olive and the rest dimmed. -->
   <div class="lightbox-rail" :class="{ hidden: hidden }">
+    <!-- On a video, the switch between the set's pictures and the clip
+         (#2147); the clip's frames then stand in for the thumbs, which stay
+         mounted so the strip keeps its place. -->
+    <div v-if="$slots.lead" class="filmstrip-lead">
+      <slot name="lead" />
+      <span class="filmstrip-lead-sep" aria-hidden="true"></span>
+    </div>
+    <div v-if="$slots.clip" class="filmstrip-clip">
+      <slot name="clip" />
+    </div>
     <div
+      v-show="!$slots.clip"
       ref="viewportRef"
       class="filmstrip-viewport"
       role="group"
@@ -333,6 +344,35 @@ function reveal(index, { centre = false } = {}) {
 .lightbox-rail.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+/* Dark in both themes: the Segmented track and its icons read on the dark
+   band as they do on the paint options bar. */
+.filmstrip-lead {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
+
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-3);
+}
+
+.filmstrip-lead-sep {
+  width: 1px;
+  height: var(--space-6);
+  margin: 0 var(--space-2) 0 var(--space-4);
+  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
+
+.filmstrip-clip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3) 0 var(--space-2);
 }
 
 .filmstrip-viewport {
