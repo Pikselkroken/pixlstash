@@ -4893,12 +4893,19 @@ folder allows. This is the protection on Windows.
 
 *Sidecars.* In a folder PixlStash created, the `-wal`/`-shm`/`-journal` SQLite
 makes inherit the folder's owner-only entries. In a folder the user chose they
-inherit that folder's permissions, so every guarded open and
-`verify_after_open` gives a sidecar *this account owns* the protected
-owner-only DACL if it does not carry one already (`_lock_down_sidecar`); a
-sidecar SQLite creates after that inherits the folder's permissions until the
-next open does the same. The folder itself and the database file the user
-placed there are never rewritten.
+inherit that folder's permissions - the user's choice. A sidecar *seen at a
+guarded open* (or in `verify_after_open`) that this account owns is given the
+protected owner-only DACL if it does not carry one already
+(`_lock_down_sidecar`). The rewrite goes through a handle opened with
+`FILE_FLAG_OPEN_REPARSE_POINT`, and only when `GetFileInformationByHandle`
+shows a regular file with one link at the volume serial and file index just
+`lstat`-ed, still owned by this account (`GetSecurityInfo`); then
+`SetSecurityInfo` on that handle. Anything else - a hard link to some other
+file, a directory, a reparse point, a file swapped since the check - is skipped
+with a once-per-key log line, so the name can never steer the rewrite onto a
+file that is not the sidecar. A sidecar created after the open keeps the
+folder's permissions until a later open sees it. The folder itself and the
+database file the user placed there are never rewritten.
 
 *Opening.* Every guarded open reads each object's owner SID and DACL (ctypes
 against advapi32/kernel32) and the pure `classify_windows_acl` decides who
@@ -4929,10 +4936,14 @@ and junctions), non-regular files, an identity change across the open.
 *Importing a login is the exception.* The location principle covers reading a
 library, not copying someone's password hash and tokens into the hub. For the
 legacy identity import only (`prepare_legacy_identity`,
-`_copy_legacy_identity_if_needed`), `require_trusted_owner_for_identity_import`
-refuses on Windows when the legacy vault or any sidecar is owned by an account
-outside the trusted set: a replacement is always the planter's, a legitimate
-legacy vault on this computer is this user's. Other accounts' *write* access
+`_copy_legacy_identity_if_needed`), the read passes
+`checked_read_connection(..., require_trusted_owner=True)`, which refuses on
+Windows a legacy vault or sidecar owned by an account outside the trusted set:
+a replacement is always the planter's, a legitimate legacy vault on this
+computer is this user's. The refusal sits inside the file validation, at open
+and again in `verify_after_open`, so the owner is judged on the same objects
+whose identity is verified before the first row is read - there is no separate
+check a rename could slip between. Other accounts' *write* access
 is still only reported, so an upgrade from an ordinary `D:\` folder goes
 ahead; an in-place edit by an account that can write a loose folder is covered
 by the location principle. An unreadable owner (FAT32/exFAT) is reported and
