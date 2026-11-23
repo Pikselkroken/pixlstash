@@ -4751,10 +4751,12 @@ Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.sna
 
 #### Trusted SQLite locations, and the accepted Windows residue (W17)
 
-Every credential-bearing SQLite open goes through `trusted_sqlite.py`, whose
-module docstring is the design record: which actor each check is for, what a
-`private=True` open verifies, and how the Windows owner/DACL check mirrors the
-POSIX owner/mode checks.
+Every open of a live vault or hub that reads its credentials, authorization
+data or configuration goes through `trusted_sqlite.py` (the list, and the four
+plain reads that remain, are below). Its module docstring is the design record:
+which actor each check is for, what a `private=True` open verifies, how
+Windows locks down what PixlStash creates, and what the Windows owner/DACL
+check reports.
 
 **Accepted risk W20 — mode bits warn, they no longer refuse.** Until #1152
 (commit `a26f765`, 2026-09-04) a group- or world-writable directory on the path
@@ -4868,75 +4870,95 @@ already group-writable — a tightened install performs none. A lookup that fail
 is reported as shared, so the worst case is a warning the directory did not
 need, never a weaker check.
 
-**Windows owner and DACL check (closes most of W17).** On `nt` the guard reads
-each object's owner SID and DACL natively (ctypes against advapi32/kernel32:
-`GetNamedSecurityInfoW`, `GetAclInformation`/`GetAce`, the process token's user
-SID) and reaches the verdict POSIX reaches from `st_uid` and the mode bits. The
-decision is the pure `classify_windows_acl`, tested on the Linux gate with
-synthetic ACLs; the reader is tested against real files on the `backend_windows`
-lane (`tests/test_trusted_sqlite_windows_acl.py`).
+**Windows: PixlStash locks down what it creates and reports what it finds.**
+Windows ignores the `0600`/`0700` modes PixlStash passes on POSIX, so two
+mechanisms stand in for them (design record: the module docstring of
+`trusted_sqlite.py`).
 
-| Object | Refused when | Warned when |
-|---|---|---|
-| any directory on the walk, the file, every sidecar | the owner is not the current user, `SYSTEM`, `BUILTIN\Administrators` or `NT SERVICE\TrustedInstaller` | — |
-| the directory holding the database | another principal holds `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL` | — |
-| an ancestor | another principal holds `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER` or `GENERIC_ALL` (add-only rights are the sticky bit: `C:\` grants Authenticated Users `FILE_ADD_SUBDIRECTORY` on itself) | — |
-| the file and every sidecar | another principal holds `FILE_WRITE_DATA`, `FILE_APPEND_DATA`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL` | a credential file (`private=True`) another principal can read |
-| a volume with no readable ACL | — | always (see residue) |
+*Creation.* When PixlStash creates a vault (`TrustedSQLiteLocation.open(...,
+create=True)`, `VaultDatabase`'s pre-create), the hub (`hub/db.py`), the hub a
+restore installs, or a folder through `mkdir_private`/`makedirs_private` (the
+library root, the config directory, edit-copy, share-copy, import-staging and
+restore-preservation folders), `restrict_new_path_to_owner` sets a *protected*
+DACL: inheritance from the parent off, full control for this account, `SYSTEM`
+and `BUILTIN\Administrators` only, `(OI)(CI)` on folders so the
+`-wal`/`-shm`/`-journal` SQLite creates later inherit the same entries. It runs
+only on something the process has just created, never on an existing file or
+folder, and a failure is a WARNING with the path and the Windows error code.
+This is the protection on Windows.
 
-"Another principal" is every SID but the four above, including groups the user
-is in (`Users`, `Authenticated Users`, `Everyone`): other accounts are in them
-too. Inherit-only ACEs are skipped; `CREATOR OWNER`/`CREATOR GROUP` grant nothing
-on the object and `OWNER RIGHTS` resolves to the already-verified owner. The
-default ACLs of `%APPDATA%`, `%LOCALAPPDATA%` and the profile folders grant only
-the user, `SYSTEM` and `Administrators`, so a desktop install passes silently.
-Every refusal runs inside `TrustedSQLiteLocation.open`, before any
-`sqlite3.connect`, and names the path, who can write it and the `icacls` command
-that removes the access.
+*Opening.* Every guarded open reads each object's owner SID and DACL (ctypes
+against advapi32/kernel32) and the pure `classify_windows_acl` decides who
+besides this account and the OS could write it. On Windows **every finding is
+a WARNING and the open proceeds** - owner decision: where a library lives is the
+user's call. Each warning names the true cause and the `icacls` or `takeown`
+command that changes it (never one aimed at a drive root), and is logged once
+per volume serial, path and finding, in the server log.
 
-Writability refuses on Windows where the POSIX mode bits only warn (W20). That
-is the mirror, not a departure: W20 is accepted because the mode bit is a proxy
-that was wrong where no second principal existed, and it names an observed
-second principal as the condition under which the check is a refusal. An ACE is
-that observation.
+| Object | Reported when |
+|---|---|
+| any directory on the walk, the file, every sidecar | the owner is not the current user, `SYSTEM`, `BUILTIN\Administrators` or `NT SERVICE\TrustedInstaller` (usual for a drive formatted on another computer) |
+| the directory holding the database | another account holds `FILE_ADD_FILE`, `FILE_ADD_SUBDIRECTORY`, `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL`, or an object-inherit ACE (inherit-only included) grants a file-write right that later sidecars would inherit |
+| an ancestor | another account holds `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER` or `GENERIC_ALL` (add-only rights are the sticky bit: `C:\` grants Authenticated Users `FILE_ADD_SUBDIRECTORY` on itself; `DELETE` on a volume root grants nothing) |
+| the file and every sidecar | another account holds `FILE_WRITE_DATA`, `FILE_APPEND_DATA`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, `GENERIC_WRITE` or `GENERIC_ALL`; or, for a credential file, can read it |
+| a path whose permissions cannot be read | always, with the cause: no `FILE_PERSISTENT_ACLS` on the volume (FAT32/exFAT), or the failing API and its Windows error code, or a descriptor with no owner |
 
-*What this costs.* A library in a folder other accounts can write no longer
-opens. The common case is a secondary NTFS drive: a folder created on `D:\`
-inherits Authenticated Users *Modify*, so `D:\Photos` as a library root is
-refused at startup (the server exits 1, as for any `TrustedSQLiteLocationError`)
-and by `POST /libraries`, with the `icacls` fix in the message. The library
-folder, not the hub, is affected; the hub under `%APPDATA%` keeps opening.
+"Another account" is every SID but the four above, including groups the user is
+in (`Users`, `Authenticated Users`, `Everyone`). Readings are conservative and
+can only over-report: deny ACEs never cancel an allow, callback and object
+allows count unconditionally, an unknown ACE type or a SID running past its ACE
+is a stranger with full control, a NULL DACL is Everyone. The default ACLs of
+`%APPDATA%`, `%LOCALAPPDATA%` and the profile folders are silent.
+`_accept_unverifiable_windows_acl` is the single switch for unreadable paths.
+What still refuses on Windows is what refuses everywhere: redirects (symlinks
+and junctions), non-regular files, an identity change across the open.
 
-**Accepted risk W17 (residue).** What the Windows check does not cover:
+*Intended behaviour, not risk.* A library the user keeps in a folder other
+accounts can write - a folder at the top of a second NTFS drive inherits
+Authenticated Users *Modify*, a shared or network folder, a FAT32/exFAT stick,
+a drive formatted on another computer - opens as the user chose. SQLite's
+sidecars there inherit that folder's permissions, and the server log says so
+once. Where a library lives is the user's decision.
 
-- **Volumes that cannot answer.** FAT32/exFAT carry no ACLs (no
-  `FILE_PERSISTENT_ACLS`), and some SMB servers fail `GetNamedSecurityInfoW` or
-  return a descriptor with no owner. `_accept_unverifiable_windows_acl` logs a
-  WARNING naming the path, the API and the error code (once per process per
-  path) and the open proceeds with only redirect rejection, the regular-file
-  requirement and the `(st_dev, st_ino)` identity match - the pre-check
-  behaviour. That function is the single switch: making it raise refuses those
-  volumes. `ERROR_ACCESS_DENIED` is deliberately not in this class and refuses:
-  the owner always holds `READ_CONTROL`, so an unreadable descriptor belongs to
-  somebody else. Whether it should is an open product decision (removable media and
-  network shares are the cases the multi-library plan names as this lane's real
-  concerns, and refusing them stops every library on a USB stick opening).
-- **Conservative readings that can over-refuse**, never under-refuse: a deny ACE
-  never cancels an allow, callback and object allow ACEs count unconditionally,
-  an ACE type the reader does not know is a stranger with full control, a NULL
-  DACL is Everyone with full control, and a logon-session SID (`S-1-5-5-x-y`)
-  is another principal.
-- **Moment of open only**, exactly as on POSIX: tampering after the guard
-  returns is excluded by the directory ACL the check established, not observed.
-- **Administrators are trusted**, as root is on POSIX: an elevated process can
-  always write.
+**Short reads go through the same checks.** Every open of a live vault or hub
+that reads its identity, tokens, fingerprint or folders goes through
+`trusted_sqlite.py`: the hub engine (`hub/db.py`), the vault engine's first
+connection (`vault.py`), backup's guarded read, the startup-permission probe,
+`finalize_opened_library`, and - through `checked_read_connection`, which runs
+the checks before `sqlite3.connect` and `verify_after_open` before the first
+row - the legacy-owner, legacy-preparation, legacy-copy and fingerprint reads
+in `hub/bootstrap.py` and `validate_vault_folder`, `read_vault_uuid` and
+`read_vault_folder_roots` in `hub/registry.py`. A vault that fails those checks
+raises `UntrustedVaultError`: a `LibraryError` for attach and relocate, a
+`TrustedSQLiteLocationError` for start-up, and never a `NotAVaultError`, so it
+is never offered the start-over recovery.
+
+**Accepted risk W17 (residue): what PixlStash itself could do better.**
+
+- **Creation is not atomic.** The file or folder exists with its inherited
+  permissions between `os.open`/`mkdir` and `SetNamedSecurityInfoW`. Creating
+  with `CreateFileW`/`CreateDirectoryW` and a `SECURITY_ATTRIBUTES` would close
+  it.
+- **Not everything PixlStash writes is locked down.** Files a restore extracts
+  into a library folder (the vault and pictures), backup archives
+  (`mkstemp` + `fchmod`, which Windows lacks before Python 3.13), the export
+  zip, and snapshot files SQLite writes with `VACUUM INTO` keep inherited
+  permissions; so do folders made by a plain `os.makedirs`.
+- **Four live-database reads still connect by path**, none reading credentials:
+  the switch's schema-revision check (`library_switch_service.assert_vault_not_newer`,
+  followed by a guarded open), backup's snapshot-scrub count and the snapshot
+  `VACUUM INTO` (both on a vault this process already opened through the
+  guard), and restore's `BEGIN IMMEDIATE` lock probe on the hub (reads no rows).
+- **Over-reporting.** The conservative readings above can name an account
+  that cannot in fact write; a logon-session SID (`S-1-5-5-x-y`) is reported as
+  another account.
 
 The vault is authorization-bearing (`authz/membership.py` answers scope
-questions out of it), so on an unverifiable volume this is not reads-only; the
-blast radius is stated in full in the module docstring. Revisit when the
-unverifiable-volume decision is taken, and immediately if multi-user work
-starts. Recorded here rather than in a review document because `docs/reviews/`
-is gitignored: an accepted risk nobody else can read is not a record.
+questions out of it), so where nothing is enforced the blast radius is the one
+stated in the module docstring. Revisit when any item above is taken up, and
+immediately if multi-user work starts. Recorded here rather than in a review
+document because `docs/reviews/` is gitignored: an accepted risk nobody else can
+read is not a record.
 
 **Accepted risk W19 — the hub path is resolved, not refused.** The guard refuses
 a *caller-supplied* path that reaches its target through a symlink. A library's
@@ -4972,10 +4994,9 @@ dominates the payoff — write access inside the owner's own config directory,
 which also holds `autostart/` and `systemd/user/`, is code execution as the
 owner by a shorter route than swapping a hub.
 
-Windows keeps `_reject_symlinked_path` intact, including junctions: on a volume
-that keeps no ACLs the owner/DACL check cannot run, so the redirect refusal is
-one of only three controls that run there and removing it would be a straight
-downgrade.
+Windows keeps `_reject_symlinked_path` intact, including junctions: there the
+owner/DACL check reports rather than refuses, so the redirect refusal is one of
+only three controls that refuse and removing it would be a straight downgrade.
 
 Owner: lindkvis. Revisit with W17. The wider change this was carved out of —
 retiring the POSIX ancestor refusal outright, canonicalising the vault
