@@ -1070,7 +1070,7 @@ jobs:
       - name: Install ffmpeg
         shell: bash
         run: |
-          choco install ffmpeg -y --no-progress
+          choco install ffmpeg --version 9.0.2 -y --no-progress
           ffmpeg -hide_banner -encoders | grep -q libx264
 
       - name: Set up Python

@@ -32,23 +32,34 @@ jobs:
   btbn:
     runs-on: ubuntu-latest
     outputs:
-      ffmpeg_commit: ${{ steps.fetch.outputs.ffmpeg_commit }}
-      version: ${{ steps.fetch.outputs.version }}
+      ffmpeg_commit: ${{ steps.verify.outputs.ffmpeg_commit }}
+      version: ${{ steps.verify.outputs.version }}
     steps:
-      - name: Download, verify and compress the BtbN builds
-        id: fetch
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The only step with a token in its environment: it downloads and nothing
+      # else, so nothing downloaded is ever run next to a credential.
+      - name: Download the BtbN builds
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$BTBN_TAG" =~ ^autobuild-[0-9-]+$ ]] || { echo "::error::bad btbn_tag"; exit 1; }
           [[ "$SERIES" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::bad series"; exit 1; }
-          mkdir -p dl out
+          mkdir dl
+          for theirs in linux64 linuxarm64 win64; do
+            # The trailing -$SERIES. excludes the -shared variants.
+            gh release download "$BTBN_TAG" -R BtbN/FFmpeg-Builds -D dl -p "*-${theirs}-lgpl-${SERIES}.*"
+          done
+      - name: Verify and compress the binaries
+        id: verify
+        run: |
+          set -euo pipefail
+          mkdir out
           # <our platform>:<BtbN platform>
           for pair in linux-x64:linux64 linux-arm64:linuxarm64 win-x64:win64; do
             ours="${pair%%:*}"; theirs="${pair##*:}"
-            # The trailing -$SERIES. excludes the -shared variants.
-            gh release download "$BTBN_TAG" -R BtbN/FFmpeg-Builds -D dl -p "*-${theirs}-lgpl-${SERIES}.*"
             archive=$(ls dl/*-"${theirs}"-lgpl-"${SERIES}".*)
             mkdir "dl/$ours"
             case "$archive" in
@@ -79,32 +90,38 @@ jobs:
           [ "$(sort -u versions.txt | wc -l)" = 1 ] || { echo "::error::platforms built from different FFmpeg commits"; sort -u versions.txt; exit 1; }
           ver=$(head -n1 versions.txt)
           [[ "$ver" =~ -g([0-9a-f]{7,40})$ ]] || { echo "::error::no commit in version $ver"; exit 1; }
-          commit=${BASH_REMATCH[1]}
-          echo "ffmpeg_commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "ffmpeg_commit=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-
-          # Corresponding source: FFmpeg at that commit, OpenH264 and BtbN's
-          # scripts at the commits the build used.
-          published=$(gh api "repos/BtbN/FFmpeg-Builds/releases/tags/$BTBN_TAG" --jq .published_at)
+      # Corresponding source: FFmpeg at that commit, OpenH264 and every other
+      # library BtbN links, and BtbN's scripts, all at the commits it built.
+      - name: Collect the corresponding source and licences
+        env:
+          FFMPEG_COMMIT: ${{ steps.verify.outputs.ffmpeg_commit }}
+          VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          command -v svn >/dev/null || { sudo apt-get update -q; sudo apt-get install -y -q --no-install-recommends subversion; }
           git clone -q https://github.com/BtbN/FFmpeg-Builds.git btbn-src
-          # An autobuild is built from master as it was when the release was made.
-          btbn_commit=$(git -C btbn-src rev-list -1 --before="$published" origin/master)
+          btbn_commit=$(git -C btbn-src rev-parse "$BTBN_TAG^{commit}")
+          git -C btbn-src checkout -q "$btbn_commit"
           git -C btbn-src archive --format=tar.gz --prefix=FFmpeg-Builds/ -o "$PWD/out/ffmpeg-source-btbn-build-scripts.tar.gz" "$btbn_commit"
-          h264_commit=$(git -C btbn-src show "$btbn_commit:scripts.d/50-openh264.sh" | sed -n 's/^SCRIPT_COMMIT="\(.*\)"/\1/p')
+          h264_commit=$(sed -n 's/^SCRIPT_COMMIT="\(.*\)"/\1/p' btbn-src/scripts.d/50-openh264.sh)
           [[ "$h264_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no openh264 commit found"; exit 1; }
-          git clone -q --filter=blob:none https://github.com/cisco/openh264.git h264-src
-          git -C h264-src archive --format=tar.gz --prefix=openh264/ -o "$PWD/out/ffmpeg-source-openh264.tar.gz" "$h264_commit"
           git clone -q --filter=blob:none https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
-          full=$(git -C ffmpeg-src rev-parse "$commit^{commit}")
+          full=$(git -C ffmpeg-src rev-parse "$FFMPEG_COMMIT^{commit}")
           git -C ffmpeg-src archive --format=tar.gz --prefix=FFmpeg/ -o "$PWD/out/ffmpeg-source-ffmpeg.tar.gz" "$full"
+          # Every other library (OpenH264 included), plus THIRD_PARTY_LICENSES.txt.
+          packaging/ffmpeg/collect_sources.sh btbn-src "$SERIES" out
           cat > out/SOURCES.txt <<SRC
           Corresponding source for the ffmpeg binaries in this release.
           ffmpeg-linux-*, ffmpeg-win-* : BtbN/FFmpeg-Builds autobuild $BTBN_TAG (lgpl variant, $SERIES)
           ffmpeg-mac-arm64             : built from the FFmpeg source below by the workflow that made this release
-          FFmpeg    $full  (version $ver)   ffmpeg-source-ffmpeg.tar.gz
-          OpenH264  $h264_commit   ffmpeg-source-openh264.tar.gz
-          BtbN/FFmpeg-Builds  $btbn_commit   ffmpeg-source-btbn-build-scripts.tar.gz
-            (the commit of master at the release's publication time; its scripts.d pins every other library the build links and its patches/ holds the patches applied to FFmpeg)
+          FFmpeg    $full  (version $VERSION)   ffmpeg-source-ffmpeg.tar.gz
+          BtbN/FFmpeg-Builds  $btbn_commit (tag $BTBN_TAG)   ffmpeg-source-btbn-build-scripts.tar.gz
+            (its patches/ holds the patches applied to FFmpeg)
+          Every library the Windows and Linux builds link (OpenH264 is $h264_commit), at the commit built,
+            one tarball each: ffmpeg-source-dep-*.tar.gz; DEPS.txt lists them.
+          Licences of all of them: THIRD_PARTY_LICENSES.txt
           SRC
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -165,10 +182,18 @@ jobs:
         run: |
           set -euo pipefail
           cd out
-          sha256sum ffmpeg-*.xz | tee SHA256SUMS
           [ "$(ls ffmpeg-*.xz | wc -l)" = 4 ] || { echo "::error::expected 4 binaries"; exit 1; }
+          sha256sum ffmpeg-*.xz THIRD_PARTY_LICENSES.txt | tee SHA256SUMS
+          # The pin, ready to paste into packaging/ffmpeg/ffmpeg_pin.json.
+          python3 - "ffmpeg-lgpl-$VERSION" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          h = {l.split()[1]: l.split()[0] for l in open("SHA256SUMS")}
+          pin = {"release": sys.argv[1], "licenses": {"file": "THIRD_PARTY_LICENSES.txt", "sha256": h["THIRD_PARTY_LICENSES.txt"]},
+                 "assets": {p: {"file": f"ffmpeg-{p}.xz", "sha256": h[f"ffmpeg-{p}.xz"]} for p in ("linux-x64", "linux-arm64", "win-x64", "mac-arm64")}}
+          print(json.dumps(pin, indent=2))
+          PY
           # Not "latest": this is not a PixlStash release.
           gh release create "ffmpeg-lgpl-$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --latest=false --title "ffmpeg (LGPL) $VERSION" \
             --notes "LGPL ffmpeg binaries bundled with PixlStash, with their corresponding source. See SOURCES.txt. Pinned in packaging/ffmpeg/ffmpeg_pin.json." \
-            ffmpeg-*.xz ffmpeg-source-*.tar.gz SHA256SUMS SOURCES.txt
+            ffmpeg-*.xz ffmpeg-source-*.tar.gz SHA256SUMS SOURCES.txt DEPS.txt THIRD_PARTY_LICENSES.txt

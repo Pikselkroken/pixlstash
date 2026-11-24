@@ -51,14 +51,18 @@ Basics:
   variant) or built from FFmpeg source (macOS) by
   `.github/workflows/ffmpeg-mirror.yml` into a release of this repository named
   `ffmpeg-lgpl-<version>`. That release also holds the corresponding source: the
-  FFmpeg source at the exact commit, the OpenH264 source and BtbN's build scripts
-  (which pin every other library linked), with `SOURCES.txt` naming each commit.
-  `packaging/ffmpeg/ffmpeg_pin.json` pins the release and each binary's SHA256;
+  FFmpeg source at the exact commit, the source of every library the Windows and
+  Linux builds link (OpenH264 included, at the commit built), and BtbN's build
+  scripts, with `SOURCES.txt` naming each commit, and `THIRD_PARTY_LICENSES.txt`
+  holding those libraries' licence texts. After a run, paste the pin JSON printed
+  in the publish job's log and step summary (not the `SHA256SUMS` asset) into
+  `packaging/ffmpeg/ffmpeg_pin.json`; it pins the release and each file's SHA256;
   `packaging/ffmpeg/fetch_ffmpeg.py` is what the desktop build and the
   Dockerfiles use to fetch and verify it.
 - The installer (`resources/ffmpeg/`) and the images (`/usr/share/doc/ffmpeg-lgpl/`)
-  include `NOTICE.txt` and the licence texts (`COPYING.LGPLv3`, `COPYING.GPLv3`)
-  from `packaging/ffmpeg/`.
+  include `NOTICE.txt`, the licence texts (`COPYING.LGPLv2.1`, `COPYING.LGPLv3`,
+  `COPYING.GPLv3`), `THIRD_PARTY_LICENSES.txt` and a `SOURCE.txt` giving the URL
+  of the mirror release.
 - The backend uses the binary named by `PIXLSTASH_FFMPEG` (the desktop app sets
   it; the Docker images have it at `/usr/local/bin/ffmpeg`), otherwise `ffmpeg` on
   `PATH`. Set it to another ffmpeg to use that instead.
