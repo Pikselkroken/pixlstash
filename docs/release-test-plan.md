@@ -230,7 +230,7 @@ all** — Metal is bundled in the runtime.
 |-------|-----------------|---------------|
 | Settings → compute backends: install the GPU overlay — download/install completes and the backend activates | | |
 | After restart on the GPU backend, JoyCaption **nf4** produces a caption for a newly imported picture **on the GPU** (check logs: no CPU fallback) | | |
-| ONNX runtime loads on the overlay (no `libcudart`/DLL import errors in logs — regression: per-accel ORT pin) | | |
+| ONNX runtime loads on the overlay (no `libcudart`/DLL import errors and no `Failed to create CUDAExecutionProvider` warning in logs — regression: per-accel ORT pin) | | |
 | Upgrading from an app with a CUDA 12.8 overlay: it still starts on the GPU; Settings lists it as replaced, installing CUDA 13 removes it | | |
 
 ### 3.3 Broken-overlay resilience (Windows/Linux)

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { Accel, ACCEL_LABELS } from '../config';
+import { Accel, ACCEL_LABELS, RETIRED_ACCELS } from '../config';
 
 const execFileP = promisify(execFile);
 
@@ -175,8 +175,9 @@ export async function detectHardware(forcedAccel: Accel | null = null): Promise<
  * already ships a working `bundledAccel` (cpu on Windows/Linux, metal on macOS);
  * this returns the detected discrete-GPU accelerators (cu130/rocm) that need an
  * on-demand wheel overlay. Empty when the bundled env already covers the GPU
- * (e.g. Metal on Apple Silicon).
+ * (e.g. Metal on Apple Silicon). A retired accelerator is never offered: its
+ * install is refused (forcing one with --force-backend offers nothing).
  */
 export function gpuUpgrades(hw: Hardware, bundledAccel: Accel): Accel[] {
-  return hw.accelerators.filter((a) => a !== 'cpu' && a !== bundledAccel);
+  return hw.accelerators.filter((a) => a !== 'cpu' && a !== bundledAccel && !RETIRED_ACCELS[a]);
 }

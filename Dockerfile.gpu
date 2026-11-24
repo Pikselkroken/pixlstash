@@ -69,7 +69,9 @@ RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('/tmp/pyprojec
 RUN pip uninstall -y onnxruntime
 RUN pip install --no-cache-dir onnxruntime-gpu==1.32.0 \
     && python -c "import onnxruntime as o; assert 'CUDAExecutionProvider' in o.get_available_providers()" \
-    && missing="$(ldd /opt/venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime_providers_cuda.so | grep 'not found' | grep -v 'libcuda\.so\.1 ' || true)" \
+    && lib=/opt/venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime_providers_cuda.so \
+    && test -f "$lib" \
+    && missing="$(ldd "$lib" | grep 'not found' | grep -v 'libcuda\.so\.1 ' || true)" \
     && if [ -n "$missing" ]; then echo "ONNX Runtime's CUDA provider cannot load: $missing"; exit 1; fi
 
 

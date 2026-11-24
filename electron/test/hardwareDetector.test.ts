@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { detectHardware, driverRunsCuda13 } from '../src/backend/HardwareDetector';
+import { detectHardware, driverRunsCuda13, gpuUpgrades, Hardware } from '../src/backend/HardwareDetector';
 import { ACCEL_LABELS } from '../src/config';
 
 /**
@@ -92,5 +92,12 @@ describe('driverRunsCuda13', () => {
     assert.equal(driverRunsCuda13(undefined), true);
     assert.equal(driverRunsCuda13(''), true);
     assert.equal(driverRunsCuda13('[N/A]'), true);
+  });
+});
+
+describe('gpuUpgrades', () => {
+  it('offers cu130 but never the retired cu128, even when it is forced', () => {
+    const hw: Hardware = { os: 'linux', arch: 'x64', accelerators: ['cu130', 'cu128', 'cpu'] };
+    assert.deepEqual(gpuUpgrades(hw, 'cpu'), ['cu130']);
   });
 });
