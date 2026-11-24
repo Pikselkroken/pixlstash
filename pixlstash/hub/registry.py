@@ -31,7 +31,10 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.sqlite_uri import sqlite_file_uri
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocationError,
+    checked_read_connection,
+)
 
 logger = get_logger(__name__)
 
@@ -152,6 +155,17 @@ class LibraryError(RuntimeError):
 
 class NotAVaultError(LibraryError):
     """The folder does not contain a usable ``vault.db``."""
+
+
+class UntrustedVaultError(LibraryError, TrustedSQLiteLocationError):
+    """The vault failed the location checks every vault open runs.
+
+    Both a registry error, so attach and relocate report it like any other
+    refusal, and a ``TrustedSQLiteLocationError``, so start-up reports it the
+    way the guarded open itself would. Deliberately not a ``NotAVaultError``:
+    that one can lead to the offer to start the library over, and a vault
+    PixlStash will not trust is not a vault that is gone.
+    """
 
 
 class LibraryExistsError(LibraryError):
@@ -280,24 +294,24 @@ def validate_vault_folder(folder: str, *, filename: str = VAULT_FILENAME) -> str
         )
 
     try:
-        conn = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
-        )
+        with checked_read_connection(vault_path) as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            except sqlite3.Error as exc:
+                logger.error(
+                    "Could not read the schema of vault %s: %s", vault_path, exc
+                )
+                raise NotAVaultError(
+                    f"{vault_path} is not a readable SQLite database: {exc}"
+                ) from exc
+    except TrustedSQLiteLocationError as exc:
+        logger.error("Vault %s failed the location checks: %s", vault_path, exc)
+        raise UntrustedVaultError(str(exc)) from exc
     except sqlite3.Error as exc:
         logger.error("Could not open vault %s read-only: %s", vault_path, exc)
         raise NotAVaultError(f"{vault_path} could not be opened: {exc}") from exc
-
-    try:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    except sqlite3.Error as exc:
-        logger.error("Could not read the schema of vault %s: %s", vault_path, exc)
-        raise NotAVaultError(
-            f"{vault_path} is not a readable SQLite database: {exc}"
-        ) from exc
-    finally:
-        conn.close()
 
     tables = {row[0] for row in rows}
     missing = [table for table in _VAULT_MARKER_TABLES if table not in tables]
@@ -344,27 +358,27 @@ def read_vault_uuid(folder: str) -> Optional[str]:
     if not os.path.isfile(vault_path):
         return None
     try:
-        conn = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
+        with checked_read_connection(vault_path) as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "library_settings" not in tables:
+                return None
+            row = conn.execute("SELECT library_uuid FROM library_settings").fetchone()
+            return row[0] if row and row[0] else None
+    except TrustedSQLiteLocationError as exc:
+        logger.warning(
+            "Not reading the fingerprint of %s, which failed the location checks: %s",
+            vault_path,
+            exc,
         )
+        return None
     except sqlite3.Error as exc:
         logger.warning("Could not read the fingerprint of %s: %s", vault_path, exc)
         return None
-
-    try:
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        if "library_settings" not in tables:
-            return None
-        row = conn.execute("SELECT library_uuid FROM library_settings").fetchone()
-        return row[0] if row and row[0] else None
-    except sqlite3.Error as exc:
-        logger.warning("Could not read library_settings from %s: %s", vault_path, exc)
-        return None
-    finally:
-        conn.close()
 
 
 def read_vault_folder_roots(folder: str) -> list[str]:
@@ -396,10 +410,7 @@ def read_vault_folder_roots(folder: str) -> list[str]:
     if vault_path is None:
         return []
     try:
-        conn = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
-        )
-        try:
+        with checked_read_connection(vault_path) as conn:
             tables = {
                 row[0]
                 for row in conn.execute(
@@ -413,8 +424,17 @@ def read_vault_folder_roots(folder: str) -> list[str]:
                 for row in conn.execute(f"SELECT folder FROM {table}")
                 if row[0]
             ]
-        finally:
-            conn.close()
+    except TrustedSQLiteLocationError as exc:
+        # The same reasoning as a non-database below: a vault that fails the
+        # checks every open runs cannot be opened, so nothing is watching or
+        # scanning its folders, and one such folder must not block every add.
+        logger.warning(
+            "Ignoring the watch and reference folders of %s, which failed the "
+            "location checks: %s",
+            vault_path,
+            exc,
+        )
+        return []
     except sqlite3.OperationalError as exc:
         # Locked, busy, unreadable right now: the vault may be perfectly good
         # and in use, so its folders are unknown rather than absent.

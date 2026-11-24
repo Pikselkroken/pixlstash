@@ -54,6 +54,7 @@ from pixlstash.hub.registry import (
     LibraryNotFoundError,
     LibraryOverlapError,
     NotAVaultError,
+    UntrustedVaultError,
     resolve_path,
     validate_vault_folder,
 )
@@ -451,6 +452,9 @@ def create_router(server) -> APIRouter:
         """Whether *folder* holds a vault this build can attach."""
         try:
             validate_vault_folder(folder)
+        except UntrustedVaultError:
+            # It holds one; attaching it reports why it will not open.
+            return True
         except NotAVaultError:
             return False
         return True

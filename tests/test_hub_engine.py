@@ -15,6 +15,7 @@ import types
 import pytest
 from sqlmodel import select
 
+from pixlstash import database as database_module
 from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
@@ -32,6 +33,13 @@ from pixlstash.trusted_sqlite import (
     _is_private_group,
     _reject_symlinked_path,
     _validate_file,
+)
+from tests.windows_acl_vectors import (
+    EVERYONE,
+    allow,
+    install_fake_windows_security,
+    profile_default_dacl,
+    security,
 )
 
 
@@ -454,6 +462,7 @@ class TestTrustedPathSymlinkCheck:
         directory = tmp_path / "library"
         directory.mkdir(mode=0o700)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         guard = TrustedSQLiteLocation.open(str(directory / "vault.db"), create=True)
         guard.close()
@@ -473,6 +482,7 @@ class TestTrustedPathSymlinkCheck:
         appdata = tmp_path / "AppData" / "Roaming" / "pixlstash-desktop"
         appdata.mkdir(parents=True, mode=0o700)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         guard = TrustedSQLiteLocation.open(
             str(appdata / "hub.db"),
@@ -823,6 +833,7 @@ class TestWindowsHasNoModeBits:
         path.touch()
         os.chmod(path, 0o666)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(monkeypatch)
 
         _validate_file(str(path), private=True)
 
@@ -884,14 +895,13 @@ class TestHostileSidecarRefusal:
       main-file ownership checks first, and the test would keep passing with
       the sidecar loop deleted.
 
-    RESIDUE: Windows, where this attack matters most, is NOT covered here
-    and cannot be: ``_validate_file`` returns unconditionally on ``nt``
-    because ``st_mode``/``st_uid`` are synthesised there (W2), so under the
-    suite's ``nt`` simulation there is no sidecar check to exercise or to
-    break. The last test below asserts that acceptance so the gap stays
-    visible. Closing it requires the native DACL verifier (plan item 3c,
-    ctypes ``GetNamedSecurityInfoW``); tracked in the W17 accepted-risk
-    record, owner lindkvis, revisit 2026-11-08.
+    Windows: ``st_mode``/``st_uid`` are synthesised there, so the sidecar's
+    owner SID and DACL are read instead, and - by the owner's decision - a
+    sidecar another account can write is reported, not refused. Under the
+    suite's ``nt`` simulation the ctypes reader is replaced by vectors
+    (``tests/windows_acl_vectors.py``) and the last tests below assert that
+    report, naming the sidecar, and its silent positive control; the reader
+    itself is exercised in ``tests/test_trusted_sqlite_windows_acl.py``.
     """
 
     @staticmethod
@@ -988,21 +998,46 @@ class TestHostileSidecarRefusal:
         finally:
             first.close()
 
-    def test_windows_accepts_the_sidecar_it_cannot_judge(self, tmp_path, monkeypatch):
-        """On ``nt`` a hostile-looking sidecar is ACCEPTED, asserted rather than hidden.
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_windows_reports_a_sidecar_another_principal_can_write(
+        self, tmp_path, monkeypatch, suffix, caplog
+    ):
+        """On ``nt`` the sidecar's DACL is read, and an Everyone grant is reported.
 
-        ``st_mode`` there is synthesised (0o666 for any writable file) and
-        ``st_uid`` is meaningless, so ``_validate_file`` returns before either
-        check (W2). This pins the residue described in the class docstring: if
-        someone adds a real Windows sidecar check (plan item 3c), this test
-        fails and gets replaced by real coverage.
+        Only the sidecar is hostile: the directory and the main file answer
+        with the profile default, so the report can only come from the sidecar
+        loop, and it comes from ``open()`` - before any connect.
         """
-        sidecar = tmp_path / "hub.db-wal"
-        sidecar.write_bytes(b"hostile frames")
-        os.chmod(sidecar, 0o666)
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o600)
         monkeypatch.setattr(os, "name", "nt")
+        install_fake_windows_security(
+            monkeypatch,
+            {
+                sidecar: security(
+                    dacl=profile_default_dacl() + (allow(EVERYONE, 0x0002),)
+                )
+            },
+        )
 
-        _validate_file(str(sidecar), private=True)
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+        assert _warned(caplog, f"{sidecar} can also be changed by Everyone")
+
+    @pytest.mark.parametrize("suffix", trusted_sqlite._SIDECAR_SUFFIXES)
+    def test_windows_opens_a_sidecar_with_the_profile_default_acl(
+        self, tmp_path, monkeypatch, suffix, caplog
+    ):
+        """The other direction: SQLite's own sidecars inherit the profile ACL."""
+        path, sidecar = self._hub_with_sidecar(tmp_path, suffix, 0o666)
+        monkeypatch.setattr(os, "name", "nt")
+        seen = install_fake_windows_security(monkeypatch)
+
+        TrustedSQLiteLocation.open(
+            path, private=True, trusted_root=os.path.dirname(path)
+        ).close()
+        assert sidecar in seen
+        assert not _warned(caplog, sidecar)
 
     def test_a_sidecar_that_vanishes_mid_validation_does_not_refuse_the_open(
         self, tmp_path, monkeypatch
@@ -1033,6 +1068,163 @@ class TestHostileSidecarRefusal:
             path, private=True, create=True, trusted_root=str(directory)
         )
         guard.close()
+
+
+def _locks_on(*paths: str) -> list[tuple[str, str, str, str]]:
+    """``(file, type, start, end)`` of every POSIX lock this process holds on *paths*.
+
+    ``/proc/locks`` lines read ``N: POSIX ADVISORY READ <pid> <dev>:<ino>
+    <start> <end>``; a blocked waiter has an extra ``->`` after the number.
+    """
+    inodes = {os.stat(path).st_ino: os.path.basename(path) for path in paths}
+    held = []
+    with open("/proc/locks") as handle:
+        for line in handle:
+            fields = line.split()
+            if fields[1] == "->":
+                fields = fields[:1] + fields[2:]
+            kind, access, pid, device_inode = fields[1], fields[3], fields[4], fields[5]
+            inode = int(device_inode.split(":")[-1])
+            if kind == "POSIX" and pid == str(os.getpid()) and inode in inodes:
+                held.append((inodes[inode], access, fields[6], fields[7]))
+    return sorted(held)
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/locks"), reason="reads /proc/locks")
+class TestTheLiveEnginesLocksSurviveAGuardedRead:
+    """R2-1: a guarded open never drops this process's locks on the file.
+
+    POSIX locks belong to the process and the inode, so closing ANY ordinary
+    descriptor this process has on the database releases every lock it holds
+    there - a live engine's included. The registry's folder scan reads the
+    *active* vault through ``checked_read_connection`` on every create, attach
+    and relocate, so a guard that opened and closed its own descriptor stripped
+    the running server of its read lock on the vault and its WAL index.
+    """
+
+    @pytest.fixture
+    def live(self, tmp_path):
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "vault.db")
+        connection = sqlite3.connect(path, isolation_level=None)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE library_settings (library_uuid TEXT)")
+        connection.execute("BEGIN")
+        connection.execute("SELECT * FROM library_settings").fetchall()
+        try:
+            yield path
+        finally:
+            connection.close()
+
+    def test_a_checked_read_leaves_the_live_read_lock_in_place(self, live):
+        before = _locks_on(live, live + "-shm")
+        assert before, "the live read transaction should hold POSIX locks"
+
+        with trusted_sqlite.checked_read_connection(live) as connection:
+            connection.execute("SELECT 1").fetchone()
+
+        assert _locks_on(live, live + "-shm") == before
+
+    def test_a_guard_open_and_close_leaves_the_live_read_lock_in_place(self, live):
+        before = _locks_on(live, live + "-shm")
+
+        guard = TrustedSQLiteLocation.open(live)
+        guard.verify_after_open()
+        guard.close()
+
+        assert _locks_on(live, live + "-shm") == before
+
+
+class TestACheckedReadSeesASwapDuringConnect:
+    """The identity comparison is what stands in for the old descriptor guard."""
+
+    def test_a_file_replaced_while_connecting_is_refused(self, tmp_path, monkeypatch):
+        directory = tmp_path / "lib"
+        directory.mkdir(mode=0o700)
+        path = str(directory / "vault.db")
+        sqlite3.connect(path).close()
+        real_connect = sqlite3.connect
+
+        def replacing_connect(database, *args, **kwargs):
+            os.unlink(path)
+            sqlite3.connect.__wrapped__(path).close()
+            return real_connect(database, *args, **kwargs)
+
+        replacing_connect.__wrapped__ = real_connect
+        monkeypatch.setattr(sqlite3, "connect", replacing_connect)
+        with pytest.raises(TrustedSQLiteLocationError, match="changed while"):
+            with trusted_sqlite.checked_read_connection(path):
+                pass
+
+
+class TestVaultPreCreateNeverFollowsALink:
+    """R2-2: a dangling symlink at vault.db must not become a database elsewhere.
+
+    ``os.path.exists`` is False for a dangling link, so the pre-create runs,
+    ``O_EXCL`` fails on the link with ``FileExistsError`` - and SQLite, left to
+    open the path, would create the database at the link's target.
+    """
+
+    def test_a_dangling_symlink_refuses_and_creates_nothing(self, tmp_path):
+        library = tmp_path / "lib"
+        library.mkdir(mode=0o700)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o700)
+        target = elsewhere / "planted.db"
+        (library / "vault.db").symlink_to(target)
+
+        with pytest.raises(TrustedSQLiteLocationError, match="symlink"):
+            database_module.VaultDatabase(str(library / "vault.db"))
+
+        assert not target.exists()
+
+    def test_a_regular_file_that_won_the_race_is_still_opened(
+        self, tmp_path, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir(mode=0o700)
+        path = str(library / "vault.db")
+        open(path, "wb").close()
+        real_exists = os.path.exists
+        monkeypatch.setattr(
+            database_module.os.path,
+            "exists",
+            lambda p: False if str(p) == path else real_exists(p),
+        )
+
+        vault = database_module.VaultDatabase(path)
+        vault.close()
+
+        assert os.path.isfile(path) and os.path.getsize(path) > 0
+
+
+class TestLoosePermissionsAreReportedOnce:
+    """R2-6: the overlap scan opens every library on each add; say it once."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+    def test_a_world_writable_folder_is_warned_about_once(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(trusted_sqlite, "_notices_logged", set())
+        directory = tmp_path / "lib"
+        directory.mkdir()
+        os.chmod(directory, 0o777)
+        try:
+            for _ in range(3):
+                TrustedSQLiteLocation.open(
+                    str(directory / "vault.db"), create=True
+                ).close()
+        finally:
+            os.chmod(directory, 0o700)
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING"
+            and f"SQLite directory {directory} " in r.getMessage()
+        ]
+        assert len(warnings) == 1
 
 
 class TestAuthServiceOnTheHub:

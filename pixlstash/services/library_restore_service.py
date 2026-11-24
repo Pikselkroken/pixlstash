@@ -49,6 +49,8 @@ from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import makedirs_private
+from pixlstash.trusted_sqlite import create_private_temp_file
 from pixlstash.services.library_backup_service import (
     human_bytes,
 )
@@ -609,7 +611,7 @@ def _preserve_current_config(plan: RestorePlan) -> bool:
     ]
     if not present:
         return False
-    os.makedirs(plan.preserved_dir, mode=0o700, exist_ok=True)
+    makedirs_private(plan.preserved_dir)
     for name in present:
         source = os.path.join(plan.config_dir, name)
         try:
@@ -759,8 +761,10 @@ def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
         RestoreError: The copy failed, before anything live has moved.
     """
     source = os.path.join(scratch, _HUB_NAME)
-    handle, temp_path = tempfile.mkstemp(
-        prefix=".pixlstash-hub-", suffix=".tmp", dir=plan.config_dir
+    # The temp becomes the live hub: created 0600, and owner-only on Windows
+    # where the mode means nothing. copyfile rewrites its content in place.
+    handle, temp_path = create_private_temp_file(
+        plan.config_dir, prefix=".pixlstash-hub-", suffix=".tmp"
     )
     os.close(handle)
     try:

@@ -691,6 +691,7 @@ jobs:
           tests/test_telemetry_sender.py
           tests/test_training_dataset.py
           tests/test_trash_restore.py
+          tests/test_trusted_sqlite_windows_acl.py
           tests/test_vram_batch_budget.py
           tests/test_vram_oom_retry.py
           tests/test_watch_folder_worker.py
@@ -1107,6 +1108,7 @@ jobs:
             tests/test_migrations.py \
             tests/test_snapshots.py \
             tests/test_restore.py \
+            tests/test_trusted_sqlite_windows_acl.py \
             tests/test_snapshots_auth.py \
             tests/test_metadata_hash.py \
             tests/test_architecture_guardrails.py \
