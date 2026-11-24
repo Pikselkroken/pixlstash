@@ -88,7 +88,7 @@ export interface DistInfo {
 }
 
 /** GPU accelerators that can be layered on top of the bundled CPU/Metal env. */
-export const OVERLAY_ACCELS: Accel[] = ['cu130', 'cu128', 'rocm'];
+export const OVERLAY_ACCELS: Accel[] = ['cu132', 'cu128', 'rocm'];
 
 /**
  * Build the `pip install` argument list for a GPU overlay. Pure (no I/O) so the
@@ -124,7 +124,7 @@ export function buildOverlayPipArgs(
   } else if (userIndexUrl) {
     args.push('--index-url', userIndexUrl);
   }
-  // Pin torch to the bundled *public* version, dropping the +cpu/+cu130 local
+  // Pin torch to the bundled *public* version, dropping the +cpu/+cu132 local
   // tag (the GPU index serves its own local build). If the GPU index lags the
   // bundled CPU build - its torch version isn't published there yet - fall back
   // to the index's newest and let pip choose the matching torchvision. The

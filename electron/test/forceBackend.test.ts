@@ -44,11 +44,11 @@ describe('parseForcedBackend', () => {
 
   it('lets argv win over the env var when both are set', () => {
     const accel = parseForcedBackend(
-      ['--force-backend=cu130'],
+      ['--force-backend=cu132'],
       { PIXLSTASH_FORCE_BACKEND: 'rocm' },
       () => {},
     );
-    assert.equal(accel, 'cu130');
+    assert.equal(accel, 'cu132');
   });
 
   it('ignores an invalid argv value and warns', () => {

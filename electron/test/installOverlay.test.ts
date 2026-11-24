@@ -63,25 +63,25 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     assert.ok(!args.includes('torchvision==0.25.0'), 'no exact torchvision pin in fallback');
   });
 
-  it('cu130 overlay pins onnxruntime-gpu to its CUDA generation, NOT the bundle version', () => {
+  it('cu132 overlay pins onnxruntime-gpu to its CUDA generation, NOT the bundle version', () => {
     const { args } = buildOverlayPipArgs(
-      'cu130',
+      'cu132',
       { accel: 'cpu', torch: '2.13.0+cpu', torchvision: '0.28.0+cpu', onnxruntime: '1.24.3' },
       'c.txt',
       'd',
-      ['2.14.1', '2.13.0'],
+      ['2.15.0', '2.14.1', '2.13.0'],
       undefined,
     );
-    assert.equal(flagValue(args, '--index-url'), 'https://download.pytorch.org/whl/cu130');
-    // The point of the cu130 move (#2755): the index publishes the bundled torch,
+    assert.equal(flagValue(args, '--index-url'), 'https://download.pytorch.org/whl/cu132');
+    // The point of the cu132 move (#2755): the index publishes the bundled torch,
     // so the overlay runs the torch CI tests instead of the index's fallback.
     assert.ok(args.includes('torch==2.13.0') && args.includes('torchvision==0.28.0'));
     // Regression for the 2026-07-20 incident: inheriting the bundle's ORT version
     // ignores the CUDA-flavor axis (PyPI serves one CUDA generation per release),
     // and the wrong generation cannot load its CUDA provider. The pin must be a
     // CUDA 13 build (1.27+), from ORT_GPU_PIN.
-    assert.equal(ORT_GPU_PIN.cu130, '1.32.0', 'cu130 pin is the verified CUDA-13 PyPI build');
-    assert.ok(args.includes(`onnxruntime-gpu==${ORT_GPU_PIN.cu130}`), 'uses the per-accel CUDA-generation pin');
+    assert.equal(ORT_GPU_PIN.cu132, '1.32.0', 'cu132 pin is the verified CUDA-13 PyPI build');
+    assert.ok(args.includes(`onnxruntime-gpu==${ORT_GPU_PIN.cu132}`), 'uses the per-accel CUDA-generation pin');
     assert.ok(
       !args.includes('onnxruntime-gpu==1.24.3'),
       "the bundle's onnxruntime version must NOT leak into the gpu package pin",
@@ -92,7 +92,7 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     const info: RuntimeInfo = { accel: 'cpu', torch: '2.13.0+cpu', torchvision: '0.28.0+cpu', onnxruntime: '1.24.3' };
     await assert.rejects(
       new BackendManager().installOverlay('cu128', info, () => {}, '0.0.0'),
-      (e: Error) => e.message.endsWith(`is no longer installed; install ${ACCEL_LABELS.cu130} instead`),
+      (e: Error) => e.message.endsWith(`is no longer installed; install ${ACCEL_LABELS.cu132} instead`),
     );
   });
 

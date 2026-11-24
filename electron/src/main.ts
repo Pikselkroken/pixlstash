@@ -950,7 +950,7 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
 function deviceFor(accel: Accel | null): string | undefined {
   if (isDevBackend()) return undefined; // dev uses the developer's own env/config
   const a = accel ?? bundledAccel();
-  if (a === 'cu130' || a === 'cu128' || a === 'rocm') return 'cuda';
+  if (a === 'cu132' || a === 'cu128' || a === 'rocm') return 'cuda';
   if (a === 'metal') return 'auto';
   return 'cpu';
 }

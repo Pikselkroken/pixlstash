@@ -4,14 +4,14 @@ import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from '
 import { pathKey } from './urlPolicy';
 
 /** Compute accelerators a PixlStash runtime can target. */
-export type Accel = 'cpu' | 'cu130' | 'cu128' | 'rocm' | 'metal';
+export type Accel = 'cpu' | 'cu132' | 'cu128' | 'rocm' | 'metal';
 
 /**
  * The accepted {@link Accel} values, as a runtime array (the union type is erased
  * at compile time). The single source of truth for validating any externally
  * supplied accelerator string - keep it in step with the `Accel` union above.
  */
-export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu130', 'cu128', 'rocm', 'metal'];
+export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu132', 'cu128', 'rocm', 'metal'];
 
 /**
  * Accelerators that are no longer offered or installed, each mapped to the one
@@ -23,7 +23,7 @@ export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu130', 'cu128', 'rocm', 
  * overlay could no longer match the bundled torch (#2755).
  */
 export const RETIRED_ACCELS: Partial<Record<Accel, Accel>> = {
-  cu128: 'cu130',
+  cu128: 'cu132',
 };
 
 /** True only when `value` is one of the known {@link Accel} members. */
@@ -267,7 +267,7 @@ export interface RuntimeInfo {
 
 export const ACCEL_LABELS: Record<Accel, string> = {
   cpu: 'CPU',
-  cu130: 'NVIDIA GPU (CUDA 13)',
+  cu132: 'NVIDIA GPU (CUDA 13)',
   cu128: 'NVIDIA GPU (CUDA 12.8, replaced by CUDA 13)',
   rocm: 'AMD GPU (ROCm, experimental)',
   metal: 'Apple Silicon (Metal)',
@@ -279,7 +279,10 @@ export const ACCEL_LABELS: Record<Accel, string> = {
  */
 export const TORCH_INDEX: Record<Accel, string | null> = {
   cpu: 'https://download.pytorch.org/whl/cpu',
-  cu130: 'https://download.pytorch.org/whl/cu130',
+  // The newest CUDA index PyTorch publishes a run of releases to (2.12-2.15 at
+  // the time of #2755; cu134 had 2.15.0 alone). Move on when the bundled torch
+  // is no longer published here, or the overlay falls back to an older torch.
+  cu132: 'https://download.pytorch.org/whl/cu132',
   cu128: 'https://download.pytorch.org/whl/cu128', // retired: never installed
   // ROCm is experimental and Linux-only. rocm7.1 is the index that publishes the
   // same torch version line as the bundled CPU build; older rocmX.Y indexes lag
@@ -295,7 +298,7 @@ export const TORCH_INDEX: Record<Accel, string | null> = {
  */
 export const ONNX_PACKAGE: Record<Accel, string> = {
   cpu: 'onnxruntime',
-  cu130: 'onnxruntime-gpu',
+  cu132: 'onnxruntime-gpu',
   cu128: 'onnxruntime-gpu',
   rocm: 'onnxruntime', // onnxruntime-migraphx needs system MIGraphX - bundled CPU ORT.
   metal: 'onnxruntime',
@@ -312,7 +315,7 @@ export const ONNX_PACKAGE: Record<Accel, string> = {
  * since insightface imports onnxruntime inside pixlstash's startup import chain
  * the entire backend exits code 1 (live incident, 2026-07-20, on cu128).
  *
- * cu130: 1.32.0, verified over a cu130 overlay (torch 2.13.0+cu130) with
+ * cu132: 1.32.0, verified over a cu132 overlay (torch 2.13.0+cu132) with
  * insightface's detection and recognition models both on
  * CUDAExecutionProvider. From 1.28 a missing CUDA library degrades to the CPU
  * provider with a warning instead of failing the import; the CUDA libraries
@@ -327,7 +330,7 @@ export const ONNX_PACKAGE: Record<Accel, string> = {
  * {@link buildOverlayPipArgs} throws if one is missing.
  */
 export const ORT_GPU_PIN: Partial<Record<Accel, string>> = {
-  cu130: '1.32.0',
+  cu132: '1.32.0',
   cu128: '1.26.0',
   // rocm: no entry - ONNX_PACKAGE.rocm is the bundled CPU 'onnxruntime'.
 };

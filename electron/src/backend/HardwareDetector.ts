@@ -26,8 +26,10 @@ function currentArch(): Hardware['arch'] {
 
 /**
  * The oldest driver branch that runs CUDA 13 (580, both Linux and Windows).
- * Below it the cu130 torch wheels cannot initialise CUDA at all, so the overlay
- * would be a multi-GB download that runs on the CPU.
+ * The cu132 torch wheels carry their own CUDA 13.2 libraries and run on any
+ * CUDA 13 driver through minor-version compatibility; below 580 they cannot
+ * initialise CUDA at all, so the overlay would be a multi-GB download that
+ * runs on the CPU.
  */
 export const MIN_CUDA13_DRIVER = 580;
 
@@ -139,10 +141,10 @@ export async function detectHardware(forcedAccel: Accel | null = null): Promise<
   const nvidia = await nvidiaGpu();
   if (nvidia && os !== 'mac') {
     if (driverRunsCuda13(nvidia.driver)) {
-      accelerators.push('cu130');
+      accelerators.push('cu132');
       gpuName = nvidia.name;
     } else {
-      // Not offered: torch cu130 would install and then never see the GPU.
+      // Not offered: torch cu132 would install and then never see the GPU.
       // An existing CUDA 12.8 overlay keeps working (see RETIRED_ACCELS).
       console.warn(
         `[hardware] ${nvidia.name} has driver ${nvidia.driver}; GPU acceleration needs ` +
@@ -173,7 +175,7 @@ export async function detectHardware(forcedAccel: Accel | null = null): Promise<
 /**
  * GPU accelerators worth offering on top of the bundled env. The installer
  * already ships a working `bundledAccel` (cpu on Windows/Linux, metal on macOS);
- * this returns the detected discrete-GPU accelerators (cu130/rocm) that need an
+ * this returns the detected discrete-GPU accelerators (cu132/rocm) that need an
  * on-demand wheel overlay. Empty when the bundled env already covers the GPU
  * (e.g. Metal on Apple Silicon). A retired accelerator is never offered: its
  * install is refused (forcing one with --force-backend offers nothing).
