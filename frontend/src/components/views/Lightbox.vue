@@ -4529,14 +4529,29 @@ function applyProxyStatus(pictureId, body) {
     }
   }
 }
+// A status request that fails (a blip, a restart) is retried a few times
+// before the error box: the copy itself keeps going on the server.
+const PROXY_POLL_MAX_FAILURES = 3;
+let proxyPollFailures = 0;
 async function pollProxy(pictureId) {
   clearTimeout(proxyPollTimer);
   proxyPollTimer = null;
   try {
     const body = await fetchProxyStatus(pictureId);
+    proxyPollFailures = 0;
     applyProxyStatus(pictureId, body);
   } catch (err) {
-    if (proxyPollId === pictureId) failProxy(err, pictureId);
+    if (proxyPollId !== pictureId) return;
+    proxyPollFailures += 1;
+    if (proxyPollFailures >= PROXY_POLL_MAX_FAILURES) {
+      failProxy(err, pictureId);
+      return;
+    }
+    console.warn(
+      `Playable copy status request failed for picture ${pictureId}, retrying:`,
+      err,
+    );
+    proxyPollTimer = setTimeout(() => pollProxy(pictureId), PROXY_POLL_MS);
   }
 }
 // The original could not be played: ask whether a copy exists or is due.
@@ -4545,6 +4560,7 @@ function checkPlayableCopy() {
   if (!pictureId) return;
   stopProxyPoll();
   proxyPollId = pictureId;
+  proxyPollFailures = 0;
   pollProxy(pictureId);
 }
 async function startPlayableCopy() {
@@ -4553,6 +4569,7 @@ async function startPlayableCopy() {
   stopProxyPoll();
   proxyPollId = pictureId;
   proxyRequested.value = true;
+  proxyPollFailures = 0;
   proxyStatus.value = { ...(proxyStatus.value || {}), state: "preparing" };
   try {
     applyProxyStatus(pictureId, await startProxy(pictureId));

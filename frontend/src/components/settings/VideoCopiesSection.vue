@@ -10,7 +10,7 @@
         size="sm"
         variant="secondary"
         :disabled="busy"
-        @click="confirmOpen = true"
+        @click="openConfirm"
       >
         Delete copies
       </AppButton>
@@ -33,6 +33,9 @@
       <p class="vcs-note">
         {{ copyCountLabel }} ({{ humanBytes(copies.bytes) }}) will be deleted
         from this library. Each is made again when its clip is next opened.
+      </p>
+      <p v-if="deleteError" class="vcs-error" role="alert">
+        {{ deleteError }}
       </p>
       <template #footer>
         <AppButton variant="secondary" @click="confirmOpen = false">
@@ -58,6 +61,7 @@ const props = defineProps({
 
 const copies = ref({ count: 0, bytes: 0 });
 const confirmOpen = ref(false);
+const deleteError = ref(null);
 const busy = ref(false);
 
 const copyCountLabel = computed(() =>
@@ -87,14 +91,21 @@ async function refresh() {
   }
 }
 
+function openConfirm() {
+  deleteError.value = null;
+  confirmOpen.value = true;
+}
+
 async function removeCopies() {
   busy.value = true;
+  deleteError.value = null;
   try {
     await deleteVideoCopies();
     confirmOpen.value = false;
     copies.value = { count: 0, bytes: 0 };
   } catch (err) {
     console.warn("Could not delete the video copies of this library", err);
+    deleteError.value = "The copies could not be deleted. Try again.";
   } finally {
     busy.value = false;
   }
@@ -127,6 +138,12 @@ watch(
 /* The global `.section-label` sets the type; this only resets the h3. */
 .vcs-title {
   margin: 0;
+}
+
+.vcs-error {
+  margin: var(--space-2) 0 0;
+  color: rgb(var(--v-theme-surface-error));
+  font-size: var(--text-xs);
 }
 
 .vcs-delete {

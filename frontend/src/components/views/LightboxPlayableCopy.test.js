@@ -195,4 +195,34 @@ describe("a playable copy of a refused video", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(1);
   });
+
+  it("retries a status request that fails, and still plays the copy", async () => {
+    proxy.fetchProxyStatus
+      .mockResolvedValueOnce(statusOf("preparing"))
+      .mockRejectedValueOnce(new Error("blip"))
+      .mockResolvedValueOnce(statusOf("ready"));
+    const w = await openOn(9);
+    await refuseVideo(w);
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(w.find(".lightbox-proxy-title").text()).toBe("Preparing a playable copy");
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(3);
+    expect(w.find("video").attributes("src")).toBe("/api/v1/pictures/proxies/9.mp4");
+  });
+
+  it("gives up with the error box after three failed status requests", async () => {
+    proxy.fetchProxyStatus.mockRejectedValue(new Error("down"));
+    const w = await openOn(9);
+    await refuseVideo(w);
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flush();
+    expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(3);
+    expect(w.find(".lightbox-video-error-msg").text()).toContain("cannot play this video format");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(3);
+  });
 });

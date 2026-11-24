@@ -60,4 +60,17 @@ describe("the Video copies section", () => {
     expect(api.deleteVideoCopies).toHaveBeenCalledTimes(1);
     expect(w.find("#vcs-title").exists()).toBe(false);
   });
+
+  it("says so in the dialog when the delete fails", async () => {
+    api.getVideoCopies.mockResolvedValue({ count: 1, bytes: 2048 });
+    api.deleteVideoCopies.mockRejectedValue(new Error("boom"));
+    const w = mountSection();
+    await flushPromises();
+    await w.find(".vcs-delete").trigger("click");
+    const confirm = w.findAll("button").find((b) => b.text() === "Delete copies" && b.element.closest(".dialog-stub"));
+    await confirm.trigger("click");
+    await flushPromises();
+    expect(w.find(".vcs-error").text()).toBe("The copies could not be deleted. Try again.");
+    expect(w.find("#vcs-title").exists()).toBe(true);
+  });
 });

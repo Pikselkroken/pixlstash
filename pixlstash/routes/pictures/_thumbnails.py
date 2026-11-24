@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -253,6 +254,20 @@ def register_routes(router, server):
     # Keyed by (library root, picture id): a library switch must not report
     # another library's job for a reused id.
     copy_jobs: dict[tuple[Optional[str], int], _CopyJob] = {}
+    # The status and start routes run in worker threads (their header read
+    # blocks), so the check-then-submit on copy_jobs holds this lock.
+    copy_jobs_lock = threading.Lock()
+
+    def drop_copy_jobs(image_root: Optional[str] = None) -> None:
+        """Cancel the queued copy jobs (all, or one library's) and kill ffmpeg.
+
+        Only one copy runs at a time, so killing every running ffmpeg stops
+        exactly the job being dropped.
+        """
+        with copy_jobs_lock:
+            for key in [k for k in copy_jobs if image_root in (None, k[0])]:
+                copy_jobs.pop(key).future.cancel()
+        ffmpeg_utils.terminate_running_processes()
 
     def clear_thumbnail_runtime_cache() -> None:
         # Keyed by picture id, and ids are reused across libraries.
@@ -262,10 +277,7 @@ def register_routes(router, server):
         # The old library's copies are not wanted any more: drop the queued
         # ones and kill the running one, so the next library's copies do not
         # wait behind them on the single worker.
-        for job in copy_jobs.values():
-            job.future.cancel()
-        ffmpeg_utils.terminate_running_processes()
-        copy_jobs.clear()
+        drop_copy_jobs()
 
     # The locks are route-local, so expose their one lifecycle operation to the
     # server's library switch coordinator without exposing the storage itself.
@@ -599,37 +611,38 @@ def register_routes(router, server):
         duration = header[2] if header else None
 
         key = (image_root, picture_id)
-        job = copy_jobs.get(key)
-        if job is not None and not job.future.done():
-            elapsed = 0.0 if job.started is None else time.monotonic() - job.started
-            return _proxy_payload("preparing", job.estimate, elapsed, fmt, duration)
-        if job is not None:
-            # Done: report a failure once, then drop it so a later call retries.
-            del copy_jobs[key]
-            if job.future.exception() is not None:
-                return _proxy_payload("failed", fmt=fmt, duration=duration)
-        if _copy_is_fresh(image_root, picture_id, file_path, record):
-            return _proxy_payload("ready", fmt=fmt, duration=duration)
-        if header is None or ffmpeg_utils.ffmpeg_executable() is None:
-            return _proxy_payload("unavailable", fmt=fmt, duration=duration)
+        with copy_jobs_lock:
+            job = copy_jobs.get(key)
+            if job is not None and not job.future.done():
+                elapsed = 0.0 if job.started is None else time.monotonic() - job.started
+                return _proxy_payload("preparing", job.estimate, elapsed, fmt, duration)
+            if job is not None:
+                # Done: report a failure once, then drop it so a later call retries.
+                del copy_jobs[key]
+                if job.future.exception() is not None:
+                    return _proxy_payload("failed", fmt=fmt, duration=duration)
+            if _copy_is_fresh(image_root, picture_id, file_path, record):
+                return _proxy_payload("ready", fmt=fmt, duration=duration)
+            if header is None or ffmpeg_utils.ffmpeg_executable() is None:
+                return _proxy_payload("unavailable", fmt=fmt, duration=duration)
 
-        # Some containers report no frame count: the length is then unknown,
-        # so the copy starts rather than offering a made-up estimate.
-        estimate = header[0] / rate if header[0] > 0 else None
-        if (
-            not force_start
-            and estimate is not None
-            and estimate >= _COPY_START_THRESHOLD_S
-        ):
-            return _proxy_payload(
-                "offered", estimate=estimate, fmt=fmt, duration=duration
+            # Some containers report no frame count: the length is then unknown,
+            # so the copy starts rather than offering a made-up estimate.
+            estimate = header[0] / rate if header[0] > 0 else None
+            if (
+                not force_start
+                and estimate is not None
+                and estimate >= _COPY_START_THRESHOLD_S
+            ):
+                return _proxy_payload(
+                    "offered", estimate=estimate, fmt=fmt, duration=duration
+                )
+            job = _CopyJob(estimate=estimate)
+            job.future = _copy_executor.submit(
+                _build_video_copy, vault, picture_id, file_path, job
             )
-        job = _CopyJob(estimate=estimate)
-        job.future = _copy_executor.submit(
-            _build_video_copy, vault, picture_id, file_path, job
-        )
-        copy_jobs[key] = job
-        return _proxy_payload("preparing", estimate, 0.0, fmt, duration)
+            copy_jobs[key] = job
+            return _proxy_payload("preparing", estimate, 0.0, fmt, duration)
 
     @router.get(
         "/pictures/proxies/{id}/status",
@@ -643,7 +656,9 @@ def register_routes(router, server):
         response_model=dict,
     )
     async def get_proxy_status(request: Request, id: int):
-        return proxy_answer(id, force_start=False)
+        # A header read on a large clip, or one on a network share, must not
+        # stall the event loop while the lightbox polls.
+        return await asyncio.to_thread(proxy_answer, id, False)
 
     @router.post(
         "/pictures/proxies/{id}/start",
@@ -652,7 +667,7 @@ def register_routes(router, server):
         response_model=dict,
     )
     async def start_proxy(request: Request, id: int):
-        return proxy_answer(id, force_start=True)
+        return await asyncio.to_thread(proxy_answer, id, True)
 
     @router.get(
         "/pictures/proxies/{id}.mp4",
@@ -795,6 +810,9 @@ def register_routes(router, server):
     )
     def delete_video_copies(request: Request):
         vault = server.vault
+        # A build still queued or running would write its copy back after the
+        # listing below and report it as deleted.
+        drop_copy_jobs(vault.image_root)
 
         def clear_rows(session: Session) -> None:
             session.execute(delete(VideoCopy))

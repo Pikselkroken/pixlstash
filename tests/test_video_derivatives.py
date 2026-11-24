@@ -763,8 +763,13 @@ def test_a_library_switch_does_not_report_the_old_job(
     cells = dict(
         zip(clear.__code__.co_freevars, (c.cell_contents for c in clear.__closure__))
     )
+    drop = cells["drop_copy_jobs"]
+    jobs = dict(
+        zip(drop.__code__.co_freevars, (c.cell_contents for c in drop.__closure__))
+    )["copy_jobs"]
+    assert jobs
     clear()
-    assert not cells["copy_jobs"]
+    assert not jobs
     # A fresh job, queued behind the old one: it has not started, so its
     # elapsed time is zero. The old job would show a running clock.
     after = owner.get(path).json()
@@ -837,6 +842,40 @@ def test_video_copies_counts_and_deletes_this_library_copies(server, owner, tmp_
     assert owner.delete(VIDEO_COPIES).json() == {"removed": 2, "bytes": sum(sizes)}
     assert owner.get(VIDEO_COPIES).json() == {"count": 0, "bytes": 0}
     assert not any(_row_exists(server, pic) for pic in ids)
+
+
+def test_delete_copies_drops_the_jobs_in_flight(server, owner, tmp_path, monkeypatch):
+    # A build running or queued when the owner deletes the copies must not
+    # write its copy back afterwards: the queued one is cancelled and the
+    # running ffmpeg is killed.
+    _forget_copies(server)
+    gate = threading.Event()
+    built = []
+
+    def gated(source, dest, on_start=None):
+        on_start(None)
+        built.append(source)
+        gate.wait(30)
+        raise RuntimeError("killed")
+
+    kills = []
+    monkeypatch.setattr(ffmpeg_utils, "make_playable_copy", gated)
+    monkeypatch.setattr(
+        ffmpeg_utils, "terminate_running_processes", lambda: kills.append(1)
+    )
+    ids = []
+    for index in range(2):
+        folder = tmp_path / f"d{index}"
+        folder.mkdir()
+        ids.append(_library_clip(server, folder))
+    for pic in ids:
+        assert owner.get(PROXY_STATUS.format(id=pic)).json()["state"] == "preparing"
+    assert owner.delete(VIDEO_COPIES).status_code == 200
+    assert kills, "the running ffmpeg was not stopped"
+    gate.set()
+    _thumbnails._copy_executor.submit(lambda: None).result(timeout=30)
+    # Only the first build ever ran; the queued second one was cancelled.
+    assert len(built) == 1
 
 
 def test_a_startup_sweep_removes_temps_and_copies_with_no_row(server, tmp_path):
