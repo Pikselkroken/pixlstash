@@ -662,6 +662,49 @@ def test_a_long_copy_is_offered_until_started(server, owner, tmp_path, monkeypat
     assert _settled(owner, path)["state"] == "ready"
 
 
+def test_a_clip_with_no_frame_count_starts_and_does_not_poison_the_rate(
+    server, owner, tmp_path, monkeypatch
+):
+    # Some containers report no frame count. Such a clip's copy starts (its
+    # length is unknown), and the row it leaves, pixel_frames 0, must never
+    # become the rate the next estimate divides by.
+    _forget_copies(server)
+    still = _still(server)
+    server.vault.db.run_task(
+        lambda s: (
+            s.add(
+                VideoCopy(
+                    picture_id=still,
+                    copy_bytes=1,
+                    source_bytes=1,
+                    source_mtime=0.0,
+                    pixel_frames=0,
+                    build_seconds=1.0,
+                )
+            ),
+            s.commit(),
+        )
+    )
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    known = owner.get(path)
+    assert known.status_code == 200, known.text
+    assert known.json()["estimate_seconds"] > 0
+    assert _settled(owner, path)["state"] == "ready"
+
+    real_header = VideoUtils.video_header
+    monkeypatch.setattr(
+        VideoUtils,
+        "video_header",
+        lambda source: (0, *real_header(source)[1:]),
+    )
+    unknown_pic = _library_clip(server, tmp_path)
+    body = owner.get(PROXY_STATUS.format(id=unknown_pic)).json()
+    assert body["state"] == "preparing"
+    assert body["estimate_seconds"] is None
+    _settled(owner, PROXY_STATUS.format(id=unknown_pic))
+
+
 def test_a_still_has_no_copy_to_make(server, owner):
     pic = _still(server)
     body = owner.get(PROXY_STATUS.format(id=pic)).json()

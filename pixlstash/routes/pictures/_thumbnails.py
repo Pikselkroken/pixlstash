@@ -95,7 +95,8 @@ class _CopyRecord(NamedTuple):
 class _CopyJob:
     """A playable-copy build queued or running for one picture."""
 
-    estimate: float
+    #: Seconds, or ``None`` when the header gives no frame count.
+    estimate: Optional[float]
     future: Optional[Future] = None
     #: ``time.monotonic()`` when ffmpeg started; ``None`` while queued.
     started: Optional[float] = None
@@ -119,10 +120,13 @@ def _read_copy_facts(session: Session, picture_id: int):
     row = session.get(VideoCopy, picture_id)
     record = _CopyRecord(row.source_bytes, row.source_mtime) if row else None
     latest = session.exec(
-        select(VideoCopy).order_by(VideoCopy.created_at.desc()).limit(1)
+        select(VideoCopy)
+        .where(VideoCopy.pixel_frames > 0, VideoCopy.build_seconds > 0)
+        .order_by(VideoCopy.created_at.desc())
+        .limit(1)
     ).first()
     rate = _DEFAULT_COPY_RATE
-    if latest is not None and latest.build_seconds > 0:
+    if latest is not None:
         rate = latest.pixel_frames / latest.build_seconds
     return pics[0].file_path, record, rate
 
@@ -255,6 +259,12 @@ def register_routes(router, server):
         thumbnail_generation_locks.clear()
         storyboard_generation_locks.clear()
         waveform_generation_locks.clear()
+        # The old library's copies are not wanted any more: drop the queued
+        # ones and kill the running one, so the next library's copies do not
+        # wait behind them on the single worker.
+        for job in copy_jobs.values():
+            job.future.cancel()
+        ffmpeg_utils.terminate_running_processes()
         copy_jobs.clear()
 
     # The locks are route-local, so expose their one lifecycle operation to the
@@ -603,8 +613,14 @@ def register_routes(router, server):
         if header is None or ffmpeg_utils.ffmpeg_executable() is None:
             return _proxy_payload("unavailable", fmt=fmt, duration=duration)
 
-        estimate = header[0] / rate
-        if not force_start and estimate >= _COPY_START_THRESHOLD_S:
+        # Some containers report no frame count: the length is then unknown,
+        # so the copy starts rather than offering a made-up estimate.
+        estimate = header[0] / rate if header[0] > 0 else None
+        if (
+            not force_start
+            and estimate is not None
+            and estimate >= _COPY_START_THRESHOLD_S
+        ):
             return _proxy_payload(
                 "offered", estimate=estimate, fmt=fmt, duration=duration
             )
