@@ -60,6 +60,17 @@ export function pictureStoryboardUrl(id, { version } = {}) {
 }
 
 /**
+ * The URL a `<video>` loads a picture's playable copy from: an MP4 the
+ * backend transcoded once for a browser that refuses the original (#2807).
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function pictureProxyUrl(id) {
+  return appendShareToken(`${API_BASE_URL}/pictures/proxies/${id}.mp4`);
+}
+
+/**
  * The URL a browser loads a picture's own file from, by its format ("png",
  * "mp4"). Like the thumbnail URL, an `<img src>` or `<video src>`.
  *
@@ -1028,4 +1039,46 @@ export async function getAnomalyRegion(pictureId, tag) {
   return unwrap(apiClient.get(`/pictures/${pictureId}/anomaly_region`, {
     params: { tag },
   }));
+}
+
+/**
+ * Where a picture's playable copy stands: `ready`, `preparing` (a job is
+ * running or queued), `offered` (too long to start without asking),
+ * `failed` (the last job raised; reported once) or `unavailable`.
+ *
+ * @param {number|string} id
+ * @returns {Promise<{state: string, estimate_seconds: number|null,
+ *   elapsed_seconds: number|null, format: string|null}>}
+ */
+export async function fetchProxyStatus(id) {
+  return unwrap(apiClient.get(`/pictures/proxies/${id}/status`));
+}
+
+/**
+ * Ask for a playable copy now, whatever its estimate. Answers the same body
+ * as `fetchProxyStatus`.
+ *
+ * @param {number|string} id
+ * @returns {Promise<Object>}
+ */
+export async function startProxy(id) {
+  return unwrap(apiClient.post(`/pictures/proxies/${id}/start`));
+}
+
+/**
+ * A clip's sound as peaks for the filmstrip's waveform lane. Resolves to
+ * null when there is nothing to draw: a silent clip, or no ffmpeg on this
+ * machine (503). Neither is an error.
+ *
+ * @param {number|string} id
+ * @returns {Promise<{duration: number, peaks: number[]}|null>}
+ */
+export async function fetchWaveform(id) {
+  try {
+    const { data } = await apiClient.get(`/pictures/waveforms/${id}.json`);
+    return data?.peaks ? data : null;
+  } catch (err) {
+    if (err?.response?.status === 503) return null;
+    throw err;
+  }
 }

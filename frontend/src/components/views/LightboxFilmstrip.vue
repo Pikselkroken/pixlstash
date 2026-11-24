@@ -1,7 +1,10 @@
 <template>
   <!-- A band under the stage (#2163): the neighbouring pictures at their own
        aspect ratios, the one on screen ringed in olive and the rest dimmed. -->
-  <div class="lightbox-rail" :class="{ hidden: hidden }">
+  <div
+    class="lightbox-rail"
+    :class="{ hidden: hidden, 'lightbox-rail--lane': lane }"
+  >
     <!-- On a video, the switch between the set's pictures and the clip
          (#2147); the clip's frames then stand in for the thumbs, which stay
          mounted so the strip keeps its place. -->
@@ -149,6 +152,8 @@ const props = defineProps({
   offsets: { type: Array, default: () => [] },
   widths: { type: Array, default: () => [] },
   hidden: { type: Boolean, default: false },
+  // A clip's waveform lane is under its frames: the band grows to hold it.
+  lane: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
   // Ids Ctrl/Cmd-clicked for Compare, in the order picked.
   pickedIds: { type: Array, default: () => [] },
@@ -344,6 +349,12 @@ function reveal(index, { centre = false } = {}) {
 .lightbox-rail.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+/* The frames' 56px, the 4px gap and the 16px lane, with the band's 8px either
+   side: 20px taller than a band of pictures (#2807). */
+.lightbox-rail.lightbox-rail--lane {
+  flex-basis: 92px;
 }
 
 /* Dark in both themes: the Segmented track and its icons read on the dark

@@ -164,3 +164,23 @@ export async function listLibraryFolders() {
 export async function openLibraryFolder(path) {
   return unwrap(apiClient.post("/library/folders/open", { path }));
 }
+
+/**
+ * The open library's playable copies of videos (#2807): how many, and how
+ * many bytes they take.
+ *
+ * @returns {Promise<{count: number, bytes: number}>}
+ */
+export async function getVideoCopies() {
+  return unwrap(apiClient.get("/video-copies"));
+}
+
+/**
+ * Delete every playable copy in the open library. A copy is made again when
+ * its clip is next opened.
+ *
+ * @returns {Promise<{removed: number, bytes: number}>}
+ */
+export async function deleteVideoCopies() {
+  return unwrap(apiClient.delete("/video-copies"));
+}

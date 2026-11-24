@@ -362,9 +362,9 @@
               <template v-if="image">
                 <template v-if="isSupportedVideoFile(getLightboxFormat(image))">
                   <video
-                    v-if="!videoError"
+                    v-if="!videoError && !proxyBox"
                     ref="videoRef"
-                    :src="videoSrc"
+                    :src="useProxy ? proxySrc : videoSrc"
                     class="lightbox-video"
                     controls
                     preload="metadata"
@@ -374,6 +374,50 @@
                     @loadedmetadata="updateLightboxDims"
                     @error="handleVideoError"
                   ></video>
+                  <div
+                    v-else-if="proxyBox"
+                    class="lightbox-video-error"
+                    role="status"
+                  >
+                    <template v-if="proxyBox === 'offered'">
+                      <v-icon size="48" color="grey-lighten-1"
+                        >mdi-video-off-outline</v-icon
+                      >
+                      <p class="lightbox-video-error-msg lightbox-proxy-title">
+                        This browser can't play {{ proxyFormat }}
+                      </p>
+                      <p class="lightbox-video-error-msg">{{ proxyOfferText }}</p>
+                      <AppButton
+                        variant="primary"
+                        size="sm"
+                        on-dark
+                        icon-left="play"
+                        @click="startPlayableCopy"
+                      >
+                        Make a playable copy
+                      </AppButton>
+                    </template>
+                    <template v-else>
+                      <v-progress-circular
+                        indeterminate
+                        size="32"
+                        width="3"
+                        color="grey-lighten-1"
+                      />
+                      <p class="lightbox-video-error-msg lightbox-proxy-title">
+                        {{ proxyRequested ? "Making a playable copy" : "Preparing a playable copy" }}
+                      </p>
+                      <p class="lightbox-video-error-msg">{{ proxyWaitText }}</p>
+                    </template>
+                    <a
+                      :href="videoSrc"
+                      download
+                      class="lightbox-video-download-btn"
+                    >
+                      <v-icon size="18">mdi-download</v-icon>
+                      Download video
+                    </a>
+                  </div>
                   <div v-else class="lightbox-video-error">
                     <v-icon size="48" color="grey-lighten-1"
                       >mdi-video-off-outline</v-icon
@@ -392,6 +436,12 @@
                       Download video
                     </a>
                   </div>
+                  <p
+                    v-if="proxyBox && storyboardShown"
+                    class="lightbox-proxy-hint"
+                  >
+                    Frames seek once the copy plays
+                  </p>
                 </template>
                 <template v-else>
                   <img
@@ -812,6 +862,7 @@
       </div>
       <LightboxFilmstrip
         ref="filmstripRef"
+        :lane="Boolean(storyboardShown && bandShows === 'clip' && waveform)"
         :items="filmstripCanvasWindow"
         :offsets="filmstripLayout.offsets"
         :widths="filmstripLayout.widths"
@@ -841,7 +892,17 @@
             :duration="videoMeta.duration"
             :media="videoRef"
             @unavailable="storyboardMissingId = image?.id"
-          />
+          >
+            <template v-if="waveform" #lane="{ currentTime }">
+              <AudioWaveform
+                :peaks="waveform.peaks"
+                :duration="waveform.duration"
+                :video-duration="videoMeta.duration"
+                :current-time="currentTime"
+                @seek="seekVideo"
+              />
+            </template>
+          </VideoStoryboard>
         </template>
       </LightboxFilmstrip>
       </div>
@@ -1201,6 +1262,10 @@ import {
   downloadPicture,
   rotatePictures,
   pictureStoryboardUrl,
+  pictureProxyUrl,
+  fetchProxyStatus,
+  startProxy,
+  fetchWaveform,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -1255,6 +1320,7 @@ import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import RailPicture from "../panels/RailPicture.vue";
 import Segmented from "../widgets/Segmented.vue";
 import VideoStoryboard from "../widgets/VideoStoryboard.vue";
+import AudioWaveform from "../widgets/AudioWaveform.vue";
 import { isDescriptionSentinel } from "../../utils/descriptions";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -4375,6 +4441,126 @@ const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video
 
+// A refused format gets a playable copy (#2807). The original is tried first;
+// on MEDIA_ERR_SRC_NOT_SUPPORTED the status says whether a copy is ready,
+// running (polled every 2 s) or to be offered. `useProxy` is set once the
+// copy is ready and cleared with the picture; a copy that then fails shows
+// the error box and does not ask again.
+const useProxy = ref(false);
+const proxyStatus = ref(null); // the last status body for the current picture
+const proxyRequested = ref(false); // the reader pressed "Make a playable copy"
+const PROXY_POLL_MS = 2000;
+let proxyPollTimer = null;
+let proxyPollId = null; // the picture a poll is for; null when none runs
+const proxySrc = computed(() =>
+  image.value?.id ? pictureProxyUrl(image.value.id) : "",
+);
+// The box to show in place of the <video>: "offered", "preparing", or null.
+const proxyBox = computed(() => {
+  if (useProxy.value || !proxyStatus.value) return null;
+  const state = proxyStatus.value.state;
+  if (state === "offered" || state === "preparing") return state;
+  return null;
+});
+const proxyFormat = computed(
+  () =>
+    proxyStatus.value?.format ||
+    getLightboxFormat(image.value || {}).toUpperCase(),
+);
+// "3 seconds", "2 minutes": a rough length for a sentence.
+function roughly(seconds) {
+  if (!Number.isFinite(seconds)) return "a moment";
+  const total = Math.max(1, Math.round(seconds));
+  if (total < 60) return `${total} ${total === 1 ? "second" : "seconds"}`;
+  const minutes = Math.round(total / 60);
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+// "4 min 12 s", "40 s": a length on the clock.
+function clockLength(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return minutes ? `${minutes} min ${rest} s` : `${rest} s`;
+}
+const proxyOfferText = computed(() => {
+  const status = proxyStatus.value || {};
+  const duration = status.duration_seconds;
+  const clip = Number.isFinite(duration)
+    ? `this ${clockLength(duration)} clip`
+    : "this clip";
+  return `A playable copy of ${clip} takes about ${roughly(status.estimate_seconds)} to make. It is made once and kept.`;
+});
+const proxyWaitText = computed(() => {
+  const status = proxyStatus.value || {};
+  if (proxyRequested.value) {
+    const remaining =
+      (status.estimate_seconds ?? 0) - (status.elapsed_seconds ?? 0);
+    return `About ${clockLength(Math.max(3, remaining))} left. It carries on if you move to another picture; the clip plays here when it is done.`;
+  }
+  return `About ${roughly(status.estimate_seconds)}. This browser can't play ${proxyFormat.value}, so PixlStash makes an MP4 copy once and keeps it.`;
+});
+
+function stopProxyPoll() {
+  clearTimeout(proxyPollTimer);
+  proxyPollTimer = null;
+  proxyPollId = null;
+}
+function failProxy(err, pictureId) {
+  console.warn(`Playable copy request failed for picture ${pictureId}:`, err);
+  stopProxyPoll();
+  videoError.value = { code: 4, message: String(err?.message || err) };
+}
+// Act on a status body for the picture it was asked for. Ignored once the
+// reader has moved on to another picture.
+function applyProxyStatus(pictureId, body) {
+  if (proxyPollId !== pictureId || image.value?.id !== pictureId) return;
+  proxyStatus.value = body;
+  if (body.state === "ready") {
+    stopProxyPoll();
+    videoError.value = null;
+    useProxy.value = true;
+  } else if (body.state === "preparing") {
+    proxyPollTimer = setTimeout(() => pollProxy(pictureId), PROXY_POLL_MS);
+  } else {
+    stopProxyPoll();
+    if (body.state !== "offered") {
+      // failed or unavailable: today's error box.
+      videoError.value = { code: 4, message: `playable copy ${body.state}` };
+    }
+  }
+}
+async function pollProxy(pictureId) {
+  clearTimeout(proxyPollTimer);
+  proxyPollTimer = null;
+  try {
+    const body = await fetchProxyStatus(pictureId);
+    applyProxyStatus(pictureId, body);
+  } catch (err) {
+    if (proxyPollId === pictureId) failProxy(err, pictureId);
+  }
+}
+// The original could not be played: ask whether a copy exists or is due.
+function checkPlayableCopy() {
+  const pictureId = image.value?.id;
+  if (!pictureId) return;
+  stopProxyPoll();
+  proxyPollId = pictureId;
+  pollProxy(pictureId);
+}
+async function startPlayableCopy() {
+  const pictureId = image.value?.id;
+  if (!pictureId) return;
+  stopProxyPoll();
+  proxyPollId = pictureId;
+  proxyRequested.value = true;
+  proxyStatus.value = { ...(proxyStatus.value || {}), state: "preparing" };
+  try {
+    applyProxyStatus(pictureId, await startProxy(pictureId));
+  } catch (err) {
+    if (proxyPollId === pictureId) failProxy(err, pictureId);
+  }
+}
+
 // On a video the filmstrip's band shows the clip's frames instead (#2147),
 // one switch away from the set's pictures. The choice holds while the
 // lightbox steps: pictures always show the filmstrip, videos what was last
@@ -4398,6 +4584,31 @@ const storyboardSrc = computed(() => {
     version: version ? decodeURIComponent(version[1]) : undefined,
   });
 });
+
+// The clip's sound for the lane under its frames (#2807). Fetched only while
+// the frames show: no storyboard, no lane. A silent clip or a machine without
+// ffmpeg answers nothing to draw, which hides the lane without an error.
+const waveform = ref(null);
+watch(
+  () =>
+    storyboardShown.value && bandShows.value === "clip"
+      ? image.value?.id
+      : null,
+  async (id) => {
+    waveform.value = null;
+    if (!id) return;
+    try {
+      const data = await fetchWaveform(id);
+      if (image.value?.id === id) waveform.value = data;
+    } catch (err) {
+      console.warn(`Waveform request failed for picture ${id}:`, err);
+    }
+  },
+  { immediate: true },
+);
+function seekVideo(seconds) {
+  if (videoRef.value) videoRef.value.currentTime = seconds;
+}
 
 // Back on the pictures, show where this one sits: the strip was hidden, so
 // nothing revealed it while the lightbox stepped.
@@ -5045,6 +5256,10 @@ function handleVideoError(event) {
   // MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) is the most common - browser doesn't
   // support the container/codec (e.g. Firefox + .mov/ProRes).
   console.warn(`Video load error (code ${code}): ${msg}`);
+  if (code === 4 && !useProxy.value) {
+    checkPlayableCopy();
+    return;
+  }
   videoError.value = err ?? { code, message: msg };
 }
 
@@ -5090,6 +5305,7 @@ onUnmounted(() => {
   }
   clearCharacterThumbnails();
   closeFallbackSaveDialog();
+  stopProxyPoll();
 });
 
 watch(open, (isOpen) => {
@@ -5646,6 +5862,10 @@ watch(
 watch(
   () => image.value?.id,
   (newId) => {
+    stopProxyPoll();
+    useProxy.value = false;
+    proxyStatus.value = null;
+    proxyRequested.value = false;
     if (newId) {
       lightboxDims.value = {
         width: 1,

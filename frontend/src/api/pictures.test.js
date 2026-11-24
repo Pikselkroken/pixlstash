@@ -10,6 +10,8 @@ vi.mock("../utils/apiClient", () => ({
 
 import { apiClient } from "../utils/apiClient";
 import {
+  fetchProxyStatus,
+  fetchWaveform,
   getAnomalyRegion,
   listPicturesByIds,
   getPictureCount,
@@ -340,5 +342,37 @@ describe("api/pictures", () => {
   it("getAnomalyRegion propagates an unknown-tag failure", async () => {
     apiClient.get.mockRejectedValue(new Error("404"));
     await expect(getAnomalyRegion(42, "nope")).rejects.toThrow("404");
+  });
+});
+
+describe("the playable copy and waveform routes (#2807)", () => {
+  it("resolves a waveform to null on 503 (no ffmpeg), not an error", async () => {
+    const err = Object.assign(new Error("503"), { response: { status: 503 } });
+    apiClient.get.mockRejectedValueOnce(err);
+    await expect(fetchWaveform(9)).resolves.toBeNull();
+  });
+
+  it("resolves a silent clip's waveform (peaks null) to null", async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { duration: null, peaks: null } });
+    await expect(fetchWaveform(9)).resolves.toBeNull();
+  });
+
+  it("passes the peaks of a clip with sound through", async () => {
+    const body = { duration: 4.5, peaks: [0.1, 0.9] };
+    apiClient.get.mockResolvedValueOnce({ data: body });
+    await expect(fetchWaveform(9)).resolves.toEqual(body);
+    expect(apiClient.get).toHaveBeenCalledWith("/pictures/waveforms/9.json");
+  });
+
+  it("rethrows any other waveform failure", async () => {
+    const err = Object.assign(new Error("500"), { response: { status: 500 } });
+    apiClient.get.mockRejectedValueOnce(err);
+    await expect(fetchWaveform(9)).rejects.toBe(err);
+  });
+
+  it("reads a picture's copy status through the status route", async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { state: "offered" } });
+    await expect(fetchProxyStatus(9)).resolves.toEqual({ state: "offered" });
+    expect(apiClient.get).toHaveBeenCalledWith("/pictures/proxies/9/status");
   });
 });

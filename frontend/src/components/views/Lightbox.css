@@ -553,14 +553,16 @@
   opacity: 0.75;
 }
 
+/* The neutral secondary button (docs/design/buttons.md): olive is never a
+   button fill. */
 .lightbox-video-download-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: var(--space-3) 20px;
   border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+  background: rgb(var(--v-theme-cancel-button));
+  color: rgb(var(--v-theme-cancel-button-text));
   text-decoration: none;
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
@@ -568,6 +570,22 @@
 
 .lightbox-video-download-btn:hover {
   background-image: var(--hover-shade);
+}
+
+.lightbox-proxy-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  opacity: 1;
+}
+
+/* "Frames seek once the copy plays": the stage's bottom right corner. */
+.lightbox-proxy-hint {
+  position: absolute;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 /* Round arrows at the stage's edges, shown while the pointer is over the

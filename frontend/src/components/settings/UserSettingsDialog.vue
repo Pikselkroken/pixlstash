@@ -6,6 +6,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
 import ImportFoldersSection from "./ImportFoldersSection.vue";
+import VideoCopiesSection from "./VideoCopiesSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
@@ -358,6 +359,7 @@ watch(
             :open="dialogOpen && settingsTab === 'libraries'"
           />
         </div>
+        <VideoCopiesSection :open="dialogOpen && settingsTab === 'libraries'" />
       </div>
       <div
         v-if="!isReadOnly"

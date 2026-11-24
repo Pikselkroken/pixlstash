@@ -47,6 +47,9 @@
         ></span>
       </button>
     </div>
+    <!-- The clip's waveform lane (#2807) sits under the tiles, in the same
+         box, so the one playhead below runs through both. -->
+    <slot name="lane" :current-time="currentTime" />
     <span
       v-if="playhead !== null"
       class="storyboard-playhead"
@@ -185,7 +188,6 @@ function clock(seconds) {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: var(--filmstrip-thumb-h);
 }
 
 .storyboard-probe {
@@ -199,7 +201,7 @@ function clock(seconds) {
 .storyboard-tiles {
   display: flex;
   gap: var(--tile-gap);
-  height: 100%;
+  height: var(--filmstrip-thumb-h);
 }
 
 .storyboard-tile {
