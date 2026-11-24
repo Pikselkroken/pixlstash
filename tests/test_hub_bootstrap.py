@@ -7,6 +7,7 @@ library 1, and a lost hub costs preferences rather than pictures.
 
 import json
 import os
+from pathlib import Path
 import shutil
 import sqlite3
 import stat
@@ -1935,7 +1936,7 @@ def _assert_portable_identity_absent(path, marker):
     for suffix in ("", "-wal", "-shm", "-journal"):
         candidate = str(path) + suffix
         if os.path.exists(candidate):
-            assert marker.encode() not in open(candidate, "rb").read()
+            assert marker.encode() not in Path(candidate).read_bytes()
 
 
 class TestPortableIdentityScrub:
@@ -2276,7 +2277,7 @@ class TestAVaultThatWillNotOpen:
     def test_bootstrap_raises_a_typed_error_and_touches_nothing(self, tmp_path):
         folder = str(tmp_path / "library")
         vault = make_unopenable_vault(folder)
-        before = open(vault, "rb").read()
+        before = Path(vault).read_bytes()
 
         with pytest.raises(UnusableVaultError) as caught:
             bootstrap_hub(folder, str(tmp_path / "hub.db"))
@@ -2284,7 +2285,7 @@ class TestAVaultThatWillNotOpen:
         assert caught.value.folder == os.path.realpath(folder)
         assert caught.value.vault_path == vault
         assert "vault.db" in caught.value.reason
-        assert open(vault, "rb").read() == before, "refusing must not edit the file"
+        assert Path(vault).read_bytes() == before, "refusing must not edit the file"
 
     def test_it_is_a_hub_bootstrap_error_so_existing_callers_report_it(self, tmp_path):
         """`app.main` already prints HubBootstrapError concisely; inherit that."""
@@ -2299,7 +2300,7 @@ class TestAVaultThatWillNotOpen:
     ):
         folder = str(tmp_path / "library")
         vault = make_unopenable_vault(folder)
-        before = open(vault, "rb").read()
+        before = Path(vault).read_bytes()
         # Sidecars travel with the database; a stale -wal beside a new vault is
         # its own bug report.
         for suffix in ("-wal", "-shm"):
@@ -2319,7 +2320,7 @@ class TestAVaultThatWillNotOpen:
             ]
             assert len(moved) == 3, f"database and both sidecars, got {sorted(moved)}"
             kept = next(name for name in moved if not name.endswith(("-wal", "-shm")))
-            assert open(os.path.join(folder, kept), "rb").read() == before
+            assert Path(os.path.join(folder, kept)).read_bytes() == before
         finally:
             result.engine.close()
             result.hub.close()
@@ -2339,12 +2340,12 @@ class TestAVaultThatWillNotOpen:
         the recovery that abandons it."""
         folder = str(tmp_path / "library")
         vault = make_pre_alembic_vault(folder)
-        before = open(vault, "rb").read()
+        before = Path(vault).read_bytes()
 
         result = bootstrap_hub(folder, str(tmp_path / "hub.db"))
         try:
             assert result.library.path == os.path.realpath(folder)
-            assert open(vault, "rb").read() == before, "registration must not migrate"
+            assert Path(vault).read_bytes() == before, "registration must not migrate"
             assert not any(
                 name.startswith("vault.db.unusable-") for name in os.listdir(folder)
             )
@@ -2546,7 +2547,7 @@ class TestOpeningTheRegisteredVault:
             tmp_path, NoSuchTableError("user"), opened=sentinel
         )
         vault_path = double._hub_bootstrap.library.vault_path
-        before = open(vault_path, "rb").read()
+        before = Path(vault_path).read_bytes()
 
         assert Server._open_registered_vault(double) is sentinel
         assert len(attempts) == 2
@@ -2554,7 +2555,7 @@ class TestOpeningTheRegisteredVault:
         folder = os.path.dirname(vault_path)
         moved = [n for n in os.listdir(folder) if n.startswith("vault.db.unusable-")]
         assert len(moved) == 1
-        assert open(os.path.join(folder, moved[0]), "rb").read() == before
+        assert Path(os.path.join(folder, moved[0])).read_bytes() == before
         assert not os.path.exists(vault_path), "the replacement is made by the open"
         # Without this the new vault would be refused for carrying no fingerprint.
         assert double._hub_bootstrap.library.vault_uuid is None

@@ -434,24 +434,22 @@ def scrapheap_pictures(server, request: Request, pic_ids: list[int]):
     # One bulk action, one operation row, one batch id - so the client can
     # offer a single "Undo" for the whole move, by batch id or by simply
     # popping the newest operation.
-    (deleted_ids, skipped_locked), _operation = (
-        operation_log_service.run_recorded_metadata_task(
-            vault,
-            delete_pics,
-            pic_ids,
-            op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
-            picture_ids=pic_ids,
-            # Expand only the undo snapshot, not delete_pics' pic_ids argument:
-            # normalising positions can change siblings that remain live.
-            expand_stacks=True,
-            expand_stacks_include_deleted=True,
-            summary=operation_log_service.scrapheap_move_summary,
-            # Always batched: the caller's gesture id when it sent one, a
-            # server-minted ``srv-…`` otherwise.
-            **operation_log_service.request_context(
-                request, fallback_batch_id=operation_log_service.new_batch_id()
-            ),
-        )
+    (deleted_ids, skipped_locked), _ = operation_log_service.run_recorded_metadata_task(
+        vault,
+        delete_pics,
+        pic_ids,
+        op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
+        picture_ids=pic_ids,
+        # Expand only the undo snapshot, not delete_pics' pic_ids argument:
+        # normalising positions can change siblings that remain live.
+        expand_stacks=True,
+        expand_stacks_include_deleted=True,
+        summary=operation_log_service.scrapheap_move_summary,
+        # Always batched: the caller's gesture id when it sent one, a
+        # server-minted ``srv-…`` otherwise.
+        **operation_log_service.request_context(
+            request, fallback_batch_id=operation_log_service.new_batch_id()
+        ),
     )
     # Soft-delete removes the cards from active grid views. Broadcast a single
     # ``removed`` event so other tabs drop the stale cards in one update.
@@ -643,7 +641,7 @@ def register_routes(router, server):
         # Project membership is stack-atomic, so the snapshot expands to whole
         # stacks - otherwise undo would restore the clicked picture and leave its
         # stack siblings on the new project.
-        (updated_ids, missing_ids), _operation = (
+        (updated_ids, missing_ids), _ = (
             operation_log_service.run_recorded_metadata_task(
                 server.vault,
                 update_picture_projects,
@@ -827,7 +825,7 @@ def register_routes(router, server):
         # rather than one picture at a time.
         (
             (updated_ids, skipped_ids, missing_ids, reset_triggered),
-            _operation,
+            _,
         ) = operation_log_service.run_recorded_metadata_task(
             server.vault,
             _apply_scores_batch,
@@ -1909,7 +1907,7 @@ def register_routes(router, server):
         context = operation_log_service.request_context(
             request, fallback_batch_id=operation_log_service.new_batch_id()
         )
-        (rotated_ids, unsupported_ids, skipped_ids), _operation = (
+        (rotated_ids, unsupported_ids, skipped_ids), _ = (
             operation_log_service.run_recorded_metadata_task(
                 server.vault,
                 rotate_pics,

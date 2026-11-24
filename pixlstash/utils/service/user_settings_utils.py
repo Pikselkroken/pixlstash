@@ -9,7 +9,6 @@ from pixlstash.services import comfyui_connections
 from pixlstash.training_plugins.ai_toolkit import install as ai_toolkit_install
 
 from pixlstash.utils.system_utils import (  # noqa: F401
-    MAX_VRAM_BUDGET_GB,
     default_max_vram_gb,
     max_vram_budget_gb,
 )

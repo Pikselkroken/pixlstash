@@ -45,7 +45,6 @@ MAX_COLUMNS = 16384
 SHEET_MEMBER = "xl/worksheets/sheet1.xml"
 SHARED_STRINGS_MEMBER = "xl/sharedStrings.xml"
 
-_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _DTD_MARKERS = (b"<!DOCTYPE", b"<!ENTITY")
 _TAIL = max(len(m) for m in _DTD_MARKERS) - 1
 _CHUNK = 1 << 20

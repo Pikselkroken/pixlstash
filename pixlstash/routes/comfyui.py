@@ -150,25 +150,6 @@ from pixlstash.services.model_downloads import download_source, trusted_live_lin
 from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
-# Re-exported so existing call sites and tests that import these helpers from
-# this module keep resolving after the move into services/comfyui_service.py.
-from pixlstash.services.comfyui_service import (  # noqa: F401
-    _assign_outputs_to_stack_top,
-    _assign_pictures_to_view_context,
-    _copy_set_and_project_assignments,
-    _download_comfyui_image,
-    _emit_comfyui_failure_progress,
-    _extract_comfyui_output_images,
-    _extract_history_entry,
-    _extract_history_status_and_error,
-    _extract_text_from_value,
-    _fetch_comfyui_history,
-    _import_comfyui_outputs,
-    _set_source_picture_id_on_pictures,
-    _unique_edit_filename,
-    _wait_for_comfyui_outputs,
-)
-
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)

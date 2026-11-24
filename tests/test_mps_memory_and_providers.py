@@ -156,7 +156,7 @@ def test_nvidia_smi_is_not_missing_on_a_mac(patch_runtime, monkeypatch):
     It is not a missing dependency there, it is the machine.
     """
     patch_runtime(_apple_torch(), fake_ort(["CoreMLExecutionProvider"]))
-    monkeypatch.setattr(accelerator, "_torch", lambda: _apple_torch())
+    monkeypatch.setattr(accelerator, "_torch", _apple_torch)
     monkeypatch.setattr(sc.shutil, "which", lambda name: None)
     outcome = StartupCheckOutcome()
     _checks("auto")._check_optional_dependencies(outcome)
@@ -316,7 +316,7 @@ def test_an_unconfigured_mps_budget_defaults_to_the_working_set(monkeypatch):
     recommendation, which on an 8 GB machine is more memory than the machine
     physically has - so "no budget configured" is the case that needs one most.
     """
-    monkeypatch.setattr(accelerator, "_torch", lambda: _apple_torch())
+    monkeypatch.setattr(accelerator, "_torch", _apple_torch)
     monkeypatch.setitem(
         __import__("sys").modules, "torch", _apple_torch()
     )  # accelerator_total_memory_mb reads sys.modules, never imports
@@ -329,7 +329,7 @@ def test_an_unconfigured_mps_budget_defaults_to_the_working_set(monkeypatch):
 def test_an_unconfigured_cuda_budget_is_still_unlimited(monkeypatch):
     """The control: CUDA's allocator already raises a catchable OOM at the
     card's real limit, so unlimited genuinely means unlimited there."""
-    monkeypatch.setattr(accelerator, "_torch", lambda: _cuda_torch())
+    monkeypatch.setattr(accelerator, "_torch", _cuda_torch)
     budget = VramBudget(CUDA)
     budget.set_budget_gb(None)
 
@@ -688,7 +688,7 @@ def _clip_service_on(device, message, monkeypatch):
 
     fake_torch = types.SimpleNamespace(
         stack=lambda tensors: _FakeTensor(len(tensors), device, message),
-        no_grad=lambda: contextlib.nullcontext(),
+        no_grad=contextlib.nullcontext,
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
 

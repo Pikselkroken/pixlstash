@@ -701,8 +701,12 @@ def _publish_private_temp(
         if (published.st_dev, published.st_ino) != (expected.st_dev, expected.st_ino):
             try:
                 os.unlink(destination)
-            except OSError:
-                pass
+            except OSError as unlink_exc:
+                logger.warning(
+                    "Could not remove mismatched backup %s after publication: %s",
+                    destination,
+                    unlink_exc,
+                )
             raise BackupError("The published backup did not match its private temp.")
         _fsync_directory(os.path.dirname(destination) or ".")
     except FileExistsError as exc:
@@ -732,7 +736,12 @@ def _remove_uncommitted_publication(destination: str, expected: os.stat_result) 
                     exc,
                 )
     except FileNotFoundError:
-        pass
+        # Benign: the final hardlink is already gone, so there is nothing left
+        # to clean up.
+        logger.debug(
+            "Failed backup publication %s was already absent; nothing to remove",
+            destination,
+        )
     except OSError as exc:
         logger.warning(
             "Could not remove failed backup publication %s: %s", destination, exc

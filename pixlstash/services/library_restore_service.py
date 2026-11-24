@@ -769,8 +769,12 @@ def _stage_hub_beside_config(scratch: str, plan: RestorePlan) -> str:
     except OSError as exc:
         try:
             os.unlink(temp_path)
-        except OSError:
-            pass
+        except OSError as unlink_exc:
+            logger.warning(
+                "Could not remove hub staging temp %s after a failed copy: %s",
+                temp_path,
+                unlink_exc,
+            )
         raise RestoreError(
             f"Could not stage the restored hub in {plan.config_dir}: {exc}. "
             "Your installation is unchanged."

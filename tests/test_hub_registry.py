@@ -7,6 +7,7 @@ world-readable.
 """
 
 import os
+from pathlib import Path
 import shutil
 import sqlite3
 import stat
@@ -327,12 +328,12 @@ class TestAttachAndList:
         folder = make_vault_folder(tmp_path, "foreign", with_credentials=True)
         vault = os.path.join(folder, "vault.db")
         before = os.stat(vault).st_mtime_ns
-        digest_before = open(vault, "rb").read()
+        digest_before = Path(vault).read_bytes()
 
         registry.attach(folder)
 
         assert os.stat(vault).st_mtime_ns == before
-        assert open(vault, "rb").read() == digest_before
+        assert Path(vault).read_bytes() == digest_before
 
     def test_list_puts_the_active_library_first(self, registry, tmp_path):
         registry.attach(make_vault_folder(tmp_path, "zebra"))

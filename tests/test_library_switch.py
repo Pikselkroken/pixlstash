@@ -34,6 +34,9 @@ from pixlstash.services.library_switch_service import (
     known_vault_revisions,
 )
 from pixlstash.hub.registry import LibraryNotFoundError
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @pytest.fixture(scope="module")
@@ -53,8 +56,13 @@ def second_library(server, tmp_path):
     if not library.is_active:
         try:
             server.library_registry.detach(library.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Fixture teardown could not detach second library %s at %s: %s",
+                library.id,
+                folder,
+                exc,
+            )
 
 
 def _picture_count(server) -> int:
