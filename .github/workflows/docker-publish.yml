@@ -113,6 +113,28 @@ jobs:
           else
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
           fi
+          # latest-dev names the newest release of any kind (rc, a, b, .dev or
+          # stable), so it moves only when this is the newest v* tag in the
+          # repository: a rebuild of an older tag, or a patch to an older line,
+          # must not move it backwards. Order is PEP 440's:
+          # .devN < aN < bN < rcN < final.
+          NEWEST=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | python3 -c '
+          import re, sys
+          def key(tag):
+              m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+)|[.-]dev[.-]?(\d+))?", tag)
+              if not m:
+                  return None
+              phase = 0 if m[6] else {"a": 1, "b": 2, "rc": 3, None: 4}[m[4]]
+              return (int(m[1]), int(m[2]), int(m[3]), phase, int(m[5] or m[6] or 0))
+          tags = [t for t in sys.stdin.read().split() if key(t)]
+          print(max(tags, key=key) if tags else "")
+          ')
+          echo "Newest release tag: ${NEWEST:-none}"
+          if [[ "${REF_NAME}" == v* && "${REF_NAME}" == "${NEWEST}" ]]; then
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Docker metadata (CPU)
         id: meta
@@ -133,6 +155,7 @@ jobs:
             type=semver,pattern={{major}},value=${{ inputs.release_tag }}
             type=raw,value=${{ steps.release-kind.outputs.release_tag }},enable=${{ (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && steps.release-kind.outputs.is_stable != 'true' }}
             type=raw,value=latest,enable=${{ (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && steps.release-kind.outputs.is_stable == 'true' }}
+            type=raw,value=latest-dev,enable=${{ steps.release-kind.outputs.is_newest == 'true' }}
             type=edge,branch=${{ github.event.repository.default_branch }},enable=${{ inputs.release_tag == '' }}
             type=sha,format=short,enable=${{ inputs.release_tag == '' }}
           # A rebuild is dispatched from main, so the defaults would label it
@@ -152,8 +175,15 @@ jobs:
             exit 0
           fi
           TAGS_TO_PUSH=""
+          MOVING=""
           while IFS= read -r TAG; do
             [[ -z "$TAG" ]] && continue
+            # latest-dev always exists once published, so the existence check
+            # would never move it; it goes with the image it names instead.
+            if [[ "$TAG" == *:latest-dev || "$TAG" == *:latest-dev-gpu ]]; then
+              MOVING+="${TAG}"$'\n'
+              continue
+            fi
             if ! docker manifest inspect "$TAG" > /dev/null 2>&1; then
               echo "Will push: $TAG"
               TAGS_TO_PUSH+="${TAG}"$'\n'
@@ -161,6 +191,10 @@ jobs:
               echo "Skipping (already exists): $TAG"
             fi
           done <<< "$ALL_TAGS"
+          if [[ -n "$TAGS_TO_PUSH" && -n "$MOVING" ]]; then
+            echo "Will move: ${MOVING//$'\n'/ }"
+            TAGS_TO_PUSH+="$MOVING"
+          fi
           { echo "tags<<EOF"; printf '%s' "$TAGS_TO_PUSH"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
       - name: Build and push CPU image
@@ -265,6 +299,28 @@ jobs:
           else
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
           fi
+          # latest-dev names the newest release of any kind (rc, a, b, .dev or
+          # stable), so it moves only when this is the newest v* tag in the
+          # repository: a rebuild of an older tag, or a patch to an older line,
+          # must not move it backwards. Order is PEP 440's:
+          # .devN < aN < bN < rcN < final.
+          NEWEST=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | python3 -c '
+          import re, sys
+          def key(tag):
+              m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+)|[.-]dev[.-]?(\d+))?", tag)
+              if not m:
+                  return None
+              phase = 0 if m[6] else {"a": 1, "b": 2, "rc": 3, None: 4}[m[4]]
+              return (int(m[1]), int(m[2]), int(m[3]), phase, int(m[5] or m[6] or 0))
+          tags = [t for t in sys.stdin.read().split() if key(t)]
+          print(max(tags, key=key) if tags else "")
+          ')
+          echo "Newest release tag: ${NEWEST:-none}"
+          if [[ "${REF_NAME}" == v* && "${REF_NAME}" == "${NEWEST}" ]]; then
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Docker metadata (GPU)
         id: meta
@@ -287,6 +343,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}-gpu,value=${{ inputs.release_tag }}
             type=raw,value=${{ steps.release-kind.outputs.release_tag }}-gpu,enable=${{ (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && steps.release-kind.outputs.is_stable != 'true' }}
             type=raw,value=latest-gpu,enable=${{ (inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v')) && steps.release-kind.outputs.is_stable == 'true' }}
+            type=raw,value=latest-dev-gpu,enable=${{ steps.release-kind.outputs.is_newest == 'true' }}
             type=raw,value=edge-gpu,enable=${{ inputs.release_tag == '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short,suffix=-gpu,enable=${{ inputs.release_tag == '' }}
           labels: |
@@ -304,8 +361,15 @@ jobs:
             exit 0
           fi
           TAGS_TO_PUSH=""
+          MOVING=""
           while IFS= read -r TAG; do
             [[ -z "$TAG" ]] && continue
+            # latest-dev always exists once published, so the existence check
+            # would never move it; it goes with the image it names instead.
+            if [[ "$TAG" == *:latest-dev || "$TAG" == *:latest-dev-gpu ]]; then
+              MOVING+="${TAG}"$'\n'
+              continue
+            fi
             if ! docker manifest inspect "$TAG" > /dev/null 2>&1; then
               echo "Will push: $TAG"
               TAGS_TO_PUSH+="${TAG}"$'\n'
@@ -313,6 +377,10 @@ jobs:
               echo "Skipping (already exists): $TAG"
             fi
           done <<< "$ALL_TAGS"
+          if [[ -n "$TAGS_TO_PUSH" && -n "$MOVING" ]]; then
+            echo "Will move: ${MOVING//$'\n'/ }"
+            TAGS_TO_PUSH+="$MOVING"
+          fi
           { echo "tags<<EOF"; printf '%s' "$TAGS_TO_PUSH"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
       - name: Build and push GPU image

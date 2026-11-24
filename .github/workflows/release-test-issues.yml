@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to use as the release version label (e.g. v1.7.0rc4)'
+        description: 'Release tag whose test plan to file, and the version label (e.g. v1.7.0rc4)'
         required: true
 
 permissions: {}
@@ -31,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The plan as tagged, which is the one the issues link to.
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
       - name: Validate release tag
@@ -63,6 +65,8 @@ jobs:
 
           tag = os.environ["TAG"]
           plan_path = "docs/release-test-plan.md"
+          # Absolute: a relative link does not resolve from an issue page.
+          plan_url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/blob/{tag}/{plan_path}"
 
           with open(plan_path) as f:
               text = f.read()
@@ -89,7 +93,7 @@ jobs:
               issue_title = f"[{tag}] Release test: {title}"
               issue_body  = (
                   f"Release test checklist for **{tag}**.\n\n"
-                  f"Source: [`docs/release-test-plan.md`](../blob/main/docs/release-test-plan.md)\n\n"
+                  f"Source: [`{plan_path}` at {tag}]({plan_url})\n\n"
                   f"---\n\n"
                   f"{body}"
               )
