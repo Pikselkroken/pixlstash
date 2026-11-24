@@ -738,6 +738,26 @@ def test_a_failed_copy_is_reported_once_then_retried(
     assert _settled(owner, path)["state"] == "ready"
 
 
+def test_start_retries_a_failed_copy_at_once(server, owner, tmp_path, monkeypatch):
+    # The POST starts the copy unless one is ready or running; a failed one is
+    # neither, so it retries rather than answering "failed".
+    _forget_copies(server)
+    calls = []
+
+    def failing(source, dest, on_start=None):
+        calls.append(source)
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(ffmpeg_utils, "make_playable_copy", failing)
+    pic = _library_clip(server, tmp_path)
+    start = PROXY_START.format(id=pic)
+    assert owner.post(start).json()["state"] == "preparing"
+    _thumbnails._copy_executor.submit(lambda: None).result(timeout=30)
+    assert owner.post(start).json()["state"] == "preparing"
+    _thumbnails._copy_executor.submit(lambda: None).result(timeout=30)
+    assert len(calls) == 2
+
+
 def test_a_library_switch_does_not_report_the_old_job(
     server, owner, tmp_path, monkeypatch
 ):

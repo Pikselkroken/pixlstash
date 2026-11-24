@@ -619,7 +619,8 @@ def register_routes(router, server):
             if job is not None:
                 # Done: report a failure once, then drop it so a later call retries.
                 del copy_jobs[key]
-                if job.future.exception() is not None:
+                # The POST is the reader asking again: it retries at once.
+                if job.future.exception() is not None and not force_start:
                     return _proxy_payload("failed", fmt=fmt, duration=duration)
             if _copy_is_fresh(image_root, picture_id, file_path, record):
                 return _proxy_payload("ready", fmt=fmt, duration=duration)
