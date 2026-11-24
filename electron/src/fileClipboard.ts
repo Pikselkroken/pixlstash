@@ -54,8 +54,8 @@ export async function requireShareCopyPaths(value: unknown, root: string): Promi
 /**
  * The single clipboard format that carries a file list on macOS and Linux.
  *
- * Electron writes one custom format per `clipboard.writeBuffer` call and each
- * call replaces the clipboard, so this picks the one the file manager reads:
+ * It is written as one raw OS format, and each `clipboard.write` replaces the
+ * clipboard, so this picks the one the file manager reads:
  * - macOS: `NSFilenamesPboardType`, a plist array of paths (Finder, Mail).
  * - Linux: `x-special/gnome-copied-files` for the GTK file managers (Nautilus,
  *   Nemo, Caja, Thunar); `text/uri-list` on KDE, which is what Dolphin reads.

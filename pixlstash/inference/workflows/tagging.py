@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+import numpy as np
+from PIL import Image
+
 from pixlstash.inference.vram_budget import (
     PIXLSTASH_TAGGER_CUDA_BASE_MB,
     PIXLSTASH_TAGGER_CUDA_PER_ITEM_MB,
@@ -17,6 +20,7 @@ from pixlstash.inference.vram_budget import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     PIXLSTASH_TAGGER_IMAGE_SIZE_FIXED_QUALITY_CROP,
+    PIXLSTASH_TAGGER_IMAGE_SIZE_FULL,
     PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP,
 )
 from pixlstash.utils.accelerator import (
@@ -76,6 +80,11 @@ class TaggingWorkflow:
         """Whether the PixlStash tagger is active for this workflow instance."""
         return self._use_pixlstash_tagger
 
+    @property
+    def tagger_settings(self) -> dict:
+        """The tagger settings this workflow was built with."""
+        return self._tagger_settings
+
     def whole_face_crop(self) -> bool:
         """Whether the quality crop covers the whole face (the user setting)."""
         params = (
@@ -90,6 +99,36 @@ class TaggingWorkflow:
         if self.whole_face_crop():
             return PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP
         return PIXLSTASH_TAGGER_IMAGE_SIZE_FIXED_QUALITY_CROP
+
+    def full_pass_input(
+        self, image: Image.Image, engine_override: str | None = None
+    ) -> Image.Image | None:
+        """*image* reduced to what the full-image pass actually reads (#2745).
+
+        A tag task's preload holds this instead of the decoded original, which
+        for a 48 MP photo is 144 MB against this one's 1 MB. Each reduction is
+        the plugin's own first resize, so the plugin's resize then returns the
+        same pixels and the tags are unchanged: the PixlStash tagger's
+        ``transforms.Resize`` is a PIL bilinear resize to a fixed square, and
+        WD14 pads to a square and area-resizes to 448.
+
+        Returns:
+            The reduced image, or **None** when the active plugin reads its
+            files itself and takes no preloaded image.
+        """
+        active = self.active_plugin_name(engine_override)
+        if active == "pixlstash_tagger":
+            size = PIXLSTASH_TAGGER_IMAGE_SIZE_FULL
+            return image.resize((size, size), Image.Resampling.BILINEAR)
+        if active == "wd14":
+            # Local, as in `wd14._run_preloaded`: the module imports torch.
+            from pixlstash.image_loading_dataset_prepper import (
+                ImageLoadingDatasetPrepper,
+            )
+
+            bgr = ImageLoadingDatasetPrepper.preprocess_image(image)
+            return Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1], np.uint8))
+        return None
 
     def active_plugin_name(self, engine_override: str | None = None) -> str:
         """The plugin :meth:`tag_images` runs for the full-image pass.

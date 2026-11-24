@@ -66,6 +66,15 @@ PROMPT_FIELDS = ("text", "prompt", "value")
 # Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
 # negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
 NEGATIVE_FIELDS = ("negative_prompt", "negative")
+# Nodes whose output is zeroed conditioning: the prompt on their input is not
+# what reaches the sampler. A model with no negative prompt is wired through
+# one (its guider's negative takes the zeroed positive), so a walk up the
+# negative side stops there and finds none. Shared with workflow_io and
+# workflow_identity, which detect the same thing.
+ZEROED_CONDITIONING_CLASSES = frozenset({"ConditioningZeroOut"})
+# Nodes that join two conditionings into one. A recipe reads the prompt only
+# where every branch carries the same one (:func:`_agreed_prompt`).
+CONDITIONING_COMBINE_CLASSES = frozenset({"ConditioningCombine"})
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -99,6 +108,26 @@ _SETTING_FIELDS = {
     "width": int,
     "height": int,
 }
+# ComfyUI's custom-sampler nodes that are one sampler each. They have no
+# `sampler_name` input: the class is the sampler, so a SamplerCustomAdvanced
+# graph (MiniMax H3 Image's, with SamplerLCM) reported no sampler at all. Named
+# as KSampler spells the same sampler.
+_SAMPLER_NODE_NAMES = {
+    "SamplerLCM": "lcm",
+    "SamplerLCMUpscale": "lcm",
+    "SamplerEulerAncestral": "euler_ancestral",
+    "SamplerEulerAncestralCFGPP": "euler_ancestral_cfg_pp",
+    "SamplerEulerCFGpp": "euler_cfg_pp",
+    "SamplerLMS": "lms",
+    "SamplerDPMAdaptative": "dpm_adaptive",
+    "SamplerDPMPP_2M_SDE": "dpmpp_2m_sde",
+    "SamplerDPMPP_2S_Ancestral": "dpmpp_2s_ancestral",
+    "SamplerDPMPP_3M_SDE": "dpmpp_3m_sde",
+    "SamplerDPMPP_SDE": "dpmpp_sde",
+    "SamplerER_SDE": "er_sde",
+    "SamplerSASolver": "sa_solver",
+    "SamplerSEEDS2": "seeds_2",
+}
 # Nodes that carry a raw STRING value (positive-prompt primitive wired into
 # subgraphs). Public because `services/workflow_export.py` needs the same list:
 # a prompt sitting in one of these is a prompt, and it is the population that
@@ -112,6 +141,15 @@ PRIMITIVE_STRING_CLASSES = {
 }
 
 _MAX_FOLLOW_DEPTH = 8
+
+# A prompt enhancer: a language model loaded as a CLIP rewrites the owner's
+# words before the encoder reads them (MiniMax H3 Image's edit, Qwen-Image
+# 2.1). By class_type, the input carrying the text each node hands on.
+PROMPT_REWRITE_INPUTS = {
+    "TextGenerate": "prompt",
+    "TextGenerateV2": "prompt",
+    "JsonExtractString": "json_string",
+}
 
 # String values in widgets_values that are control tokens, not prompt text.
 _TEXT_CONTROL_VALUES = frozenset(
@@ -290,6 +328,18 @@ def _follow_positive_ui(
         # text sits in widgets_values[0] without being declared in inputs[]
         return _extract_text_from_node_ui(node)
     # Follow any CONDITIONING-type input upstream (skips non-conditioning inputs)
+    if node.get("type") in CONDITIONING_COMBINE_CLASSES:
+        branches = []
+        for inp in node.get("inputs") or []:
+            if inp.get("type") != "CONDITIONING":
+                continue
+            upstream_id = link_map.get(str(inp.get("link")))
+            branches.append(
+                _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
+                if upstream_id
+                else None
+            )
+        return _agreed_prompt(branches)
     for inp in node.get("inputs") or []:
         if inp.get("type") == "CONDITIONING" and inp.get("link") is not None:
             upstream_id = link_map.get(str(inp["link"]))
@@ -297,6 +347,18 @@ def _follow_positive_ui(
                 result = _follow_positive_ui(upstream_id, node_map, link_map, depth + 1)
                 if result is not None:
                     return result
+    return None
+
+
+def _agreed_prompt(prompts: list[str | None]) -> str | None:
+    """The prompt every branch of a combine carries, or ``None``.
+
+    A combine of two prompts that disagree is no single prompt, and a branch
+    that resolves to nothing leaves the whole unknown. Never one branch's
+    text picked over another's.
+    """
+    if prompts and all(p is not None for p in prompts) and len(set(prompts)) == 1:
+        return prompts[0]
     return None
 
 
@@ -463,6 +525,101 @@ def _resolve_text_api(value: Any, workflow: dict, depth: int = 0) -> str | None:
     return None
 
 
+def rewritten_prompt_input(workflow: dict, node_id: str, field: str) -> tuple[str, str]:
+    """Where the words a prompt enhancer rewrote into *node_id*'s *field* are.
+
+    Follows the text link back through the enhancer: its JSON extraction, the
+    ``TextGenerate`` call, and a ``StringReplace`` that puts the words into its
+    instructions (``replace``, when ``find`` is in a literal ``string``). Those
+    words are the prompt: what reaches the encoder is the model's rewrite.
+    ``(node_id, field)`` itself unless the walk passes a ``TextGenerate``.
+    """
+    at, rewritten = (str(node_id), field), False
+    for _ in range(_MAX_FOLLOW_DEPTH):
+        value = ((workflow.get(at[0]) or {}).get("inputs") or {}).get(at[1])
+        if not _is_api_ref(value):
+            break
+        source = workflow.get(str(value[0])) or {}
+        class_type = source.get("class_type")
+        inputs = source.get("inputs") or {}
+        if class_type in PROMPT_REWRITE_INPUTS:
+            rewritten = rewritten or class_type.startswith("TextGenerate")
+            at = (str(value[0]), PROMPT_REWRITE_INPUTS[class_type])
+        elif (
+            class_type == "StringReplace"
+            and rewritten
+            and isinstance(inputs.get("string"), str)
+            and isinstance(inputs.get("find"), str)
+            and inputs["find"]
+            and inputs["find"] in inputs["string"]
+        ):
+            at = (str(value[0]), "replace")
+        else:
+            break
+    return at if rewritten else (str(node_id), field)
+
+
+def _is_image_input(name: Any) -> bool:
+    """An image input by name: ``image``, ``image_1``, ``images.image_1``."""
+    return str(name).split(".")[0].split("_")[0] in ("image", "images")
+
+
+def blank_picture_inputs(workflow: dict) -> list[tuple[str, str]]:
+    """The inputs a blank picture feeds, as ``(node_id, input)``.
+
+    A blank picture is an ``EmptyImage`` whose every reader takes it on an
+    image input of a conditioning encoder: a node with a ``clip`` and no
+    conditioning input of its own, the one :func:`_follow_prompt_api` reads as
+    making the conditioning itself (MiniMax H3 Image's ``images.image_1``). An
+    ``EmptyImage`` that feeds anything else, such as a VAE encode, is content
+    and is not one. Empty when the graph has none.
+    """
+    readers: dict[str, list[tuple[str, str]]] = {}
+    for node_id, node in workflow.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        for name, value in (inputs or {}).items():
+            if _is_api_ref(value):
+                readers.setdefault(str(value[0]), []).append((str(node_id), name))
+    found: list[tuple[str, str]] = []
+    for empty_id, node in workflow.items():
+        if not isinstance(node, dict) or node.get("class_type") != "EmptyImage":
+            continue
+        links = readers.get(str(empty_id), [])
+        if links and all(
+            _is_image_input(name) and _is_encoder_inputs(workflow.get(reader))
+            for reader, name in links
+        ):
+            found.extend(links)
+    return found
+
+
+def _is_encoder_inputs(node: Any) -> bool:
+    """Whether *node* makes conditioning from a ``clip``, as the walk reads it."""
+    inputs = (node or {}).get("inputs") or {}
+    return "clip" in inputs and not any(map(_is_conditioning_input, inputs))
+
+
+def lcm_sampler_nodes(workflow: dict) -> list[str]:
+    """The nodes that sample with LCM, as node ids.
+
+    A ``SamplerLCM``, and a ``KSampler`` or ``KSamplerAdvanced`` whose
+    ``sampler_name`` is ``lcm``. ``SamplerLCMUpscale`` is not one: it upscales
+    between steps, which a sampler select would not do.
+    """
+    found: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        inputs = node.get("inputs") or {}
+        if class_type == "SamplerLCM" or (
+            class_type in ("KSampler", "KSamplerAdvanced")
+            and inputs.get("sampler_name") == "lcm"
+        ):
+            found.append(str(node_id))
+    return found
+
+
 def _follow_prompt_api(
     node_id: str,
     workflow: dict,
@@ -485,6 +642,23 @@ def _follow_prompt_api(
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
 
+    # A zeroed negative has no prompt, however the zeroing node is wired to the
+    # positive one. Only the negative side stops here: a walk up the positive
+    # side is read as it always was.
+    if side == "negative" and class_type in ZEROED_CONDITIONING_CLASSES:
+        return None
+
+    # A combine carries the prompt only where both branches carry the same one.
+    if class_type in CONDITIONING_COMBINE_CLASSES:
+        return _agreed_prompt(
+            [
+                _follow_prompt_api(str(inputs[name][0]), workflow, depth + 1, side)
+                if _is_api_ref(inputs.get(name))
+                else None
+                for name in ("conditioning_1", "conditioning_2")
+            ]
+        )
+
     # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
     # `TextEncode` class, or a node that takes `clip` and no conditioning, so
     # makes the conditioning itself (`MiniMaxH3ImageToVideo`).
@@ -496,7 +670,11 @@ def _follow_prompt_api(
         if side == "negative" and any(name in inputs for name in NEGATIVE_FIELDS):
             fields = NEGATIVE_FIELDS
         name = next((name for name in fields if name in inputs), None)
-        return _resolve_text_api(inputs.get(name), workflow, depth + 1)
+        if name is None:
+            return None
+        at, name = rewritten_prompt_input(workflow, str(node_id), name)
+        text = (workflow[at].get("inputs") or {}).get(name)
+        return _resolve_text_api(text, workflow, depth + 1)
 
     # Follow conditioning passthrough nodes upstream, **the caller's side
     # first**: a node carrying both a generic `conditioning` and a named
@@ -612,12 +790,76 @@ def _extract_generation_info_api(workflow: dict) -> dict:
                     seed = val
                     break
 
+    positive_prompt, prompt_assist = split_prompt_assist(positive_prompt, workflow)
     return {
         "models": models,
         "loras": loras,
         "positive_prompt": positive_prompt,
         "seed": seed,
+        "prompt_assist": prompt_assist,
     }
+
+
+# ── prompt assist stamp ───────────────────────────────────────────────────────
+
+#: The ``_meta`` key a run's prompt assist (backend §25) records what it added
+#: under, on the node holding the prompt literal. ``_meta`` is volatile to
+#: every workflow hash, so the stamp never changes a picture's workflow.
+PROMPT_ASSIST_META = "pixlstash_prompt_assist"
+
+
+def prompt_assist_tail(stamp: Any) -> str | None:
+    """What a ``v: 1`` stamp says was added after the owner's words.
+
+    ``joiner`` and then the parts' texts joined by single spaces. ``None`` for
+    a stamp this build cannot read, or one that added nothing.
+    """
+    try:
+        texts = [part["text"] for part in stamp["parts"]]
+        if stamp["v"] != 1 or not isinstance(stamp["joiner"], str) or not texts:
+            return None
+        if not all(isinstance(text, str) and text for text in texts):
+            return None
+        return stamp["joiner"] + " ".join(texts)
+    except (KeyError, TypeError):
+        return None
+
+
+def split_prompt_assist(
+    text: Any, workflow: dict, node_id: Any = None
+) -> tuple[Any, dict | None]:
+    """The owner's words in a prompt literal, and the stamp of what a run added.
+
+    The one reader of :data:`PROMPT_ASSIST_META`. A stamp is trusted only
+    where *text* ends with exactly what it says was added, after some words
+    of the owner's; otherwise the whole literal is the owner's prompt (a file
+    edited elsewhere) and the mismatch is logged. With *node_id*, the node
+    holding the literal, only that node's stamp is read: the run writes the
+    stamp there. Without it (a recipe read, whose text may come through a
+    primitive), any stamp whose lines end the text is the one.
+    """
+    if not isinstance(text, str):
+        return text, None
+    stamps = [
+        node["_meta"][PROMPT_ASSIST_META]
+        for nid, node in workflow.items()
+        if (node_id is None or str(nid) == str(node_id))
+        and isinstance(node, dict)
+        and isinstance(node.get("_meta"), dict)
+        and PROMPT_ASSIST_META in node["_meta"]
+    ]
+    for stamp in stamps:
+        tail = prompt_assist_tail(stamp)
+        if tail and len(text) > len(tail) and text.endswith(tail):
+            return text[: -len(tail)], stamp
+    if stamps:
+        logger.info(
+            "A prompt assist stamp does not match the end of the prompt, so the "
+            "whole prompt is read as the owner's words (%d stamps, %d characters).",
+            len(stamps),
+            len(text),
+        )
+    return text, None
 
 
 # ── public extraction API ─────────────────────────────────────────────────────
@@ -644,10 +886,13 @@ def extract_generation_info(workflow: dict) -> dict:
         - ``loras`` (list[str]): LoRA file names found in LoRA loader nodes.
         - ``positive_prompt`` (str | None): text from the CLIPTextEncode node
           connected to the sampler's ``positive`` input, or ``None`` if the
-          chain could not be resolved.
+          chain could not be resolved. The owner's words only: what a
+          run's prompt assist added is cut off (:func:`split_prompt_assist`).
         - ``seed`` (int | None): the seed value used for sampling, taken from
           the ``seed`` widget of ``KSampler``/``KSamplerAdvanced`` or the
           ``noise_seed`` input of ``RandomNoise``.
+        - ``prompt_assist`` (dict | None, API format only): the stamp of
+          what was cut off, ``None`` where nothing was.
     """
     # The format check used to sit outside this `try`, so a non-dict raised
     # `AttributeError` at the caller. `is_api_format` answers for one instead
@@ -949,6 +1194,7 @@ def extract_recipe_extras(workflow: dict) -> dict:
     negative_prompt: str | None = None
     settings: dict[str, Any] = {}
     latent_size: dict[str, int] = {}
+    node_named: str | None = None
     try:
         sized = size_inputs(workflow)
         for node_id, node in workflow.items():
@@ -978,9 +1224,16 @@ def extract_recipe_extras(workflow: dict) -> dict:
                 value = _typed_setting(value, kind)
                 if value is not None:
                     settings[field] = value
+            # Only a fallback: a `sampler_name` some node names wins, wherever
+            # it comes in the graph.
+            node_named = node_named or _SAMPLER_NODE_NAMES.get(
+                node.get("class_type", "")
+            )
     except Exception:
         logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
         return {"negative_prompt": None, "settings": {}}
+    if node_named is not None:
+        settings.setdefault("sampler_name", node_named)
     settings.update(latent_size)
     return {"negative_prompt": negative_prompt, "settings": settings}
 

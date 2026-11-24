@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster)
+25. [Model Shelf](#25-model-shelf), incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster), [25.31 The prompt assist: curated prompt text per model family](#2531-the-prompt-assist-curated-prompt-text-per-model-family)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -513,7 +513,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **A video carries the same two, in its container.** ComfyUI's `SaveVideo` and `SaveWEBM` write a `prompt` and a `workflow` tag; VideoHelperSuite writes both inside one JSON `comment`. `VideoUtils.extract_embedded_metadata` (`utils/image_processing/video_utils.py`) reads the tags off an MP4/MOV `moov` box or a WebM/Matroska `Tags` element without touching the media data, lower-cases the names and unpacks the comment, and `ImageUtils.extract_embedded_metadata` answers for a video file with those two tags alone, as `{"comfyui": {"prompt", "workflow"}}`: a container tag is named by whoever wrote the file, so none is let into the dict's own `png` / `exif` namespace. Both finders below already read that block, so a video is read, extracted and filed by the code a PNG is, with no video branch of its own. Any other container (AVI) answers `{}`.
 
-- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and chooses **what is displayed**: the graph `GET /comfyui/pictures/{id}/workflow` serves, the overlay's workflow inspector, and the Recipe tab's Copy/Download box — the editor's own format, which is what can be pasted back into ComfyUI. **It no longer decides what a picture was made with** (#1313): `extract_comfy_workflow_info` reads the prompt, models, LoRAs and seed from the `prompt` chunk whenever the file has one, falling back to the UI chunk only for a file that carries nothing else. Those facts are what the Recipe tab shows and what `ComfyUIExtractionTask` and the import path store in `comfyui_positive_prompt` / `comfyui_models` / `comfyui_loras`, so they now agree with `Generation.seed` and with `/recipe`, which always read the executed graph. **The prompt is found where a run would write it**: from a sampler's or guider's positive input (`BasicGuider`'s one `conditioning` included), through conditioning-only nodes, to the node that encodes the text — a `TextEncode` class, or any node that takes `clip` and no conditioning (an edit or video encoder) — read from the first of `PROMPT_FIELDS` it holds, the tuple `workflow_io` and the run share (`NEGATIVE_FIELDS` on the negative walk of an encoder that makes both sides). **Text wired in from another node is read off that node**: its `value` / `text` / `string`, and for a node that names its text otherwise (a prompt builder's `character_description`) its longest string of more than one word, so a file name, a path or a choice is never stored as the prompt; what a builder makes of that text at run time is in no chunk, and reading nothing left the Recipe tab without a prompt the picture's own column still held. It used to stop at a `CLIPTextEncode` behind an input named `positive`, so a video's recipe had models and a seed and no prompt, and a look with no prompt and no LoRA is listed nowhere (`used_looks`). Migration `0130` hands back the pictures that were filed that way. **A loader that feeds nothing is not credited** (`_dead_loader_ids`): a model or LoRA loader read only by other such loaders, like a leftover UNET and LoRA wired into nothing, never ran, and counting it put a LoRA on a look that never loaded one. Every other node nothing reads is taken for an output, because many savers are not named like one, and dropping a LoRA that did run is the worse mistake. Rows already stored are not re-read, so a picture imported before this keeps its old lists. Reading them off the UI chunk was a real defect, not a nicety: that chunk's text is recovered by mapping named inputs onto positional `widgets_values` and, failing that, by taking the longest string in the node, so a graph whose encoder is fed from a prompt-builder reported that node's template as the prompt and could report no models and no seed at all. As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk — `_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in — so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
+- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and chooses **what is displayed**: the graph `GET /comfyui/pictures/{id}/workflow` serves, the overlay's workflow inspector, and the Recipe tab's Copy/Download box (the editor's own format, which is what can be pasted back into ComfyUI). **It no longer decides what a picture was made with** (#1313): `extract_comfy_workflow_info` reads the prompt, models, LoRAs and seed from the `prompt` chunk whenever the file has one, falling back to the UI chunk only for a file that carries nothing else. Those facts are what the Recipe tab shows and what `ComfyUIExtractionTask` and the import path store in `comfyui_positive_prompt` / `comfyui_models` / `comfyui_loras`, so they now agree with `Generation.seed` and with `/recipe`, which always read the executed graph. **The prompt is found where a run would write it**: from a sampler's or guider's positive input (`BasicGuider`'s one `conditioning` included), through conditioning-only nodes, to the node that encodes the text. A `ConditioningCombine` carries the prompt only where both branches carry the same one (`comfyui_utilities._agreed_prompt`, API and UI alike), so a combine of two prompts reads as none (a `TextEncode` class, or any node that takes `clip` and no conditioning (an edit or video encoder) (read from the first of `PROMPT_FIELDS` it holds, the tuple `workflow_io` and the run share (`NEGATIVE_FIELDS` on the negative walk of an encoder that makes both sides). **Text wired in from another node is read off that node**: its `value` / `text` / `string`, and for a node that names its text otherwise (a prompt builder's `character_description`) its longest string of more than one word, so a file name, a path or a choice is never stored as the prompt; what a builder makes of that text at run time is in no chunk, and reading nothing left the Recipe tab without a prompt the picture's own column still held. It used to stop at a `CLIPTextEncode` behind an input named `positive`, so a video's recipe had models and a seed and no prompt, and a look with no prompt and no LoRA is listed nowhere (`used_looks`). Migration `0130` hands back the pictures that were filed that way. **A loader that feeds nothing is not credited** (`_dead_loader_ids`): a model or LoRA loader read only by other such loaders, like a leftover UNET and LoRA wired into nothing, never ran, and counting it put a LoRA on a look that never loaded one. Every other node nothing reads is taken for an output, because many savers are not named like one, and dropping a LoRA that did run is the worse mistake. Rows already stored are not re-read, so a picture imported before this keeps its old lists. Reading them off the UI chunk was a real defect, not a nicety: that chunk's text is recovered by mapping named inputs onto positional `widgets_values` and, failing that, by taking the longest string in the node, so a graph whose encoder is fed from a prompt-builder reported that node's template as the prompt and could report no models and no seed at all. As a lowest-priority display fallback it also accepts the `prompt` chunk (issue #628): PixlStash-generated PNGs deliberately embed **nothing** in the `workflow` chunk (`_submit_comfyui_prompt` must not put the API graph there, because the ComfyUI frontend feeds that chunk to `loadGraphData` unguarded on drag-in (so ComfyUI's own `prompt` chunk is the only displayable graph such files carry. A genuine UI `workflow` chunk always wins over the fallback, and `is_comfy_workflow` filters out plain-text `prompt` values from other tools.
 - `find_comfy_api_prompt` reads the **`prompt`** chunk. It is the only source for anything that runs, and since #1313 also the preferred source for anything *reported* about how a picture was made — which is why **one route answers that question**: `GET /comfyui/pictures/{id}/recipe`, with `?preflight=false` for callers that cannot afford its ComfyUI round-trip. `/workflow` serves the graph's bytes and nothing else; it briefly carried recipe fields of its own and they were moved here rather than left to drift. A picture that carries no `prompt` chunk is **no longer the end of the question**: `services/comfyui_ui_graph.py` rebuilds the editor `workflow` chunk into an API prompt against ComfyUI's own `GET /object_info`. **The rebuild is reached through `_load_embedded_api_prompt`, never through a handler**: every route that runs a picture's own graph comes through that helper. It was put there while `POST /comfyui/run_recipe` still existed and could have held it; #1410 has since retired that route, so the card run's embedded-picture tier in `routes/workflows.py` is now the only caller — a rebuild written into the handler would have been deleted with it, and the offer the Recipe tab makes would have stopped meaning anything. It returns `(graph, problems)` because the two callers want different failures: the card run walks candidates, so a refusal means take the next tier, while the recipe replay is replaying *that* picture and owes its reader a 400 naming what stopped it. `object_info` of `None` is a refusal, not a licence to guess; the file gestures (`_card_source`) pass none and behave exactly as before. That map is what makes the rebuild a reading rather than a guess — it names every input of every installed class in declaration order and marks the ones the editor draws an extra widget for (`control_after_generate` after a seed, the upload button on a file picker) and, for a multi-type input such as `"FLOAT,INT"`, which widget it draws (`widgetType`, read as the editor reads it: `widgetType ?? type`), which is exactly what the positional `widgets_values` array cannot be read without. **The rebuild is exact or it is refused.** Every node must be a class this ComfyUI declares and its widget values must be accounted for to the slot; one unexplained value means the model of the frontend is off and every later value in that node is suspect, so the whole conversion is abandoned and the caller is told which node and why. Subgraphs are expanded and the deprecated `PrimitiveNode` is resolved into the widgets it feeds; what the map does not say about the editor (the widgets an extension adds to a class, a seed's control by name, custom widget types) is read from the frontend's source, each rule with a guard (see the `comfyui_ui_graph.py` row in the module table). Measured over the 15 editor/API workflow pairs comfyui-multigpu ships: 8 rebuilt, 8 identical to the real API half, 0 wrong, 7 refused. A refused picture still answers with its recipe — read off the editor graph, which is what the file says — as `available: false`, `reason: "editor_graph"`, with `conversion_problems` naming what could not be read; "nothing here was made in ComfyUI" and "this is a ComfyUI picture PixlStash cannot hand back to ComfyUI" are two different answers and the second one used to be given as the first. **`topology_hash` is derived, not read off the picture, whenever the answer came from the editor graph.** The stored `picture.workflow_topology_hash` is written by the extraction pass from the API `prompt` chunk or from A1111 infotext and nothing else, so on a file carrying an editor graph *and* A1111 text it names a different reading of the same file — and the Recipe tab's *Open* sent the reader to a workflow they were never shown; on an editor-only file it is NULL and *Open* was not offered at all. A rebuilt graph is keyed by the ordinary API path (`topology_hash`), so it agrees exactly with the same workflow saved in API format and *Open* reaches the card those siblings are on; a graph that would not rebuild is keyed straight off the editor serialisation with `ui_topology_hash`, which had no caller until now and agrees with the API twin for most graphs but not all. **What this does not do is file the picture**: an editor-only workflow nobody has in API format is still on no card, and the Workflows view says so. Filing one would mean teaching `ComfyUIExtractionTask` to reach ComfyUI, which is what `_stand_down` exists to prevent — a background pass that cannot be answered leaves its pictures unmarked and re-reads the whole library on every planning cycle. The conversion needs `/object_info`, so an editor-graph picture is **the one case where `?preflight=false` still reads ComfyUI**; `_read_object_info(..., cached=True)` reuses a map for a minute so walking the filmstrip does not re-fetch several megabytes per arrow key, and a run never uses that cache because a run decides what executes.
 
 **Remix routes (v1.9).** `GET /comfyui/pictures/{picture_id}/recipe` reports whether a picture carries a replayable recipe and pre-flights it against the user's ComfyUI (see `services/comfyui_recipe_service.py`, §10). `POST /comfyui/run_recipe` used to replay it; #1410 retired it and `POST /workflows/run` (`OWNER_ONLY`) replays a picture's recipe now, still **re-extracting the graph from the file server-side on every call and never accepting a client-supplied graph**. Both refuse honestly rather than silently no-op: a graph with no seed input would re-generate a byte-identical image that the importer dedupes on `pixel_sha` and emits no event for, so the user would see literally nothing happen.
@@ -566,7 +566,7 @@ Stack placement for these graphs therefore does **not** come from `build_stack_f
 
 The exception's text is cut at `MAX_FAILURE_REASON` (300 characters): a state_dict size mismatch runs to kilobytes, and the sentence is drawn on a card and spoken as part of its name. **PixlStash's own Abort is noticed at once**: `_comfyui_abort` bumps `_queue_cleared` once ComfyUI has cleared its queue (not when the clear was refused or never arrived), and every poller asks the queue on its next pass instead of at its next thirty-second check, so the runs Abort took off the queue are said to have stopped before the owner starts the next one. `ComfyUIRunStopped` (a `RuntimeError`) is what the wait raises for the two stopped endings, and `stopped: true` is how the event tells a run somebody stopped from one a node failed in. The event also carries `workflow_id`, the workflow the run was of (manual or automatic; `run_workflow_id` is only the manual one, for filing pictures), so the failure is shown on that workflow. **Every ending is also kept in memory** (`record_run_outcome`, the newest `MAX_RUN_OUTCOMES` = 500, lost on restart): `running` from the moment `_submit_every` queues the prompt, then `completed` with the picture ids it added, or `failed` with the message. A run still going is the last to be dropped, and each outcome keeps the `library_uuid` it was queued under. `GET /workflows/runs/{prompt_id}` (owner-only, and under the workflow reads' transport rule, `ensure_secure_when_required`) reads it and answers 404 for a prompt nobody queued here and for a run of another library, whose picture ids would name other pictures; it exists because the MCP server is another process and hears no WebSocket event.
 
-**A fixed seed takes the full 64-bit range** ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and the 32-bit check the retired `run_t2i` / `run_i2i` applied would reject reproducing our own built-in's default.
+**A fixed seed takes the full 64-bit range** ComfyUI's core samplers declare, because the shipped `FLUX.2 Klein 9B Edit` template's own `noise_seed` is `432262096973502` and the 32-bit check the retired `run_t2i` / `run_i2i` applied would reject reproducing our own built-in's default.
 
 ### `insights.py`
 `GET /insights` — the v1.11 "About your library" screen. One route, no writes
@@ -1280,6 +1280,8 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
 
+**The worker loop survives a task it cannot handle.** Each `TaskRunner` worker thread (the CPU pool and the single GPU worker share `_run`) handles one dequeued task in `_handle`. Anything that raises there outside the task's own `run()` - admission, the run bookkeeping - is logged at error with its traceback, the task is failed (not requeued, since a runner fault would recur on every pass), its completion callbacks fire, and the thread takes the next task. A GPU requeue backoff is capped at `VRAM_REQUEUE_MAX_S`, with its exponent bounded so a long wait cannot overflow.
+
 **A GPU out-of-memory failure is retried, not lost.** VRAM pressure is almost always another process (a ComfyUI run, a second model) that gives the card back shortly, so `BaseTask.run()` gives a task `VRAM_OOM_ATTEMPTS` (3) attempts. Two guards keep that narrow, because re-running `_run_task()` from the top is only safe for an inference pass that failed before it wrote anything:
 
 - **GPU-queue tasks only.** The CPU queue's import and purge tasks move and delete files; a blind second pass over one is a second effect, not a retry.
@@ -1340,12 +1342,18 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 
+**An image-embedding preload holds no decoded original (#2748).** `ImageEmbeddingTask._preload_images_task` decodes each picture, takes the perceptual hash from the full frame, and keeps only the image put through CLIP's own first resize (`ClipService.reduce_for_preprocess`: shortest side to 224 px, bicubic; an image that would be enlarged, such as a thin strip, is kept as it is), plus the preprocessed tensor when CLIP is already loaded. The resize that opens the preprocessing then leaves the image as it is, so the tensor is bit-identical to the original's. Before CLIP is loaded the resize is built from open_clip's config without the model (`_unloaded_first_resize`), which `tests/test_image_embedding_worker.py` holds to the transform a real load returns. Preloading 64 × 24 MP photos held 6.6 GB of RSS before, 0.5 GB after.
+
+**A CPU spillover engine runs the configured plugins.** `TagTask` and `DescriptionTask` build their spillover engine with `InferenceEngine.create(device="cpu")` and no settings, then hand it the spilling workflow's `tagger_settings` on every acquire, so a spilled batch runs the owner's tagger, captioner and crop settings rather than the defaults.
+
 **Probe cost (#651)**: the planner sweeps every finder on a short interval and resets to `MIN_INTERVAL_S` whenever anything was submitted, so a finder's query runs continuously while any pipeline is active — including on a fully-processed library, where it matches nothing. Two rules follow, and a new finder must obey both:
 
 - **Never select the whole ORM `Picture`.** Narrow to the columns the task actually reads (`load_only`, plus `load_only` on any `selectinload`). `image_embedding`, `text_embedding`, `likeness_parameters` and `Face.features` are `LargeBinary`; dragging them through a probe evicts the pages the API endpoints need, several times a second. Keep it an ORM select though — `BaseTaskFinder._filter_and_claim` claims via `getattr(picture, "id", None)`, so a scalar/tuple select silently claims nothing. The session is closed before the task runs, so anything not loaded raises `DetachedInstanceError`.
 - **Give the predicate an index, and lead it with the nullable column.** Pick the column order that wins *with and without* table statistics. PixlStash itself never runs `ANALYZE`, but that is a property of our code, not of the database: a user can run it from any SQLite client, and nothing asserts `sqlite_stat1`'s absence, so a rule that depends on it is a rule that can be switched off from outside. Leading with the nullable work column does not depend on it. A partial index only wins when it can claim *more* equality terms than the index it competes with, and `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted` under either regime. The counter-example is the load-bearing evidence: an `(id)`-only partial index over the same predicate claims no extra term, so without statistics SQLite ignores it and falls back to `ix_picture_deleted` at **80 ms**, against **0.003 ms** for the correct ordering on the same 200k-row table. Accurate statistics leave that plan unchanged; stale ones (an `ANALYZE` run mid-import) collapse the probe to `SCAN picture` whether the partial indexes exist or not, so they are not a case the column order can be chosen for. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
 
 Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
+
+**Image-task batches are cut by decoded size as well as by count (#2750).** `MissingTagFinder` and `MissingImageEmbeddingFinder` pass `pixel_budget=IMAGE_TASK_PIXEL_BUDGET` (`worker_config.py`, 64 x 12.5 MP) to `BaseTaskFinder._filter_and_claim`, which stops a batch before the picture whose recorded `width * height` would pass it, and always takes the first picture so an oversized one runs alone. A picture with no recorded dimensions counts as `UNKNOWN_PICTURE_PIXELS` (24 MP). A Tags task's memory grows with picture size (#2745 measured about 1.7 GB peak RSS over 64 x 24 MP photos); an embedding preload keeps only CLIP-sized images since #2748, so there the budget bounds decode work per task rather than what it holds. `ImageEmbeddingTask.fetch_work` selects `width` and `height` for this; the finder hands the task `(id, file_path)` pairs.
 
 **User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
 
@@ -1390,7 +1398,7 @@ A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at 
 
 **ComfyUI as a tenant.** `ComfyUIProbe.device()` maps a ComfyUI to a card when an NVML device has its name and size (within 1 GB: ComfyUI reports CUDA's total, which leaves out what the driver keeps back, 439 MB on a 32 GB card) **and** its free memory tracks the card's within 512 MB on two reads 0.3 s apart (cached 60 s); the address alone cannot tell a Docker host from a remote box with the same card. A remote ComfyUI has no card here and its runs are granted at once; an *unreachable* one keeps its last mapping rather than being taken for remote. Failed reads are cached for their TTL, and `try_light` never reads a probe, so a hung ComfyUI never stalls the GPU worker. `POST /workflows/run` asks a lease per run (`_vram_lease`): granted at once, it is submitted inline as before; otherwise it is held (`comfyui_service.hold_run`, status `waiting`, a `run-<hex>` id and no prompt id) and `_dispatch_held_run` submits it on grant. The lease is released the moment the run's final `/history` status arrives (`settle_vram` in `_process_comfyui_outputs`, and in its `finally`: a leaked lease keeps the card from every other tenant). `PeakSampler` samples that figure every 0.5 s between ComfyUI starting the run and its end (`_note_run_message` marks `execution_start` and `executing {node: null}`) and the peak is written to `workflow_vram_peak`.
 
-**Learned need.** A run's need is the largest of the workflow's newest five peaks × 1.1 where the card has room for it (below) (aborted and out-of-memory runs do not count: an OOM peak is the card's total, which no budget meets), for the same `model_set` (base model, text encoder and VAE, not LoRAs) where it has some, else the workflow's own, **measured at about the run's image size**. Each peak records `pixels` (`run_pixels`: the largest of the pictures put in, from the vault's `width × height`, and of every `width`/`height` on a latent or image node, literal or one link away from a primitive's `value`, times `batch_size` and `length`). A run of a known size takes only peaks within `SIZE_BAND` (1.5×) of it either way, each scaled up linearly to the run's size and never down, and never past what the room the run had grants, its `room_mb` less `safety_margin_mb` (a need no card can grant waits for ever); with none there it is unmeasured (D2) and measured by this run, so one run on a very large picture never sets what a small one waits for. **The ×1.1 never lifts a need past that ceiling ÷ 1.1** (#2081): a peak that high is taken to have filled the card (ComfyUI keeps models resident while there is room and offloads when there is not), so it is what the run completed in and is the need itself, without margin. Between the two the need is flat, so a larger peak never needs less. Each peak records `room_mb`, the room the run had at it (`PeakSampler`: ComfyUI's allocation plus the card's free memory at that sample); a row written before the column takes the card's `device_total_mb`. A peak at or past its ceiling filled that room and measures it, not the run: its need is the ceiling, and across the window the need is the **smallest** such ceiling (or the largest unfilled need, if that is smaller), since the run has finished there before. A larger run scales the room with its peak, never past the card's total. The largest would make a run that filled the card beside other apps wait whenever they hold a little more than they did then, which the margin made permanent: a 28.3 GB need on a 32 GB card waited for ever. A peak of no recorded size (written before the column) is never used for a sized run; a run whose size cannot be read (a size computed by another node) takes every peak, as before, and Reset is the way out. Reset also ends an out-of-memory streak, whose rows it deletes. 50 peaks are kept per workflow. The owner's **reset** (`PATCH /workflows/{id}` `forget_vram_peaks: true`, `forget_peaks`) deletes the workflow's peaks and leaves "runs alone" as it is. A run that **runs out of memory** fails with `code: vram_oom` (no retry), writes a peak of the card's total with outcome `oom`, and when its newest `OOM_STREAK` (3) recorded runs all ran out of memory (`ran_out_in_a_row`) and the owner's `auto_exclusive_after_oom` is on (the default) marks the workflow `exclusive` (`source: oom`) and announces a `vram_oom_exclusive` warning. A stopped run is skipped, a finished one breaks the streak, and a run with no GPU to measure writes no row; one out-of-memory run among good ones changes nothing but its red bar. Owners set or clear "runs alone" on the card (`PATCH /workflows/{id}` `exclusive`). A workflow re-key carries both tables: peaks are copied to every heir of a split, the policy rides with the id (`_carry_group_state`).
+**Learned need.** A run's need is the largest of the workflow's newest five peaks × 1.1 where the card has room for it (below) (aborted and out-of-memory runs do not count: an OOM peak is the card's total, which no budget meets), for the same `model_set` (base model, text encoder and VAE, not LoRAs) where it has some, else the workflow's own, **measured at about the run's image size**. Each peak records `pixels` (`run_pixels`: the largest of the pictures put in, from the vault's `width × height`, and of every `width`/`height` on a latent or image node, literal or one link away from a primitive's `value`, times `batch_size` and `length`). A run of a known size takes only peaks within `SIZE_BAND` (1.5×) of it either way, each scaled up linearly to the run's size and never down, and never past what the room the run had grants, its `room_mb` less `safety_margin_mb` (a need no card can grant waits for ever); with none there it is unmeasured (D2) and measured by this run, so one run on a very large picture never sets what a small one waits for. **The ×1.1 never lifts a need past that ceiling ÷ 1.1** (#2081): a peak that high is taken to have filled the card (ComfyUI keeps models resident while there is room and offloads when there is not), so it is what the run completed in and is the need itself, without margin. Between the two the need is flat, so a larger peak never needs less. Each peak records `room_mb`, the room the run had at it (`PeakSampler`: ComfyUI's allocation plus the card's free memory at that sample); a row written before the column takes the card's `device_total_mb`. A peak at or past its ceiling filled that room and measures it, not the run: its need is the ceiling, and across the window the need is the **smallest** such ceiling (or the largest unfilled need, if that is smaller), since the run has finished there before. A larger run's room is **not** scaled up with its peak: ComfyUI moves weights out to system RAM to make room, so a run that would not fit the room an earlier one finished in still runs there, and a need scaled past it only waits (a 6K sheet asked for a 5K peak's room scaled up to the whole card less the margin, which other apps never leave free). The largest would make a run that filled the card beside other apps wait whenever they hold a little more than they did then, which the margin made permanent: a 28.3 GB need on a 32 GB card waited for ever. A peak of no recorded size (written before the column) is never used for a sized run; a run whose size cannot be read (a size computed by another node) takes every peak, as before, and Reset is the way out. Reset also ends an out-of-memory streak, whose rows it deletes. 50 peaks are kept per workflow. The owner's **reset** (`PATCH /workflows/{id}` `forget_vram_peaks: true`, `forget_peaks`) deletes the workflow's peaks and leaves "runs alone" as it is. A run that **runs out of memory** fails with `code: vram_oom` (no retry), writes a peak of the card's total with outcome `oom`, and when its newest `OOM_STREAK` (3) recorded runs all ran out of memory (`ran_out_in_a_row`) and the owner's `auto_exclusive_after_oom` is on (the default) marks the workflow `exclusive` (`source: oom`) and announces a `vram_oom_exclusive` warning. A stopped run is skipped, a finished one breaks the streak, and a run with no GPU to measure writes no row; one out-of-memory run among good ones changes nothing but its red bar. Owners set or clear "runs alone" on the card (`PATCH /workflows/{id}` `exclusive`). A workflow re-key carries both tables: peaks are copied to every heir of a split, the policy rides with the id (`_carry_group_state`).
 
 **State and controls.** `arbiter().snapshot()` is the `resources` block of `GET /workers/progress` (owner only). Every heavy lease's state change, every preemption and every warning is a `resource_lease` event (`integration_architecture.md` §8). `routes/resources.py` holds run-anyway, cancel (which also cancels the held run) and `POST /resources/comfyui/free` (OWNER_ONLY), and the GPU picker (LOCAL_OWNER_ONLY). The ladder's ComfyUI rung records what it freed on the lease (`Lease.comfyui_clear`), which the snapshot reports as the lease's `comfyui_clear` phase.
 
@@ -1755,6 +1763,8 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 | `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
 
+**A tag task's preload holds no decoded original (#2745).** It decodes each picture once, cuts the quality crop from the full-resolution image and resizes it to the crop size, reduces the image to what the full pass reads (`TaggingWorkflow.full_pass_input`: the PixlStash tagger's 576 px bilinear square, or WD14's padded 448 px area resize), and drops the original. Each reduction is the model's own first resize, so the tensors are bit-identical to those the preloaded originals produced. The crop is cut for the faces read at queue time, stored with their signature, and cut again from disk when the batch reads different faces. Holding the originals, three tasks of 64 at a time, filled 30 GB on a photo library: 64 × 24 MP held 5.9 GB per task, now 0.1 GB of images. A third-party plugin reads its own files and gets no preloaded image. A batch whose workflow differs from the one the preload was made for (the settings changed while it was queued) preloads again rather than loading originals. Image embeddings are reduced the same way (§7, *An image-embedding preload holds no decoded original*).
+
 #### User-supplied plugins (issue #326)
 
 Beyond the four built-ins above, `TaggerPluginManager` scans
@@ -2103,7 +2113,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/workflow_identity.py](../pixlstash/services/workflow_identity.py) | **The card key and the core a workflow groups by** (v1.12 Workflows & Recipes, step B1; the owner-facing model is §13's two layers, workflow and recipe). **Glossary: the word "recipe" means two things.** In the hub tables `workflow_recipe` / `structural_hash` is the graph bound to model filenames; new code and docs call that tier a **variant** (the routes already say `/variants`). A **saved recipe** is the look a user keeps: prompt, recipe LoRAs with strengths, overrides. The tables are append-only and keep their names.<br><br>Pure functions over the **stored document** (asset references, never filenames), so a backfill needs the hub alone and a forgotten model name stays forgotten. `slots` lists every model slot a document names, each labelled by its loader's Weisfeiler-Leman label at topology tier (refined until a round splits no class, so a long LoRA chain is told apart) plus the widget name, with picture inputs (widgets named `image`, `video`, `mask`) left out. **A label only means something within one topology**: at full refinement it encodes the whole graph, so marks and parameter addresses keyed by label are keyed with the topology too. Every function refuses a raw graph (`WorkflowGraphError`) rather than reading it as having no models. `workflow_key` is the **card**: topology plus every non-LoRA slot plus the LoRA slots marked structural, so a different checkpoint is a different card and a character LoRA is not; both are recipe values of one workflow to the owner (#1623). **A LoRA slot is one by widget name, and both spellings carry the numbered form** (`lora_name_2`, `lora_sha256_2`): a digest slot missed there is not a LoRA slot, so it reaches the card key with no mark check and a character-LoRA swap in a stacker's second slot forks the workflow into a new card (#1416). `CHECKPOINT_WIDGETS` lost the client copy it was held equal to: the retired workflow shelf's `BASE_WIDGETS` had drifted in both directions, and the guardrail asserting the pair went with the shelf in F1b (#1404). **A second server-side list survives and already disagrees** — `_SLOT_KINDS` in `workflow_card_service.py`, which is what actually labels a card's slots (`unet_name` is `unet` there and never `checkpoint`; `diffusion_model`, `model_path` and `checkpoint_id` are absent), so a Flux/SD3/Wan graph's model is not the card's headline model. The two want reconciling behind one helper; nothing asserts them today. `guess_mark` is the first-sight guess for a LoRA slot (whole words lightning/turbo/lcm/lightx2v/causvid/dmd/tcd/pcm, Hyper-SD, SDXL Flash, or a one- or two-digit step count means structural; precision over recall, because a wrong structural guess is frozen into the card key), which the caller freezes and never recomputes. `core_hash` is the **automatic workflow**: the topology with plumbing (PreviewImage, Note, Reroute, Primitive*), post-processing (upscale, hires-fix sampler, face detailer and detectors) and, by default, LoRA loaders removed and the edges re-wired through them; the caller stores `CORE_VERSION` beside it. `workflow_type` reads video/outpaint/inpaint/upscale/img2img/txt2img from the classes, in that order: `video` is a graph with a video or animation output (`_VIDEO_OUTPUT_RE`: `Save(Video|WEBM|Animated)`, `VideoCombine`), so the output decides and not the latent (Wan 2.2 text to image starts from `EmptyHunyuanLatentVideo` and saves one picture). The type is cached on `workflow_topology_core`; data step 8 re-derives every v1 row through `_cache_topology`, so the video type needed no data step of its own. `special_groups` says which post-processing a graph actually DOES (`upscale`, `face_detailer`), for the card's generated name: the same taxonomy `core_hash` strips, but **narrower**, because a group counts only where a node does the work rather than loads the model for it — over-inclusion is free when the answer is which nodes to remove and false when it is printed as the card's only identifying text. |
 | [services/workflow_export.py](../pixlstash/services/workflow_export.py) | **What a workflow file may still say once it leaves this machine** (v1.12 Workflows & Recipes, step B8). `GET /workflows/{workflow_id}/export` resolves the workflow's base graph exactly as the run path does, and applies its default recipe (values, models, LoRA loaders outside it and off stages bypassed, #1623) — the linked file, the best kept picture's embedded metadata, or a stored instance document — and the last two are *real runs*: they carry the prompt that was typed, the seed that was rolled, the character LoRA that was loaded and the name of the picture that went in. `scrub_for_export` takes those out: every widget `carries_prose` calls prose blanked, seeds nulled, every LoRA slot that does not load a default-recipe LoRA (`kept_lora_slots`) emptied by filename **and by digest** (`lora_sha256`, the ComfyUI-PixlStash spelling, which `unvouched` cannot help with because the owner genuinely holds that LoRA), `_meta` titles stripped, picture loader filenames blank, output paths reset (`filename_prefix` is a folder a person names after what is in it), `checkpoint_id` dropped, and any model name the shelf cannot vouch for (`hub/workflows.unvouched_model_values`) blank — plus the *folder* of the ones it can, since that check only ever read the last component.<br><br>**Prose is found by widget name across the whole graph, and `carries_prose` is imported from the reducer rather than restated.** `detect_workflow_io` answers a different question with the opposite failure direction — where a *run* would write its prompt — so it returns nothing for a hires-fix graph whose two samplers read different prompts, and it classifies `CLIPTextEncodeSDXL` as a prompt node whose widgets (`text_g`, `text_l`) no binding names. The first shipped the prompt; the second shipped it while reporting `prompts` in `removed`. Three rules catch prose no widget name announces: `PRIMITIVE_STRING_CLASSES` handing a raw string into an encoder (`carries_prose` cannot be widened to `value`/`string` — it is the reducer's rule too, and a `value` widget feeding a LoadImage its filename is a topology asset there, so calling it prose would re-key every workflow built that way), the reducer's newline/`MAX_FILENAME_LENGTH` backstop, and whitespace, with `_names_a_file` answering first so that the 5,066 real filenames with spaces in them survive. `SECRET_FIELD_RE` is applied ahead of all of it — the reducer drops those widgets from a stored document because it "is kept forever and shared", and a file handed to somebody on purpose is the stronger case, while the two tiers this route resolves from most often are raw ComfyUI output the reducer never touched. Nested lists and dicts are walked with `is_link` telling a wire from a value, a **dict recursing on its key** and a list on its parent's name, the way the reducer's nested-asset walk does.<br><br>**That last check is stricter than `model_ghost_names` and deliberately in the opposite direction.** A ghost is judged in order to destroy a name forever, so an unjudgeable one has to be kept; here a wrong "vouched for" publishes a name the owner asked PixlStash to forget and a wrong "unvouched" only leaves a widget blank in a file they are giving away. Forgetting a name deletes its `workflow_recipe_asset` rows and rewrites no graph, so the ghost list can no longer see it while a picture's embedded metadata still says it in full — checking the shelf is what closes that. A graph that will not reduce is **refused (409) rather than exported**, and a `RecursionError` from a graph too deeply nested to walk gets the same answer (caught in `_card_source`, which all three file gestures resolve through). Nothing in the scrub needs the reduction any more — that is a belt rather than the trousers — but a graph PixlStash cannot read is one it can promise nothing about, and the export is a promise. Keeping the default recipe's slots rather than emptying the rest is the same choice: a recipe that could not be read and a loader the route could not match both fall on the side that publishes nothing |
 | [services/workflow_inbox.py](../pixlstash/services/workflow_inbox.py) | **The watched `workflows/` folder** (§5 `comfyui.py`): `reconcile` stores each file as a manual workflow, once per content (`store_inbox_workflow`), and renames it `<stem>.<content hash>.json`; `trash_workflow` writes a deleted workflow back and sends it to the system trash; `WorkflowInboxWatcher` reconciles on file events. |
-| [services/workflow_io.py](../pixlstash/services/workflow_io.py) | **What a workflow needs and produces, from the graph alone**: save nodes, picture inputs, and positive/negative prompts found by walking each guider's own `positive` / `negative` inputs upstream to the text encoder (a `ConditioningZeroOut` on the way means no prompt). Runs over `workflow_hash`'s reductions, so UI and API format both work and subgraphs are inlined. Reports, never writes: two save nodes, two picture inputs, or samplers that read different prompts are listed in `ambiguities`, and disagreeing samplers leave the prompts empty rather than guessed. **"Editor graph or API graph?" has one answer, `comfyui_utilities.is_api_format`**, which honours all four hints ComfyUI writes (`nodes`, `links`, `last_node_id`, `last_link_id`) rather than `nodes` alone (#1482): a row of readers used to decide it by hand, and a truncated or hand-edited export was the API format to them and the editor format to `is_api_format`. `api_graph` is where the services ask it - and it asks about the **wrapped** graph, because a hint left on the outside of a `{"prompt": graph}` envelope says nothing about what the envelope holds. `_file_in_hub`, `run_targets` and `workflow_inputs._raw_node` all read the format off `api_graph`, so a document cannot be filed under one serialisation and run as the other. Four readers still answer their own, narrower questions and are right to: `is_comfy_workflow` (is this a workflow at all - the same four hints, read off `is_api_format`), `check_comfy_workflow` (what may be *stored*, stricter on purpose), `summarize_comfy_workflow` (counting, which also counts a `nodes` **dict**) and `comfyui_ui_graph.is_ui_graph` (is there a `nodes` array to **convert** - a document the hints call the editor format with no node list has nothing to rebuild, so widening that one would hand the converter an empty graph) |
+| [services/workflow_io.py](../pixlstash/services/workflow_io.py) | **What a workflow needs and produces, from the graph alone**: save nodes, picture inputs, and positive/negative prompts found by walking each guider's own `positive` / `negative` inputs upstream to the text encoder (a `ConditioningZeroOut` on the way means no prompt). Runs over `workflow_hash`'s reductions, so UI and API format both work and subgraphs are inlined. Reports, never writes: two save nodes, two picture inputs, or samplers that read different prompts are listed in `ambiguities`, and disagreeing samplers leave the prompts empty rather than guessed. **Encoders that carry one prompt are one prompt**: several encoders reading the same link (one primitive) or holding the same literal text are `positive_one_prompt`, and `positive_prompt_nodes` is every one of them, so a caption fills each and a recipe reads it once. Encoders that disagree are ambiguous, never one picked. **"Editor graph or API graph?" has one answer, `comfyui_utilities.is_api_format`**, which honours all four hints ComfyUI writes (`nodes`, `links`, `last_node_id`, `last_link_id`) rather than `nodes` alone (#1482): a row of readers used to decide it by hand, and a truncated or hand-edited export was the API format to them and the editor format to `is_api_format`. `api_graph` is where the services ask it - and it asks about the **wrapped** graph, because a hint left on the outside of a `{"prompt": graph}` envelope says nothing about what the envelope holds. `_file_in_hub`, `run_targets` and `workflow_inputs._raw_node` all read the format off `api_graph`, so a document cannot be filed under one serialisation and run as the other. Four readers still answer their own, narrower questions and are right to: `is_comfy_workflow` (is this a workflow at all - the same four hints, read off `is_api_format`), `check_comfy_workflow` (what may be *stored*, stricter on purpose), `summarize_comfy_workflow` (counting, which also counts a `nodes` **dict**) and `comfyui_ui_graph.is_ui_graph` (is there a `nodes` array to **convert** - a document the hints call the editor format with no node list has nothing to rebuild, so widening that one would hand the converter an empty graph) |
 | [services/workflow_parameters.py](../pixlstash/services/workflow_parameters.py) | **Which of a workflow's settings are featured, and which is a picture batch** — what survives of the #1306 parameter form. `FEATURED_ORDER` / `FEATURED_NAMES` are the setting names a workflow card's default recipe lists, in the order it lists them (`workflow_card_service`); `is_picture_batch` says whether a `batch_size` is how many pictures one submission makes (any `batch_size` on a node outputting `LATENT`, typed from `object_info`, else a name rule), which a run pins to 1 (`workflow_run_service.pin_batch_size`). **A wired picture size is still a setting**: `size_inputs` names an empty latent's `width` / `height`, or in a graph with no empty latent those of the node that hands out the latent it sizes (image-to-video's `WanImageToVideo`, found by its output feeding an input named for a latent), or failing that every input of those names, `linked_size` works out what a `ResolutionSelector` (ComfyUI's own arithmetic) or a `PrimitiveInt` feeding it says, which the default recipe lists, and `set_latent_size` is how a run writes one: unchanged leaves the wire, a new size replaces the link in every input of the same name reading that source output. The only wired input `_apply_addressed` overwrites. Also re-exports `workflow_io.api_graph` |
 | [services/picture_recipe_service.py](../pixlstash/services/picture_recipe_service.py) | **What the lightbox's Recipe section is told about one picture** (#1313), read-only. Reads the picture's embedded API `prompt` graph through `workflow_hash.reduce_api_graph` — the same reduction the hub files as `workflow_recipe_asset`, so the `(widget_name, normalized_filename)` pairs it matches on are the ones the shelf already indexes rather than a second, drifting normalisation — and hands back the model slots with the strength each was loaded at, and the resolution lock. The sampler settings and prompts are not its: the recipe route reads them with `utils/comfyui_utilities.extract_recipe_extras`, one reading of a graph's settings.<br><br>**The verified tier is `fetch_picture_counts`'s, read in the other direction.** A `*_sha256` widget that names exactly one shelf digest is *that* file and wears the badge; a filename that names exactly one shelf row is a file called that and does not; a name two rows share resolves to neither. A shelf row is served to a fully-unscoped owner only — the filename and the strength are in the graph the route serves anyway, but which row of the owner's shelf a file is, is a fact about the library. **The resolution lock goes no further than the owner at all**, and the route does not even read it for anyone else: a `generation_input` row names ANOTHER picture's id and its `pixel_sha`, and a token scoped to this picture is refused that picture on every other route — serving it here would hand out an id the gate refuses plus a content hash answering "does this library hold this exact image?". `resolution_lock_in_session` is the §10.1 session function; the route opens the read. |
 | [services/workflow_library_service.py](../pixlstash/services/workflow_library_service.py) | **Vault-side reads over the workflow keys `picture` carries.** Every read excludes soft-deleted pictures, and that is why the module exists rather than the query being inlined at each call site: a workflow whose every picture sits in the Scrapheap has to read as "none kept" rather than as live. `recipe_picture_counts` (kept pictures per recipe) and `variant_activity` (one `GROUP BY` per variant or live manual workflow: counts, ratings, last use) read the whole vault, so both are served to owner routes only. Nothing here joins to the hub — the hashes are content addresses, so a hash the attached hub has never seen is a workflow this machine does not have, reported as unknown rather than as an error |
@@ -2726,7 +2736,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins per card, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)**. **No route reads or writes them since #1623**: the cut-over's conversion reads them once into the `workflow_group*` tables below |
 | `workflow_key_picture_input`, `workflow_cover` | Input modes, Fixed pictures and the chosen cover per card, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`. Read once by the conversion (#1623), written by nothing; `workflow_cover` never had a production writer |
 | `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one. Their routes are gone (#1623): the conversion turns a manual stack into a manual workflow and reads these rows once |
-| `workflow_origin` (`hub/workflow_origin.py`) | Where a stored workflow came from: one row per `(origin, remote_path)`, with `workflow_name` naming the **manual workflow** the document is stored as (a file name before data step 7) and its `content_hash` (`workflow_inbox.content_hash`). Every way in that must not store a content twice records a row and deduplicates here (`stored_as` by content, `stored_at` by path; Manual workflows, below): the watched inbox (`INBOX_ORIGIN`, keyed by content hash), a user-folder file data step 7 adopted (`FILE_ORIGIN`, by file name) and a built-in (`BUILTIN_ORIGIN`, by file name). Callers hold `INBOX_LOCK` around a check and the write it decides. Deleting a manual workflow deletes the inbox, built-in and file rows naming it. **A row whose origin is a ComfyUI address is left over from the removed pull of ComfyUI's saved workflows**: since #1854 nothing writes one, marks one gone, or follows one to a file; it still says its content is stored as a live workflow, so an inbox drop of the same content matches it. Deleting its workflow marks it `dismissed` instead of removing it, which every reader passes over and which keeps an older build sharing the hub, one that still pulls, from bringing the workflow back. `remote_modified`, `dismissed` and `gone_at` are that pull's columns: nothing sets them now, and the readers still pass over a row left `dismissed` |
+| `workflow_origin` (`hub/workflow_origin.py`) | Where a stored workflow came from: one row per `(origin, remote_path)`, with `workflow_name` naming the **manual workflow** the document is stored as (a file name before data step 7) and its `content_hash` (`workflow_inbox.content_hash`). Every way in that must not store a content twice records a row and deduplicates here (`stored_as` by content, `stored_at` by path; Manual workflows, below): the watched inbox (`INBOX_ORIGIN`, keyed by content hash), a user-folder file data step 7 adopted (`FILE_ORIGIN`, by file name) and a built-in (`BUILTIN_ORIGIN`, by file name). Callers hold `INBOX_LOCK` around a check and the write it decides. Deleting a manual workflow deletes the inbox, file and template rows naming it and marks its built-in row `dismissed`, the record that keeps a removed built-in off the Workflows page. **A row whose origin is a ComfyUI address is left over from the removed pull of ComfyUI's saved workflows**: since #1854 nothing writes one, marks one gone, or follows one to a file; it still says its content is stored as a live workflow, so an inbox drop of the same content matches it. Deleting its workflow marks it `dismissed` instead of removing it, which every reader passes over and which keeps an older build sharing the hub, one that still pulls, from bringing the workflow back. `remote_modified`, `dismissed` and `gone_at` are that pull's columns: nothing sets them now, and the readers still pass over a row left `dismissed` |
 | `workflow_pulled_file` (legacy) | The stored files the removed pull of ComfyUI's saved workflows **wrote** before workflows became manual records, per file rather than per path. Nothing writes it: data step 7 reads it once, to give such a file's workflow `origin` `pull` |
 
 **Eight of those tables had no writer in B2**, and were created ahead of the
@@ -2858,7 +2868,11 @@ latent or checkpoint loader has the same **core address**
 group has no core label and is addressed by its slot label on the base
 topology, which goes stale if the base topology changes: an accepted limit, and
 `_apply_addressed` now logs every address that matches no node on the run graph
-rather than dropping it silently. LoRAs are not addressed by label:
+rather than dropping it silently. An address that more than one node carries
+names none of them: `workflow_identity.node_addresses` leaves it out of the
+default recipe, the run and export writes, and the form rows, so each such node
+keeps the value it stores (the topology cannot tell same-class nodes in parallel
+branches apart; their widget values can). LoRAs are not addressed by label:
 `lora:<sha256>`, placed by `place_recipe_loras`.
 
 **The default recipe** (`workflow_card_service.workflow_defaults`) is
@@ -3066,7 +3080,7 @@ deletable by its old routes, and read once by data step 7.
 
 | Table | Holds |
 |---|---|
-| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it what the save changed, which the version menu's words are made from: `models`, `loras`, `run`, `comfyui`, `mcp`, `revert:<n>`, and `chain` for a LoRA chain edit; "Saving over a workflow", below), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept); versions whose `source` is `comfyui` are counted apart, the newest `MAX_COMFYUI_VERSIONS` (49), prune only each other, and carry the `opening` they were saved from, whose next save supersedes them where nothing was made on them ("Saving over a workflow", below). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by every save over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version, when that version was stored and whether a conversion is stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
+| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it what the save changed, which the version menu's words are made from: `models`, `loras`, `run`, `comfyui`, `mcp`, `revert:<n>`, `chain` for a LoRA chain edit, and `release` for a built-in a release changed; "Saving over a workflow", below), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept); versions whose `source` is `comfyui` are counted apart, the newest `MAX_COMFYUI_VERSIONS` (49), prune only each other, and carry the `opening` they were saved from, whose next save supersedes them where nothing was made on them ("Saving over a workflow", below). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by every save over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version, when that version was stored and whether a conversion is stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
 | `workflow_document` | `workflow_id` PK, `document` (the current version's, see `workflow_version`: as imported, editor or API format, placeholders migrated, `pixlstash_bindings` kept), `api_document` (the API graph an editor document converts into, on its current version row too: ComfyUI's, which `POST /comfyui/workflows/convert` stores on every row holding that document, or the server's own, which `workflow_card_service.converted_manual_document` stores on the first read that needs the graph and never over one already there), `origin` (`import`, `inbox`, `builtin`, `duplicate`, `fixed`, `clone`, `chain`, `recipe`, and `pull`; a CHECK. `pull` is a workflow the removed pull of ComfyUI's saved workflows made: since #1854 no new workflow gets it, bar a file that pull wrote which data step 7 adopts, and `WorkflowCard.origin_category` answers `comfyui` for it, which is how the Workflows view's Origin filter lists the ones left behind for the owner to select and delete), `from_workflow_id` and `from_name` (what a copy or an extract was made from, as it was called then), `created_at`. Name, notes, hidden, defaults, pins and picture inputs are the `workflow_group_*` rows keyed by the same id; there is no `workflow_group` row |
 
 **Its own record, never grouped.** `card_index` appends one `Card` per row
@@ -3187,14 +3201,44 @@ drop of that content matches it.
 **Delete** (`DELETE /workflows/{id}` on a manual id): the document is written
 to the inbox and sent to the trash from there (`workflow_inbox.trash_workflow`,
 under `INBOX_LOCK`), then one transaction
-(`workflow_group_writes.delete_manual_workflow`) deletes its inbox, built-in
-and file origin rows (handing the content over again stores it again), marks
-any row the removed pull left `dismissed`, and deletes its document and
+(`workflow_group_writes.delete_manual_workflow`) deletes its inbox, file and
+template origin rows (handing the content over again stores it again), marks
+its built-in row and any row the removed pull left `dismissed`, and deletes its document and
 `workflow_group_*` rows. The inbox is swept of the document's content only
 when the workflow owns its inbox row: an identical copy can be another live
 workflow's. A workflow data step 7 made of a user file (a `file` origin row)
 takes that file to the trash instead (`trash_user_workflow`), so it no longer
-lists; `POST /comfyui/workflows/{name}/card` takes built-ins only. A stored
+lists; `POST /comfyui/workflows/{name}/card` takes built-ins only. **Every
+built-in is on the Workflows page until the owner removes or hides it**:
+start-up (`routes.comfyui.list_builtin_workflows`, after the inbox reconcile;
+`Server.DEFAULT_LIST_BUILTIN_WORKFLOWS`, off in the test suite) stores each
+built-in with no `builtin` origin row at all, and deleting one keeps its row,
+`dismissed`, so it is never listed again; the card route is the explicit way
+back, and its upsert clears `dismissed`. A built-in deleted before this kept
+no row and is listed once more. **A built-in a release renames** is moved,
+not filed again: `BUILTIN_RENAMES` (old file name to new) re-keys its origin row
+(`_rename_builtin`), and renames the copy when its name still says the old stem.
+**A built-in a release retires** (`BUILTIN_RETIRED`) is hidden once, if the
+owner never edited it, and its row is re-keyed `retired:<name>` so a copy the
+owner shows again stays shown (`_retire_builtin`). Both run first in
+`list_builtin_workflows`, under `INBOX_LOCK`. **A release that changes a built-in's file updates
+the copy the owner never edited** (`refresh_builtin_workflow`, from the same
+start-up pass, for each live one): the origin row's `content_hash` is the file
+as last filed, so a file that still hashes so costs one read and a hash. One
+that differs is stored over the workflow as its next version (`source`
+`release`, "updated with PixlStash" in the version menu) through
+`store_over_workflow`, with the origin row's hash moved to the new file in the
+same transaction, **only when the current version's `content_hash` is still
+the filed one**: the graph it replaces stays restorable, and name, notes,
+defaults, pins, saved recipes and pictures (with the version that made them)
+stay keyed to the same id, as for any Save. A copy the owner saved over (any
+version since, a run's save, a LoRA edit, a save from ComfyUI) keeps their
+graph and logs at every start that the release changed it; the way to the new
+file is to remove the workflow and add the built-in back (the card route), or
+go back to the filed version, which the next start then updates. A copy
+already holding the new file only has its hash recorded. Nothing is offered
+in the UI. A `.webp` shipped beside a built-in's
+file becomes its thumbnail, unpinned, whenever it is stored. A stored
 document is capped at `MAX_WORKFLOW_FILE_BYTES` serialised (413). Its saved recipes stay, unfiled. An automatic id
 is a 409: hide it instead.
 
@@ -3543,7 +3587,7 @@ a key bound to an address (`UserToken.bound_address`, the ComfyUI link key,
 stored as `comfyui` whatever `source` it sends, so that key cannot
 count its saves among the owner's or pass the Workflow tab's line by.
 
-**A save from ComfyUI keeps the pack's model loaders, and every read that names models reads them as the stock ones.** A graph opened with ComfyUI-PixlStash nodes comes back holding `PixlStashCheckpointLoader` (a shelf row) and the VAE, CLIP, ControlNet and upscale loaders (a digest), and is stored as it came. The run, Save, the default recipe's rows and *Use a set…* read a workflow's own graph (a manual document, a saved-over one) through `workflow_card_service.with_stock_loaders` (`comfyui_recipe_service.as_stock_loaders`): each as the stock loader of the file its row or digest names, the checkpoint loader as `CheckpointLoaderSimple` where anything reads its CLIP or VAE and `UNETLoader` otherwise, with the `weight_dtype` cast the swap carried onto it (else `default`). Decided by the graph alone, so the rows and the run name a loader by the same address. A row is trusted only with this shelf's `shelf` beside it, a digest only where one file has it; anything else stays as it is. A run swaps the pack's loader back in wherever ComfyUI lacks the file (`_swap_in_shelf_loaders`), so the stock reading runs the same. LoRA loaders are read by the chain, by digest, and are not touched.
+**A save from ComfyUI keeps the pack's model loaders, and every read that names models reads them as the stock ones.** A graph opened with ComfyUI-PixlStash nodes comes back holding `PixlStashCheckpointLoader` (a shelf row) and the VAE, CLIP, ControlNet and upscale loaders (a digest), and is stored as it came. The run, Save, the default recipe's rows and *Use a set…* read a workflow's own graph (a manual document, a saved-over one) through `workflow_card_service.with_stock_loaders` (`comfyui_recipe_service.as_stock_loaders`): each as the stock loader of the file its row or digest names, the checkpoint loader as `CheckpointLoaderSimple` where anything reads its CLIP or VAE and `UNETLoader` otherwise, with the `weight_dtype` cast the swap carried onto it (else `default`). Decided by the graph alone, so the rows and the run name a loader by the same address. A row is trusted only with this shelf's `shelf` beside it, a digest only where one file has it with a copy present; a digest with no copy anywhere reads as the file the template list links under it (`model_downloads.digest_source`), the name the pre-flight reports it missing by, so a built-in whose VAE or text encoder is not downloaded yet still has that model row and the Workflow tab offers the download; not where the shelf holds that name under another digest, since the run's shelf swap finds a file by name. Anything else stays as it is. A run swaps the pack's loader back in wherever ComfyUI lacks the file (`_swap_in_shelf_loaders`), so the stock reading runs the same. LoRA loaders are read by the chain, by digest, and are not touched.
 
 **The saves of one opening are one version** (`opening` on the request and on
 `workflow_version`). ComfyUI-PixlStash makes an id when it opens a workflow
@@ -7845,6 +7889,15 @@ desktop users were undercounted on roughly a tenth to a third of their days.
 Do not go back to an interval: two pings minutes apart across UTC midnight are
 two days, and each is counted once.
 
+**Opting in sends at once.** On a fresh install the start-up check runs before
+the consent dialog is answered, so the loop sees consent off and sleeps an hour.
+A first session shorter than that sent nothing, which hid most new installs from
+`new_installs_last_7d`. `PATCH /users/me/config` therefore calls
+`Server.send_telemetry_ping_after_opt_in()` when `telemetry_send_install_id`
+goes from off to on, after the commit (and after any cohort demotion above).
+Both paths go through `send_if_due`, which holds one lock across the due check
+and the attempt, so the loop and the opt-in send cannot both claim a day.
+
 ---
 
 ## 24. Folder structure: read, commit, layout and moves
@@ -10550,7 +10603,19 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   or overridden text node) is replaced by the typed prompt as a literal,
   cutting the link, unless the prompt equals one of that node's own strings:
   an untouched Run popup echoes a builder's recipe prompt, which was read from
-  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
+  its widgets, and the wire stays. Behind a prompt enhancer (a `TextGenerate`
+  whose `JsonExtractString` feeds the encoder, its words put into the
+  instructions by a `StringReplace`), the prompt is those words:
+  `comfyui_utilities.rewritten_prompt_input`, which the Run popup, the bindings'
+  `run_targets` and the recipe reader share, so a run keeps the enhancer and a
+  picture's recipe shows what was typed. A run sent with `enhance_prompt:
+  false` cuts it instead (`apply_prompts(..., enhance=False)`): the encoder's
+  input takes whatever the rewrite read (the typed words, or the link that
+  fed them), and every node only the enhancer read is deleted, its CLIP
+  loader included, so neither the judge nor ComfyUI sees it. The recipe then
+  reads the prompt off the encoder, the same words. A run's prompt assist
+  (§25.31) is written by the same call (`apply_prompts(..., assist=)`), and a
+  `null` `enhance_prompt` with it applied cuts the enhancer too. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
@@ -10565,6 +10630,46 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   equivalent that makes the same picture.
 - **A repaired run lands on its own card**, for the reason a bypassed one does:
   deleting a node changes the topology.
+
+#### A run without the blank picture
+
+A MiniMax H3 Image text workflow feeds its conditioning encoder a blank picture
+(`images.image_1` from an `EmptyImage`, no `vae`), which gives less crunch in
+skin and hair but narrows the variety between seeds. `comfyui_utilities.blank_picture_inputs`
+finds it by structure, not by node id or workflow name: an `EmptyImage` every
+reader of which takes it on an image input of a conditioning encoder (a node
+with a `clip` and no conditioning input of its own, the rule the prompt walk
+uses). An `EmptyImage` feeding anything else, a VAE encode included, is content
+and is not one. Each built-in with one is found, and a test holds the detection
+to exactly the built-ins that contain an `EmptyImage`. A run sent with
+`blank_picture: false` takes those input links off its copy
+(`apply_prompts(..., blank_picture=False)`, `_cut_blank_picture`) and leaves the
+`EmptyImage` in place, unread, so the rest of the graph is as saved; null or true
+runs it as it is. The pre-flight and the run report `prompt.blank_picture`, true
+wherever a blank picture is found, cut or not, which is what the Run popup's
+switch is drawn on. Character sheets do not send it: their flow has no switch,
+so their graphs run with the blank picture as saved. On the step-1 built-ins
+the blank picture feeds only the step-1 encoder, and the text-only encoder that
+draws the other steps carries the same prompt, so the run's prompt is written
+into both (`apply_prompts`, one prompt everywhere it is written or read).
+
+#### A run that samples with Euler
+
+The MiniMax H3 Image sheet and edit graphs sample with LCM. Where the graph
+also takes a picture (a `LoadImage` or the PixlStash picture loader, the
+sheet-from-reference, edit and inpaint built-ins), a run may sample with Euler
+instead: `sampler: "euler"` on `RunRequest`. `comfyui_utilities.lcm_sampler_nodes`
+finds the LCM samplers by structure, a `SamplerLCM` and a `KSampler` or
+`KSamplerAdvanced` whose `sampler_name` is `lcm`; `SamplerLCMUpscale` is not one,
+since it upscales between steps. `apply_prompts(..., sampler="euler")` then
+rewrites the run's copy only (`_sample_with_euler`): a `SamplerLCM` becomes a
+`KSamplerSelect` on `euler` under the same node id, so its links hold, and a
+`KSampler` takes `euler` in place. Nothing else moves. The text-to-image
+built-ins have no picture input, so the choice is not offered and `"euler"`
+is a no-op on them. The pre-flight and the run report `prompt.sampler_choice`
+(offered) and `prompt.sampler` (the sampler the copy runs: `"lcm"` as saved, or
+`"euler"`; null where not offered). A recipe of a picture made with Euler reads
+`euler` through `extract_recipe_extras`, which names the `KSamplerSelect`.
 
 #### What a delete leaves behind: companions (#1314)
 
@@ -11373,7 +11478,11 @@ answer:
   transformer-decoder video VAE), so one downloaded into a flat folder is a VAE
   rather than `unknown`; hub data version 19 re-files those, data version 24
   does it again for Wan's layout, and data version 25 for MiniMax's, from
-  `checkpoint` too, since its 2.6B parameters filed it as one. A `.safetensors`
+  `checkpoint` too, since its 2.6B parameters filed it as one. Data version 26
+  re-reads filename guesses once more (`_reidentify_filename_guesses`) when
+  MiniMax H3 Image (family `minimax_h3_image`, MiniMax's still-image model,
+  not H3 video drawing a frame) joined the base models: its
+  `minimax_h3_image_*` files had been guesses of MiniMax H3. A `.safetensors`
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
@@ -12953,26 +13062,48 @@ character with none or with too few. A **character sheet** is one MOSS-Image
 (or Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3) picture at 5:3: four passport photos on the left half (front neutral,
 three-quarter smiling, profile neutral, other three-quarter laughing) and two
 tall body photos on the right at a framing the user picks (waist-up,
-mid-thigh, knees-up or full body). The canvas is one of four sizes
+mid-thigh, knees-up or full body). The canvas is one of six sizes
 (`SIZES`: 1280×768, 1840×1104, 2560×1536, about 1, 2 and 4 megapixels, the
-range MOSS draws well, every side a multiple of 16, and `4k`, 5280×3168,
-about 17 megapixels, MiniMax's own "4K", for MiniMax H3, which wants a large
-canvas; the step offers each model only its own); the layout is drawn on
+range MOSS draws well, every side a multiple of 16; `4k`, 3840×2304, about
+9 megapixels, the least MiniMax H3 Image draws a sheet's faces well at (on a
+2026-11-22 probe of six seeds from one reference, its worst face kept 0.39
+of the reference's likeness at 4K against 0.35 at 2560×1536, and its
+weakest pair within a sheet 0.36 against 0.28); and `5k`, 5280×3168, about
+17 megapixels, for MiniMax H3 and H3 Image; and `6k`, 6240×3744, about 23
+megapixels, the nearest 5:3 to 6K on the grid, for H3 Image only (one probe
+sheet took 40 s and about 30 GB, its faces no closer than at 5K); the step
+offers each model only its own, and the MiniMax H3 Image sheet built-ins
+draw at 4K); the layout is drawn on
 2560×1536 and scaled. Text pins down a type, not a person, so each sheet is a slightly
 different person, but the six faces within one sheet agree: the user keeps
 one or more sheets and their panels become the character's pictures. **A sheet
 is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 
 - **A sheet is an ordinary run.** The dialog runs a MOSS-Image, Krea 2,
-  Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflow (PixlStash ships
-  five, #2700: `data/comfyui-workflows/built-in/Sheet-Qwen-Image-2.1*.json` and
-  `Sheet-Flux2-Klein-9B*.json`, a text and a `-Reference` one of each, and
-  `Sheet-MiniMax-H3-Reference.json`, a reference one only, since ComfyUI's
-  own H3 text-to-image template can draw sheets: its size is wired from a
-  `ResolutionSelector`, and the card offers that as a size a run sets; every
-  size a literal 2560×1536 and the encoder and VAE loaded by digest; the step
-  files their cards through `POST /comfyui/workflows/{name}/card` before it
-  lists the cards) through `POST /workflows/run` with the prompt, negative and canvas
+  Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image `txt2img` workflow
+  (PixlStash ships six, #2700: `data/comfyui-workflows/built-in/Qwen-Image 2.1 Sheet*.json` and
+  `FLUX.2 Klein 9B Sheet*.json`, a text and a `from Reference` one of each, and
+  `MiniMax H3 Image Sheet (PixlStash).json` with its `from Reference` twin, a text and a reference one for MiniMax H3
+  Image, whose `MiniMaxH3ImageConditioning` takes the picture as
+  `<Picture 1>`, and which draw with `SamplerLCM` (`s_noise` 1.1 easing to
+  0.9) through `SamplerCustomAdvanced`, not the template's euler, which draws
+  faces crunchy at its 6 steps; the seed is `RandomNoise.noise_seed`. The
+  text one feeds a 32×32 `EmptyImage` as `image_1` (no `vae`, so no reference
+  latent) to the encoder that owns **step 1 only**: `ConditioningSetTimestepRange`
+  0 to 0.1 of the 6 steps. The `<Picture 1>` label and vision tokens ahead of
+  the prompt draw step 1's skin cleaner, and a text-only encoder (a second
+  `MiniMaxH3ImageConditioning`, timestep 0.1 to 1.0) draws the rest, so the
+  blank picture does not take the face variety of the other steps. A
+  `ConditioningCombine` joins the two into the guider's positive; the negative
+  is a `ConditioningZeroOut` of the text-only encoder. Both encoders read one
+  `PrimitiveStringMultiline` prompt. It stays text to image with no reference
+  input, and a blank picture's size is no card default unless it sizes the run
+  (`workflow_parameters.BLANK_PICTURE_CLASSES`), so the sheet step does not grow
+  it. `MiniMax H3 Image T2I (PixlStash).json` has the same shape.
+  The MiniMax H3 Image built-ins all load the template's int8 text encoder; no
+  NVFP4 twin ships. In every shipped sheet workflow each
+  size but that blank's is a literal 2560×1536 and the encoder and VAE loaded by digest; they
+  are cards from start-up, like every built-in) through `POST /workflows/run` with the prompt, negative and canvas
   `POST /character-sheets/prompt` hands it (the width and height go in as
   `values` at the workflow's own size addresses), an optional character LoRA in
   `add_loras`, and `character_ids: []`: a sheet shows one person six times and
@@ -12993,7 +13124,17 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   boxes are the ones that held their layout on 16 of 16 probe sheets; the test
   pins the mid-thigh set. Only MOSS-Image reads the layout JSON, so a Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 workflow is sent `layout: "prose"`, the summary
-  caption alone; no probe has measured how their sheets hold the grid or cut. Every panel's caption carries the whole character,
+  caption alone; no probe has measured how their sheets hold the grid or cut.
+  The prose prompt also names the eye colour among what every photo shares
+  (MiniMax H3 Image drifted brown to hazel without it), and with
+  `photo_look` (default on) drops "photorealistic", render vocabulary, and
+  ends with `PHOTO_LOOK`: the photos as a model agency's unedited digitals.
+  Every skin detail named gets exaggerated, so the skin is said once and
+  gently. `look_added_by_run` hands the look to the run's prompt assist
+  (§25.31): the prose prompt drops "photorealistic" and appends nothing,
+  whatever `photo_look` says, and the sheet context's default (the camera's
+  finish) then sends the model `PHOTO_LOOK` byte for byte. `photo_look` stays for the prose engines
+  with no presets file. The MOSS and regions layouts ignore all three. Every panel's caption carries the whole character,
   build included (a different build draws a different face), and the summary
   asks for the `background` given, a plain light-grey studio by default (only
   the summary says it; no probe has measured how well each model keeps it, or
@@ -13040,48 +13181,103 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   faces, `agrees` at `SOME_AGREEMENT`) and `closeness` (to the same
   references, `close` at `CLOSE_TO_REFERENCES`). A panel with no face is left
   out; a picture with no stored size gets none.
-  Once a sheet's faces are read it also carries the cut using it would make:
-  `cells`, the six panels as `[left, top, right, bottom]` fractions, and
-  `cuts_cleanly` (below); both stay empty / null while faces are unread, so the
-  polling while sheets draw reads no files. The cut is cached per file path,
-  mtime and face boxes (`_cut_of_file`, an `lru_cache`): the step re-ranks
-  every few seconds, and a 2560 sheet costs ~85 ms to decode and cut, a
+  It also carries the cut using it would make from the moment the sheet
+  exists: `cells`, the six panels as `[left, top, right, bottom]` fractions,
+  and `cuts_cleanly` (below). The cut needs no faces, which only fence it, so
+  an unread sheet is cut without them (`_sheet_cut(..., [])`) and cut again
+  round its face boxes once they are read. `cells` is empty only when the
+  sheet has no readable file. The cut is cached per file path, mtime and face
+  boxes (`_cut_of_file`, an `lru_cache`), so the step's re-ranking every few
+  seconds decodes a sheet once: a 2560 sheet costs ~85 ms to decode and cut, a
   MiniMax 4k one ~350 ms.
 - **Using sheets** (`POST /characters/{id}/sheets/use`, `picture_ids`; a held
   sheet counts, and every sheet is read before anything is imported) cuts each
   with `split_sheet`, round its stored face boxes as ranking cuts it (faces
-  read since the last rank count too). `sheet_cells` holds no constant for any model's drift. Each cut starts
-  from the grid's own line, scaled to the picture, and searches halfway to
-  the neighbouring line on either side (the passport row once per passport
-  column, over that column's span). A line is *uniform* when over
-  `UNIFORM_SHARE` (0.8) of it lies within `UNIFORM_LEVELS` (12) grey levels of
-  its own median: a gutter, a drawn line or plain studio background is, a
-  line through a photo is not, even one along a door frame. Uniform lines of
-  one level form bands. The cut takes, in order: the band nearest the grid
-  line that is at most `MAX_GUTTER` (64 px at 2560) wide and lighter or darker
-  than both sides (a gutter, trimmed to its edges plus 2 px of seam; a band
-  that only climbs from one level to the next is the seam between a photo and
-  its frame); else the grid line moved into the nearest wider or step-less
-  band, background the photos share, nothing trimmed; else the most uniform
-  line, *unsure*. A line within `FACE_FENCE` (0.2) of a stored face box's
-  shorter side from its centre is never a candidate (stored boxes are widened
-  and rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
-  when no cut is unsure, no background cut is pressed against its window's
-  edge away from the grid line (a sheet drawn at another scale), and no panel
-  holds two face centres; one that does not is still cut when kept. Then the
-  white frame MOSS draws round each photo is trimmed (lines that are almost
-  all over grey 244, from each edge, then as far as the white runs in
-  diagonally from each rounded corner; an overcast sky, ~237, is not frame).
-  Measured on the library's 130 sheets (2026-11): the old step-edge cut ran
-  through picture content on 56 and through a face on 16, none flagged; this
-  one through content on 3 and a face on none, all 3 flagged. Most real
-  sheets are seamless studio grey, with people well off the grid. The six panels are
+  read since the last rank count too). `sheet_cells` cuts in three steps, each tried only
+  when the one before did not find the sheet's layout (`_laid_out`: six
+  boxes, four passports two by two left of two body photos, none
+  overlapping, the passports within `SAME_SIZE["passport"]` (30 %) of each
+  other and the bodies within `SAME_SIZE["body"]` (50 %; models draw them up
+  to 40 % apart), each body clearly taller than a passport and over 70 % of
+  the sheet's height). It logs which step cut at INFO, and at WARNING when it
+  fell to size.
+  1. **Colour gutters** (`_colour_cells`). When the sheet's outermost 8 px
+     are mostly one saturated hue in the magenta family (PIL hue 195-250),
+     every pixel within 18 of that hue and saturated is gutter: learnt, not
+     fixed, since models draw plum to hot pink and drift across one sheet.
+     The six largest regions between the gutters, in layout order, each
+     moved in past the gutter (`_off_gutter`: an edge line goes while over
+     1 % of it is gutter running in from its ends, so a pink sleeve in the
+     middle of an edge stays) and 2 px more for the soft edge.
+  2. **Seams** (`_seam_cells`, `_find_cut`), read on the sheet scaled to
+     2560 wide (a larger sheet is a larger latent, its seams blurred over
+     more pixels). Any colour gutter is painted white first, so a sheet
+     whose gutters ran together in places (Qwen-Image draws them round
+     pairs of photos) is cut on the seams inside them. The passport block's
+     edge is searched from the layout's 1200 of 2560 over 768-1540 (FLUX.2
+     Klein draws it near 920, MiniMax H3 near 1290); every other cut starts
+     from the middle of the block it splits and searches a quarter of the
+     block either side, the passport row once per passport column and the
+     passport column once per row. A line is *uniform* when over
+     `UNIFORM_SHARE` (0.8) of it lies within `UNIFORM_LEVELS` (12) grey
+     levels of its own median; uniform lines of one level form bands. Each
+     cut takes, in order: the nearest band at most `MAX_GUTTER` (64 px)
+     wide and lighter or darker than both sides (a gutter or drawn line,
+     trimmed to its edges plus 2 px); else the nearest band of white (frame,
+     trimmed to its edges when the window holds both), or a band across the
+     layout's line with white either side (Klein's grey border round
+     white-backed passports), nothing trimmed; else the middle of the
+     nearest *seam* (`_seams`) with neither side white, 2 px trimmed each
+     side; else the layout's line moved into background with no line in
+     it, or off the faces, *unsure*. A seam is a line that, on
+     `SEAM_SHARE` (0.4) of the cut's span and on `SEAM_PROMINENCE` (2) times
+     as much of it as the lines around it, holds the largest step within
+     `SEAM_REACH` (24) lines or has busy texture on one side and flat on the
+     other (a sweater running into the next photo's backdrop in the same
+     grey). Wherever two photos meet there is a gutter, a seam or frame, so
+     background with no line in it is one photo as likely as two (FLUX.2
+     Klein can draw both body views as one photo, library picture 4046) and
+     the cut through it is unsure.
+  3. **Size** (`_sized_cells`): the layout's own cells over the sheet past
+     its white frame, split at the passport block's edge when step 2 was
+     sure of it, else at 1200 of 2560; four equal passport cells, two equal
+     bodies. Never clean.
+
+  A line within `FACE_FENCE` (0.2) of a stored face box's shorter side from
+  its centre is never a step-2 candidate (stored boxes are widened and
+  rounded up, so only the centre is the face's). The sheet `cuts_cleanly`
+  when step 1 cut it, or step 2 with every cut sure, and no panel holds two
+  face centres; one that does not is still cut when kept. After steps 2 and
+  3 the white frame MOSS draws round each photo is trimmed (lines almost all
+  over grey 244, up to 64 px from each edge, then as far as white runs in
+  diagonally from a rounded corner when that is short of 16 px), and any
+  colour gutter as in step 1. On 59 probe sheets (2026-11-22: MiniMax H3,
+  FLUX.2 Klein, Qwen-Image; 15 on magenta, the rest without gutters) every
+  magenta sheet cut by step 1 or 2 with no gutter left in a panel; the
+  sheets without gutters cut by seams, clean on 33 of 44, the rest unsure on
+  a passport column MiniMax drew on one continuous backdrop (a sliver of up
+  to ~15 px of the next photo is possible there, and flagged) or on a sheet
+  with five photos. A MOSS sheet on seamless studio grey is now cut where it
+  was but no longer claims to be clean. The six panels are
   imported with `import_derived_outputs` (source picture = the sheet, no
   stack) and filed with `add_person`, which links the largest face once face
   extraction has read it. Filing clears each panel's `source_picture_id`: the
   sheet stays in the Scrapheap, and a picture naming it as source would fail
   its purge on the foreign key (a sheet's faces are nobody's, so source-face
   likeness has nothing to pass on).
+- **Cuts drawn by hand** (`boxes` on `POST /characters/{id}/sheets/use`, keyed
+  by sheet picture id, six `[left, top, right, bottom]` fractions each in panel
+  order). `use_sheets` checks every box before anything is imported: exactly
+  six per sheet, each four numbers inside 0..1 with left < right and top <
+  bottom, each at least `MIN_EDITED_PX` (32) px a side once scaled to the
+  sheet's own size, and every key a picture among `picture_ids`. A bad one
+  raises `SheetBoxesInvalid`, which the route answers 422 with its reason, and
+  every sheet is read before anything is filed. A sheet with boxes is cut by
+  `_hand_cut_panels`, which crops exactly those boxes: no frame trim, no face
+  fence. A sheet without an entry is cut by `split_sheet` as above. The authz
+  registry is unchanged: the route is `OWNER_ONLY` with no `body_ids`, so the
+  body names no object the gate reads, and the keys are held to the request's
+  own `picture_ids` all the same.
 - **No reference set is written.** For a character with no pictures, the
   chosen sheet's panels are its only faces, so they are its references by the
   existing rule; a character with rated pictures keeps those.
@@ -13096,7 +13292,8 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   - `workflow_identity.reference_input_count(nodes)` says which graphs can:
     the picture loaders feeding an edit model's reference input
     (`ReferenceLatent`, `TextEncode…ImageEdit…`, Qwen-Image 2.1's
-    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`; a
+    `TextEncodeQwenImage21`, MiniMax H3's `MiniMaxH3ReferenceToVideo`,
+    MiniMax H3 Image's `MiniMaxH3ImageConditioning`; a
     ControlNet's pose is not one) in a `txt2img` / `img2img` graph whose every sampler
     starts from an empty latent (followed through `latent_image` only, an
     empty latent ending the walk, so one sized from the picture still counts)
@@ -13270,6 +13467,77 @@ translates.
   grid asks once per stream batch and the linkage is about 1 s at 5k faces.
 - Not to be confused with the grid's likeness groups
   (`GET /pictures/likeness-groups`), which join near-duplicate pictures.
+
+### 25.31 The prompt assist: curated prompt text per model family
+
+Some models draw a glossy render from a short prompt (MiniMax H3 Image's
+beauty-filter face); the cure is photography wording most owners do not know.
+The prompt assist adds it after the owner's words at run time, never into the
+prompt box, and keeps the two apart in the picture.
+
+- **Presets are data.** JSON files in `pixlstash/data/prompt-presets/`:
+  `<family>.json` for a family whose model needs its own, and `_default.json`
+  for every other graph. Each has `family`, an integer `version`, and per
+  context, `photo` or `sheet`, `default_on` (whether a surface starts with
+  it on) and an ordered list of categories (Camera, Light, Skin and makeup),
+  each with `options` and a `default`. `photo` starts on only where the
+  model needs it (MiniMax H3 Image today); `sheet` starts on everywhere,
+  because #2776's agency-digitals look is on for every prose sheet today. An option has a `text`, a `finish`
+  or both: the finish is a closing sentence added after every category's
+  text (the camera's, which sets how the picture reads as a whole).
+  `services/prompt_assist.py` validates on load: ids `[a-z0-9_]+`, `none`
+  reserved, texts full sentences under 400 characters with no render
+  vocabulary, and a `default` that is `none` or an option whose `evidence`
+  is `tested`. The generic file's options were tested on MiniMax H3 Image
+  only; they count as tested there (their notes say so) because the generic
+  file starts off. `tests/test_prompt_assist.py` validates every shipped
+  file. A new family, option or `default_on` is a data change. An option id
+  is for good: never reused for another look, removed when retired. Raise
+  `version` when a text or a default changes.
+- **Which presets.** `hub/workflow_cards.run_family` reads the run's own
+  graph after `_apply_models`: the base-model loaders the core keeps,
+  resolved as `variant_families` resolves them. A family with a file of its
+  own gets it; anything else, two families, an unknown model or a loader
+  naming none included, gets `_default`.
+- **One assembler, one writer, one reader.** The run planner turns the
+  request's `prompt_assist` into a stamp with `prompt_assist.assemble`
+  (choices left out take the default; each choice is a `kind: "choice"`
+  part in category order, then a chosen option's `finish` a `kind:
+  "finish"` part; typed text is trimmed and closed as a sentence, `id` null,
+  no finish; a sentence the prompt already holds is not added again, so a
+  prompt that lost its stamp is not doubled). A JSON layout prompt (a MOSS
+  or regions sheet) is never given it.
+  `workflow_run_service.apply_prompts` writes `words + joiner + parts` into
+  each positive literal, only where the run writes words, then stamps
+  `_meta.pixlstash_prompt_assist = {v: 1, family, presets, context,
+  preset_version, joiner, parts: [{category, kind, id, text}]}` on the node
+  holding the literal,
+  **after** any enhancer cut, which moves the literal onto the encoder.
+  Writing a literal drops a stamp the source graph carried there.
+  `comfyui_utilities.split_prompt_assist` is the reader: it trusts a stamp
+  only where the literal ends with exactly the parts it names, after some
+  words of the owner's, and otherwise logs and reads the whole literal as
+  the prompt.
+- **Read-back.** `extract_generation_info`'s `positive_prompt`, and so
+  `picture.comfyui_positive_prompt`, prompt match (§26), the recipe
+  (`GET /comfyui/pictures/{id}/recipe`, which reads the file's `prompt`
+  chunk, never the stored columns) and `RunPrompt.positive_text`, are the
+  owner's words. The recipe carries the stamp as `prompt_assist`; a replay's
+  pre-flight reports it as `prompt.assist.recorded`. ComfyUI embeds node
+  `_meta` in the saved PNG as submitted (probed on a real run), and `_meta`
+  is volatile to every workflow hash, so the assist moves no workflow
+  identity.
+- **Absent is off**, and that is load-bearing: a JSON layout prompt, a
+  `prompt: null` replay and every API and MCP caller that does not ask are
+  untouched. A sheet asks the builder for its prompt with
+  `look_added_by_run` (§25.29) and sends it with `prompt_assist: {context:
+  "sheet"}`; the sheet camera's finish is `PHOTO_LOOK`. The enhancer
+  defaults off where the assist is applied; an explicit `enhance_prompt:
+  true` wins. `default_on` is the server's answer for whether a surface
+  starts on: the file's `default_on`, a settable prompt, and for `photo` a
+  graph that takes no picture.
+- **Choices live in the client** (browser storage) for now; the run carries
+  them, never a reference to stored state. Contract: integration §2.
 
 ## 26. Prompt match
 

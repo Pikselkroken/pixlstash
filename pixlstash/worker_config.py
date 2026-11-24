@@ -40,5 +40,18 @@ TAGGER_MAX_INFLIGHT: int = 3
 # the GPU continuously fed.
 IMAGE_EMBEDDING_MAX_INFLIGHT: int = 3
 
+# Image tasks (Tags, image embeddings) also cut a batch by its decoded size:
+# its summed recorded width x height stays under this budget (#2750). Every
+# picture in a batch is decoded at full size, and a Tags task's memory grows
+# with that size (#2745 measured about 1.7 GB peak RSS over 64 x 24 MP photos).
+# An embedding preload keeps only CLIP-sized images since #2748, so there the
+# budget bounds the decode work per task rather than what it holds.
+# 64 x 12.5 MP: 12 MP phone photos and generated images are cut by count
+# alone; 24 MP photos run about 33 to a batch, 48 MP ones about 16. One picture
+# over the budget still runs, alone. A picture with no recorded dimensions
+# counts as a large photo.
+IMAGE_TASK_PIXEL_BUDGET: int = 64 * 12_500_000
+UNKNOWN_PICTURE_PIXELS: int = 24_000_000
+
 # Likeness parameters: fast enough with a single inflight task after batching fix.
 LIKENESS_PARAMETERS_MAX_INFLIGHT: int = 2

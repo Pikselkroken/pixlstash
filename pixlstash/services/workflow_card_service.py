@@ -90,6 +90,7 @@ from pixlstash.services.workflow_identity import (
     Slot,
     base_model_kind,
     core_node_labels,
+    node_addresses,
     unswapped,
     is_lora_widget,
     live_slots,
@@ -110,8 +111,10 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
 )
 from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
+from pixlstash.services.model_downloads import digest_source
 from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.services.workflow_parameters import (
+    BLANK_PICTURE_CLASSES,
     FEATURED_NAMES,
     FEATURED_ORDER,
     linked_size,
@@ -1202,7 +1205,9 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
     :func:`~pixlstash.services.comfyui_recipe_service.as_stock_loaders` on
     this hub's shelf: a checkpoint loader's row only where its ``shelf`` is
     this one (an id without it is not trusted, #1521), and a digest only
-    where the shelf holds one file of it; either only with a copy present. For a workflow's own graph, which
+    where the shelf holds one file of it; either only with a copy present. A
+    digest with no copy at all reads as the file the template list links
+    under it, unless the shelf holds that name under another digest. For a workflow's own graph, which
     a save from ComfyUI leaves holding them: every read of it that names
     models (the run, Save, the default recipe's rows, *Use a set…*) goes
     through here, so they name a loader alike. Anything that is not an
@@ -1228,6 +1233,12 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
         )
         return found["filename"] if found else None
 
+    # A digest with no copy anywhere reads as the file the template list links
+    # under it, the name the pre-flight reports it missing by: left as the
+    # pack's loader it names no file, so its model row went missing and the
+    # download was offered only in the Run popup. Not where the shelf knows
+    # that name under another digest: the run's shelf swap finds a file by
+    # name, so it would load that one in its place.
     def file_of_digest(digest: str) -> Optional[str]:
         rows = hub.fetchall(
             "SELECT DISTINCT m.filename FROM model m "
@@ -1235,7 +1246,16 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
             "WHERE m.sha256 = ? AND m.filename IS NOT NULL",
             (digest,),
         )
-        return rows[0][0] if len(rows) == 1 else None
+        if rows:
+            return rows[0][0] if len(rows) == 1 else None
+        listed = (digest_source(digest) or {}).get("name")
+        if not listed or hub.fetchone(
+            "SELECT 1 FROM model WHERE lower(filename) = ? "
+            "AND sha256 IS NOT NULL AND sha256 != ?",
+            (normalized_filename(listed), digest),
+        ):
+            return None
+        return listed
 
     stock, done = as_stock_loaders(graph, file_of_row, file_of_digest)
     if done:
@@ -1715,17 +1735,18 @@ def workflow_defaults(
             continue
         sampled += 1
         sized = size_inputs(document)
+        # A value read per address is one value for every node that carries it,
+        # so a node that shares its address with another contributes nothing.
+        addresses = node_addresses(read.base, read.core)
         for node_id, node in document.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
             node_id = str(node_id)
-            if node_id in read.core:
-                slot_label = CORE_ADDRESS_PREFIX + read.core[node_id]
-            elif node_id in read.base:
-                slot_label = read.base[node_id]
-            else:
+            names = addresses.get(node_id)
+            if not names:
                 continue
+            slot_label = names[0]
             for name, value in inputs.items():
                 # A wired picture size is offered as the number its source
                 # works out to (a ResolutionSelector, a primitive), so a run
@@ -1734,6 +1755,8 @@ def workflow_defaults(
                     resolved = linked_size(document, value)
                     if resolved is not None:
                         value = resolved
+                elif node.get("class_type") in BLANK_PICTURE_CLASSES:
+                    continue
                 # The scalar check also rejects a wired input (a link list).
                 if name in FEATURED_NAMES and isinstance(
                     value, (bool, int, float, str)
@@ -1760,13 +1783,17 @@ def workflow_defaults(
                     ] += 1
                 continue
             kind = model_fix_kind(slot.class_type, slot.widget)
-            label = read.core.get(slot.node_id)
-            if label:
-                label = CORE_ADDRESS_PREFIX + label
-            elif graph_stages is not None:
-                # A workflow read off its own graph names a loader its core
-                # does not hold (every loader of a manual one) by slot label.
-                label = read.base.get(slot.node_id)
+            names = addresses.get(slot.node_id, [])
+            # A core address is always the loader's; a slot label is only read
+            # off a workflow's own graph, which names a loader its core does not
+            # hold (every loader of a manual one) by it.
+            label = names[0] if names else None
+            if (
+                label
+                and not label.startswith(CORE_ADDRESS_PREFIX)
+                and graph_stages is None
+            ):
+                label = None
             if kind and label:
                 address = f"{label}/{slot.widget}"
                 models.setdefault(address, Counter())[slot.asset] += 1

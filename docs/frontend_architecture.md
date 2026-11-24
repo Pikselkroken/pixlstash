@@ -442,6 +442,14 @@ A filter that matched nothing and an empty scrap heap keep the card they had —
 "No pictures match the current filters", "Are all your pictures that good?" —
 because those are questions with their own answers.
 
+None of them is said before the grid's fetch has answered: "no pictures match"
+is a claim about results, and a backend that has not replied has given none.
+While the fetch is in flight (`gridFetchPending`) the card reads "Loading…" and
+offers nothing, and the library-empty screen waits too. A failed fetch
+(`imagesError`) reads "Couldn't load pictures" with the error and a *Try again*
+that refetches; the library-empty screen still shows then, because its claim
+rests on the summary count, not on the grid.
+
 The third, `totalAllPicturesCount === 0`, is **the first screen of every
 install**, and it gets `LibraryEmptyState.vue`. It used to read *"No pictures in
 the database. Add pictures by dragging them here."* Two things were wrong with
@@ -1559,7 +1567,7 @@ What `ImageGrid` keeps of a ComfyUI run (#1862). A run belongs to the app: the b
 
 **Which popup opens is the server's answer, not a guess.** *Make more like these…* pre-flights the selection first; one group with a card is the single Run popup (over that group's pictures), anything else is `MakeMoreDialog`. A client cannot group pictures by card — that is what a card *is* — so deciding it here would be deciding it wrong.
 
-**Edit… opens the lightbox on its Edit tab** (it replaced *Edit with ComfyUI…*, which opened the Run popup). Both grid menus offer it as the third run entry (`ImageGrid.editSelection`, event `edit-pictures`). It first asks `POST /comfyui/workflows/Flux2-Klein-Image-Edit.json/card` so the built-in Flux.2 Klein edit workflow has a card the Edit tab can list (a built-in has no card until something asks; the route is idempotent, and a failure is logged and the tab opens anyway on the owner's own edit workflows), then sets `lightboxEditRequest = {pictureIds}` and opens the lightbox on the first selected picture. `Lightbox` reads the request (`editRequest` prop) by switching to the Edit tab and, with more than one picture, handing them to the tab as `applyToIds`, which offers *Apply to: This picture / N selected*: the batch edit the old row was for, running the instruction on every picture in one request. `RunDialog`'s `kind: "edit"` (reading none of the pictures' recipes) is still how the Edit tab opens the popup for a card that needs a reference picture.
+**Edit… opens the lightbox on its Edit tab** (it replaced *Edit with ComfyUI…*, which opened the Run popup). Both grid menus offer it as the third run entry (`ImageGrid.editSelection`, event `edit-pictures`). The built-in edit workflows are cards already (start-up lists every built-in the owner has not removed, backend §5), so it sets `lightboxEditRequest = {pictureIds}` and opens the lightbox on the first selected picture. `Lightbox` reads the request (`editRequest` prop) by switching to the Edit tab and, with more than one picture, handing them to the tab as `applyToIds`, which offers *Apply to: This picture / N selected*: the batch edit the old row was for, running the instruction on every picture in one request. `RunDialog`'s `kind: "edit"` (reading none of the pictures' recipes) is still how the Edit tab opens the popup for a card that needs a reference picture.
 
 Load-bearing behaviours:
 
@@ -1580,6 +1588,10 @@ Load-bearing behaviours:
 - **Save as recipe lists one row per LoRA**, each removable with Restore, and a LoRA the shelf cannot identify is flagged with what a run will do with it. Taking a flagged one off asks **"Take X out of what?"** every time: this recipe (the row goes) or the workflow, which opens `/workflows?workflow=<id>&edit=loras&drop_lora=<filename>` (`loraChain.editLorasRoute(id)`) with that loader already deleted. The saved body holds exactly the rows shown.
 - **A missing model blocks the WHOLE batch**, mirroring `workflow_run_service.blocks_batch`: installing a file is a trip away from the keyboard, so queueing the rest would leave the owner repeating the gesture to catch what was skipped. A group that cannot run stays on screen, faded, with its reason and its count — filtering it out would make the total add up and say nothing about why. `MakeMoreDialog.test.js` pins that.
 - **An empty prompt box is `null`, not `""`.** `apply_prompts` leaves the graph alone on `None` and writes on `""`, so the two are opposite instructions: "leave the graph's own text alone" and "blank every positive-prompt node". Only a box that *had* text in it and was cleared sends `""`. A card and a multi-picture selection read no recipe, so their box is empty because nothing filled it, and sending that would generate from no prompt at all. Such a box is then filled with the workflow's own prompt once the pre-flight has read it (`RunGroup.prompt.positive_text`), and where `positive_settable` is false there is no box at all, only a line saying so, and `prompt` goes as `null`.
+- **Photo look** (`PromptAssistGroup.vue`, `io/`), between the Prompt box and Enhance prompt, wherever the pre-flight's first group carries `prompt.assist` (a prose prompt the run can set; `null` draws nothing). The server's catalogue drives it: one typeable field per `categories` entry (Camera, Light, Skin and makeup today), on where `assist.default_on` says (MiniMax H3 Image), off elsewhere until turned on. Collapsed it is one row: a disclosure button over *Photo look* and a summary of what is added, a *Show full prompt* eye, and an On/Off `role="switch"` with the word beside it. **The prompt box is never written to.** The request carries `prompt_assist: { context: "photo", choices }` beside `prompt` (absent is off), and the full-prompt view is the owner's words, then the pre-flight's `assist.parts`, each line marked `+` and named (a `kind: "finish"` part is *Look*), never by colour alone. The first answer on a family with presets was asked without them, so `runPreflight` asks once more with them; every change in the group re-asks, which refreshes the parts and `enhancer_on`. A run sent records the typed texts as entries. State is `usePromptAssist` (below).
+- **Enhance prompt** (`data-testid="rund-enhance"`), a checkbox under the Prompt box with a one-line hint, drawn only where the pre-flight's first group reports `prompt.enhancer` (a `TextGenerate` language model rewrites the prompt before its encoder; the popup runs one workflow, so the first group is the card's). Per run and never remembered, like the stack and the stages. Untouched it shows the server's `prompt.enhancer_on` (off while Photo look adds lines, which the hint then says) and sends nothing; touched, `enhance_prompt` is sent either way in `runBody`, so the pre-flight, the run and Open in ComfyUI all carry it, and the box re-asks the pre-flight, whose answer is about the graph without the enhancer (its model no longer counts as missing). The server keeps reporting `enhancer: true` with the enhancer cut, so the box does not vanish when turned off, and `false` on a graph with no enhancer is a no-op, so the field is not gated on the box being drawn.
+- **Sampler** (`data-testid="rund-sampler"`, a `Segmented` labelled Sampler, LCM and Euler, with the hint "LCM keeps the person closest; Euler keeps a little more skin detail."), drawn only where the pre-flight's first group reports `prompt.sampler_choice`. LCM is the default and sends nothing; Euler sends `sampler: "euler"` on the pre-flight it asks and the run. Per run and never remembered: `clearStages` resets it with the Blank picture switch. The character sheet step (`CharacterSheetStep.vue`, `data-testid="cs-sampler"`) reads the same cue from its own pre-flight and sends the same field, reset to LCM whenever the sheet's workflow or layout changes. The labels and hint are `utils/samplerChoice.js`.
+- **Blank picture** (`data-testid="rund-blank"`), a checkbox under the Prompt box beside Enhance prompt, drawn only where the pre-flight's first group reports `prompt.blank_picture` (the graph feeds an `EmptyImage` to a conditioning encoder's image input; the MiniMax H3 Image text workflows). On by default, per run and never remembered, like the enhancer. Off is `blank_picture: false` in `runBody`, and the box re-asks the pre-flight. The server keeps reporting `blank_picture: true` with it cut, so the box stays drawn. The character sheet step has no such switch and sends nothing for it.
 - **`count` is per RECIPE, unless the recipe takes its pictures.** `_submit_every` runs each card `count` times; the pictures only choose which cards run — except where a card's picture input is fed from them (`fill: "selection"`, #1457), when the run repeats once per picture. `MakeMoreDialog` therefore counts each runnable group once, or once per picture where it feeds them, times `count`, reads that from the pre-flight rather than deciding it, and labels the field plain **"Count"** since it is per recipe for one card and per picture for another. A card it cannot run because it needs a picture chosen is named with `picture_input_unfilled`'s sentence; that dialog has no picture UI of its own.
 - **The ceiling is on the TOTAL, and it is 200.** `MAX_RUNS_PER_REQUEST` (`routes/comfyui.py`) is checked by `_plan` against the sum over every group, so two recipes at 150 each is a 400 although each count is legal. Both popups guard the product and name the number rather than letting the owner find it by pressing Run.
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
@@ -1599,6 +1611,9 @@ Load-bearing behaviours:
   | Any other parameter, fixed ones included | when changed | `values`, always | only when changed |
   | A change waiting in the Workflow tab the form has no control for | yes | as it waits | by the server, from what waits |
   | Prompt, negative prompt, seed, count, stack | no | as before | no |
+  | Enhance prompt, off | no | `enhance_prompt: false` | no |
+  | Blank picture, off | no | `blank_picture: false` | no |
+  | Sampler, Euler | no | `sampler: "euler"` | no |
   | Pictures put in, where results go | no | `inputs`, `destination` | no |
   | People picked, and a LoRA added by hand | no | `add_loras` | no |
   | The person assigned to | no | `character_id` | no |
@@ -1728,25 +1743,41 @@ Escape and Enter do nothing here: cancelling deletes a set.
   has no address, and while it is unreachable the step asks again every 15 s
   (the server keeps the failure up to a minute), then checks every card
   afresh. The mode on show is checked first and each answer lands as it
-  comes, so its select fills before the other mode is done. The four draw choices (*Body
-  photos*, *Sheets to draw*, *Sheet size*, *Draw a*) are `Segmented` toggles
-  side by side (*Sheet size* greys out what the chosen model does not draw
-  well, `ENGINES[…].sizes`: 4K for all but MiniMax H3, Small and Medium for
-  H3, and choosing an H3 workflow picks 4K; a size saved with the set stands
-  where the model draws it), wrapping only on a narrow window, with one line of hints; the
-  description takes the height the form leaves. *Draw a* follows the
-  description (`subjectFromDescription`: "man", "he", "his" against "woman",
-  "she", "her") until a toggle is picked by hand, as the framing follows its
-  suggestion. There is no Body field: the build belongs in the description,
+  comes, so its select fills before the other mode is done. The three draw choices (*Body
+  photos*, *Sheets to draw*, *Sheet size*) are `Segmented` toggles
+  side by side (*Sheet size* offers only the sizes the chosen model draws
+  well, `ENGINES[…].sizes`, and greys out the rest: Small, Medium and Large
+  for all but the MiniMax models; Large and 5K for MiniMax H3, whose
+  workflows pick 5K; 4K, 5K and 6K for MiniMax H3 Image, whose workflows pick
+  4K; the hint names the sizes the model draws; a size saved with the set, or
+  remembered as picked for that same model (`size_family`), stands where the
+  model draws it), wrapping only on a narrow window, with one line of hints; the
+  description takes the height the form leaves. There is no man/woman
+  toggle: the step sends no `subject`, so the route's default, `person`,
+  names "the person" and the description or the reference picture says who
+  (a 30-sheet probe on MiniMax H3 Image and FLUX.2 Klein kept the sex the
+  description gave on every sheet, and drew the same face as the named sex on
+  the same seed). The framing follows its suggestion. There is no Body field: the build belongs in the description,
   and a build saved while there was one has its body text joined to the
-  description when it opens. The step reads the
+  description when it opens. *Photo look* (*Natural* / *Off*, a sixth
+  `Segmented`, on by default) is sent as `photo_look` and shows, with its
+  hint, only while the step's `layout` computed is `"prose"` (every engine but
+  MOSS-Image, and every draw from a reference); the route ignores it for
+  MOSS-Image's layout and a sheet copy's regions. Where the chosen workflow's
+  pre-flight, asked with `prompt_assist: { context: "sheet" }`, answers an
+  `assist`, the shared Photo look group (see the Run popup) **replaces** that
+  `Segmented`, under Shoes; no engine shows both. Its On is then the photo
+  look: on, the draw sends `look_added_by_run: true` to
+  `POST /character-sheets/prompt` (the sheet prompt adds no look of its own)
+  and `prompt_assist` on the run; off, `photo_look: false` and neither.
+  A remembered #2776 Off seeds the group's Off once. The step reads the
   character, its LoRAs (`GET /adapters?character_id=`; a LoRA for another base
   model is listed disabled, the newest MOSS-Image one preselected, and its name
   rides in the step row as a neutral pill) and the MOSS-Image, Krea 2,
   Qwen-Image, FLUX.2 Klein or MiniMax H3 `txt2img` workflows with no reference
-  input (`cardEngine`: the diffusion model's family, #2700), after asking for
-  the five shipped sheet workflows' cards (`SHEET_BUILT_INS` through
-  `cardForWorkflow`; one that fails is logged and left out); *Draw* saves the typed description on a character that had none,
+  input (`cardEngine`: the diffusion model's family, #2700), the shipped sheet
+  workflows among them unless the owner removed one (start-up lists every
+  built-in); *Draw* saves the typed description on a character that had none,
   then runs the workflow (`runWorkflowCard`, the canvas as `values` at the
   card's own width/height addresses) and polls each run's outcome and
   `POST /characters/{id}/sheets/rank` every 2.5 s until every sheet's faces are
@@ -1783,7 +1814,26 @@ Escape and Enter do nothing here: cancelling deletes a set.
   halo, so the cut is seen before it is made; a sheet with
   `cuts_cleanly: false` draws them dashed in the warning colour, says *may not cut cleanly* last in its words, and sorts
   after the clean sheets (after `broken`). It is a warning, not a refusal:
-  *Keep* still cuts it. Kept sheets the ranking names in each other's `different_from`
+  *Keep* still cuts it. The cut is drawn from the moment the sheet exists, its
+  faces not yet read (the ranking's `cells` need none). **The cut can be moved
+  by hand** (`cutEdits`, `utils/sheetCuts.js`): a photo's box on the zoomed
+  sheet drags (its middle moves it, a corner or edge resizes it), held on the
+  sheet and at least 5 % of it a side. Each box is focusable (`role="group"`,
+  labelled *Passport photo 1* or *Body photo 2*): an arrow key moves the
+  focused box by 0.5 % of the sheet, Shift with an arrow pushes the edge on
+  that side out and Alt pulls it in, and an arrow never reaches the zoom, which
+  reads arrows to step sheets. An edited photo is a double line in
+  `--v-theme-primary` (not the dashed amber, not colour alone), its label says
+  *edited*, and the sheet's words say *cut edited* where a clean-cut warning
+  would be. `cutEdits` is per photo (picture id to six entries, `null` where
+  the cutter's still stands), so a re-rank or a later automatic cut never
+  overwrites an edit; *Reset to automatic*, in the zoom bar while the sheet
+  has an edit, removes the sheet's entries. The step's `snapshot` stores
+  `cut_edits` and `restoreState` puts them back; a cut that has started stores
+  none, as it stores no sheets. *Use* sends `boxes` for the kept sheets with an
+  edit, all six of each as shown, through `useSheets(characterId, pictureIds,
+  boxes)`; a sheet with no edit is cut by the server as before. Nothing moves
+  while the sheets are being cut (`cutLocked`). Kept sheets the ranking names in each other's `different_from`
   turn the footer lead into a warning (`footer.warn`: icon, `role="status"`)
   naming the pair; *Use* stays enabled, since with a LoRA several sheets can
   be one person and the owner decides. *Keep* cuts the ticked sheets, waits (90 s at most)
@@ -1792,7 +1842,7 @@ Escape and Enter do nothing here: cancelling deletes a set.
   new pictures so the slider, coverage and Create all read that one list.
 - **Drawn from a reference picture** (#2679, backend §25.29; design
   "Reference pinned beside the sheets"). Where the library has a
-  Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 card with `reference_inputs > 0` (#2700;
+  Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image card with `reference_inputs > 0` (#2700;
   `referenceEngine` reads the card's diffusion model, `unet` or `checkpoint`,
   never its text encoder or VAE: Krea 2 and MOSS-Image load a Qwen encoder,
   and matching on that is how Krea 2's style reference got listed), the
@@ -1971,11 +2021,12 @@ Focus goes back to the person's row on every close.
 A step with nothing saved, here or on a training set's build screen, starts
 from the choices last made on this machine (`CharacterSheetStep.vue`,
 `localStorage` `pixlstash:characterSheetChoices`): the mode, each mode's
-workflow, the size, the count and, per person, a LoRA other than the default.
-Only a change made after `restore` is remembered, so the mode `load` picks (a
+workflow, the size (with the model family it was picked for), the count and, per person, a LoRA other than the default.
+The workflow list is also kept on this machine (`pixlstash:sheetWorkflowCards:v1`): the cards and each card's pre-flight, the Photo look included, as the last full check left them. The next open shows them at once and checks them again behind, so the workflow select and the Photo look are complete on the first tick; a first open holds their places (`cs-look-pending`, a placeholder select). A check that found ComfyUI down is not kept. The look is checked with a stand-in prompt, because the server adds its lines (`assist.parts`) only to a prompt with words and every draw sends the sheet prompt; the group's preview names the *Sheet prompt*, written at the draw, rather than the owner's own words. What the owner picks by hand while the step is still restoring (the mode, the toolbar's workflow, LoRA, strength, reference picture, size) is kept in `picked`, and neither `restore` nor the size the model starts at goes over it. Only a change made after `restore` is remembered, so the mode `load` picks (a
 face drawing from its reference) never is, though a mode switch remembers the
 workflow it lands on; a remembered reference mode applies only to a person with
-a face. A saved `snapshot` stands over all of it.
+a face. The photo look is remembered too, and a saved form without one (saved
+before the toggle) reads as on. A saved `snapshot` stands over all of it.
 
 The same entry keeps, under `recent`, the last twenty values each of Top,
 Bottoms, Shoes and Background was drawn with, newest first, recorded at draw
@@ -1983,7 +2034,31 @@ Bottoms, Shoes and Background was drawn with, newest first, recorded at draw
 each field with the newest, `""` included, so a field left empty stays empty.
 The fields are `RecentInput` (`widgets/`): AppInput's look over a
 `BaseModelInput` given the list as `options`, its value selected on entering
-it so the first key typed replaces it.
+it so the first key typed replaces it. The reading, writing and list rule
+(`withRecent`: newest first, a case-folded repeat moved to the front, twenty
+kept) live in `utils/recentValues.js`, because Photo look's typed entries are
+kept by the same rule in the same document, under
+`recent["photoLook:<family>:<context>:<category>"]`; a draw's write keeps them.
+
+**Photo look's choices** (`composables/usePromptAssist.js`, both surfaces)
+live in `localStorage` `pixlstash:promptAssist` until the hub holds them:
+`{ <family>: { <context>: { on?, choices? } } }`, `context` being `photo` (Run
+popup) or `sheet`. **Sparse: an absent key is "never chosen"** and follows the
+server's shipped default, so a release that moves a default reaches it; a
+choice is `{ id }` (a preset), `{ text }` (typed) or `"none"` (an emptied
+field), and `"none"` is kept. `on` is stored only when it differs from
+`default_on`. A field's text equal to a preset's name or sentence is that
+preset; an unchanged field writes nothing. Removing the entry a field shows
+empties the field; *Reset to defaults* drops `on` and `choices` and keeps the
+entries. `encodeChoice` is the one place the wire encoding of a choice lives.
+The rows are `BaseModelInput` with its opt-ins: `openOnFocus` (the full list
+on focus, filtering once typed; Tab leaves rather than fills), sectioned
+two-line options (*Presets*, then *Your entries*), `removable` entries with an
+(x) that is `aria-hidden` and Delete on an arrow-highlighted entry,
+`footAction` (*Clear all your entries*, in the arrow order), `ownText` (typed
+text no option equals is offered first as *Use "..."*, highlighted, its name
+"Use your own: ..."; typed text equal to an option highlights that option)
+and `hint`. A kept typed value wears a pencil marked *Your own*.
 
 #### `TrainLoraDialog.vue` (`io/`, #2119)
 **Outcome choices, numbers derived** (design artifact "Outcome choices, numbers derived"). The Train a LoRA dialog, `AppDialog size="lg"`, mounted in **`App.vue`** and opened by `useTrainingStore.openForScope({type, id, name})` from the toolbar's Train button, its overflow row and the sidebar's *Train LoRA…*. It replaced the toolbar popover `TbTrainPanel`.

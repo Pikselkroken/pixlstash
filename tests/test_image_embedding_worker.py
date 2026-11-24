@@ -75,7 +75,7 @@ def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
             remaining = ImageEmbeddingTask.count_remaining(
                 session, aesthetic_disabled=True
             )
-            return {pid for pid, _ in work}, int(remaining or 0)
+            return {row.id for row in work}, int(remaining or 0)
 
         assert vault.db.run_task(fetch) == ({missing_id}, 1)
 
@@ -168,6 +168,9 @@ class _RecordingWorkflow:
     def ensure_ready(self):
         return None
 
+    def reduce_for_preprocess(self, images):
+        return images
+
     def preprocess_images(self, images):
         tensors = [f"tensor-for-{id(img)}" for img in images]
         self.preprocessed.extend(tensors)
@@ -212,6 +215,75 @@ def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
             f"tensor-for-{id(entry[2])}" for entry in preloaded
         ], "each picture carries the tensor preprocessed from its own image"
         assert sorted(workflow.preprocessed) == sorted(e[4] for e in preloaded)
+
+
+@pytest.mark.parametrize("clip_loaded", [False, True])
+def test_the_embedding_preload_keeps_only_what_clip_reads(tmp_path, clip_loaded):
+    """No decoded original survives the preload (#2748), and the tensor CLIP
+    is given is bit-identical to the one the original produces, whether or
+    not CLIP was loaded when the preload ran (the first batches after start-up).
+
+    Holding the originals beside their tensors kept 6.6 GB for a batch of
+    64 large photos, three batches preloading at once. An image CLIP would
+    enlarge is held as it is, never upscaled.
+    """
+    from types import SimpleNamespace
+
+    import open_clip
+    import torch
+    from PIL import Image as PILImage
+
+    from pixlstash.inference.workflows.clip_embedding import ClipEmbeddingWorkflow
+    from pixlstash.tagger_plugins.clip_service import (
+        CLIP_MODEL_NAME,
+        CLIP_MODEL_WEIGHTS,
+        ClipService,
+        _unloaded_first_resize,
+    )
+
+    # The preprocessing a real load gets, without its weights.
+    _model, _, preprocess = open_clip.create_model_and_transforms(
+        CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS, load_weights=False
+    )
+    assert repr(_unloaded_first_resize()) == repr(preprocess.transforms[0])
+
+    service = ClipService(device="cpu")
+    if clip_loaded:
+        service._model = service._tokenizer = object()
+        service._preprocess = preprocess
+    workflow = ClipEmbeddingWorkflow(SimpleNamespace(clip_service=service))
+
+    rng = np.random.default_rng(2748)
+    # Landscape, portrait, one smaller than CLIP's input, two thin strips:
+    # the last two would be enlarged by the resize, and are held as they are.
+    sizes = [(2400, 1600), (333, 1001), (100, 50), (1201, 77), (2000, 20)]
+    names = [f"p{i}.png" for i in range(len(sizes))]
+    for (w, h), name in zip(sizes, names):
+        array = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+        PILImage.fromarray(array).save(tmp_path / name)
+    with Vault(image_root=str(tmp_path)) as vault:
+        task = ImageEmbeddingTask(
+            database=vault.db,
+            clip_workflow=workflow,
+            batch=[(i + 1, name) for i, name in enumerate(names)],
+        )
+        task._preload_images_task()
+        preloaded = task._preloaded_images
+
+    assert [entry[0] for entry in preloaded] == [1, 2, 3, 4, 5]
+    for (_pid, name, held, dhash, tensor), size in zip(preloaded, sizes):
+        original = PILImage.open(tmp_path / name).convert("RGB")
+        expected = size if min(size) < 224 else None
+        if expected is None:
+            assert min(held.size) == 224, f"{name} {size} held at {held.size}"
+        else:
+            assert held.size == expected, f"{name} {size} upscaled to {held.size}"
+        assert torch.equal(preprocess(held), preprocess(original)), name
+        assert dhash == ImageEmbeddingTask._compute_dhash(original), name
+        if clip_loaded:
+            assert torch.equal(tensor, preprocess(original)), name
+        else:
+            assert tensor is None
 
 
 def test_an_animated_gif_preloads_three_frames_and_a_still_gif_one(tmp_path):

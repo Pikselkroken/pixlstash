@@ -30,8 +30,8 @@
           <span
             >{{
               fromReference
-                ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein or MiniMax H3 sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3 text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image sheet workflow, and the library has none."
+                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -61,6 +61,7 @@
           <AppSelect
             v-model="loraSha"
             label="Character LoRA · optional"
+            @update:model-value="picked.add('lora')"
             :options="loraOptions"
             data-testid="cs-lora"
           />
@@ -74,6 +75,7 @@
               max="1.5"
               step="0.05"
               aria-label="LoRA strength"
+              @input="picked.add('strength')"
             />
             <span class="cs-sl__val">{{ strength.toFixed(2) }}</span>
           </div>
@@ -138,6 +140,23 @@
           placeholder="white sneakers"
           :options="offered.shoes"
         />
+        <!-- Photo look, wherever the server offers it for sheets: it replaces
+             the Natural/Off switch below. On, the run adds its lines and the
+             sheet prompt none of its own; off, neither adds a look. -->
+        <PromptAssistGroup
+          v-if="layout === 'prose' && sheetAssist"
+          :assist="sheetAssist"
+          :model="sheetLook"
+          @change="askSheetAssist"
+        />
+        <!-- Until the chosen workflow answers its check the group's place is held,
+             so the step does not open on the switch below and then swap it. -->
+        <div
+          v-else-if="sheetLookPending"
+          class="cs-look-pending"
+          aria-hidden="true"
+          data-testid="cs-look-pending"
+        />
         <!-- The choices of how a sheet is drawn: toggles side by side,
              wrapping only on a narrow window, with one line of hints under
              them. -->
@@ -163,21 +182,14 @@
             </div>
             <div class="cs-opt">
               <FieldLabel>Sheet size</FieldLabel>
+              <!-- A pick: a click, even on the size shown, or the arrows. -->
               <Segmented
                 v-model="form.size"
                 aria-label="Sheet size"
                 :options="sizeOptions"
                 data-testid="cs-size"
-              />
-            </div>
-            <div class="cs-opt">
-              <FieldLabel>Draw a</FieldLabel>
-              <Segmented
-                v-model="form.subject"
-                aria-label="Draw a"
-                :options="SUBJECTS"
-                data-testid="cs-subject"
-                @pick="subjectTouched = true"
+                @pick="picked.add('size')"
+                @update:model-value="picked.add('size')"
               />
             </div>
             <div class="cs-opt">
@@ -190,12 +202,40 @@
                 @pick="proportionsTouched = true"
               />
             </div>
+            <div v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-opt">
+              <FieldLabel>Photo look</FieldLabel>
+              <Segmented
+                v-model="form.photo_look"
+                aria-label="Photo look"
+                :options="PHOTO_LOOKS"
+                data-testid="cs-photo-look"
+              />
+            </div>
+            <div v-if="sheetSamplerChoice" class="cs-opt">
+              <FieldLabel>Sampler</FieldLabel>
+              <Segmented
+                v-model="sampler"
+                aria-label="Sampler"
+                :options="samplerOptions"
+                data-testid="cs-sampler"
+              />
+            </div>
           </div>
           <span class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
+          >
+          <span v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-hint"
+            >Photo look asks for plain, unretouched photos rather than a
+            polished render.</span
+          >
+          <span
+            v-if="sheetSamplerChoice"
+            class="cs-hint"
+            data-testid="cs-sampler-hint"
+            >{{ SAMPLER_HINT }}</span
           >
         </div>
       </template>
@@ -356,6 +396,8 @@
             :options="MODES"
             full
             data-testid="cs-mode"
+            @pick="picked.add('mode')"
+            @update:model-value="picked.add('mode')"
           />
         </div>
         <template v-if="fromReference">
@@ -580,19 +622,70 @@
         </div>
       </template>
       <!-- The six photos using the sheet cuts, so the cut is seen before
-           it is made; dashed amber when it found no clean line somewhere. -->
-      <template v-if="zoomed?.cells?.length" #over>
-        <span
-          v-for="(cell, i) in zoomed.cells"
+           it is made; dashed amber when it found no clean line somewhere.
+           The person can drag them: a double line in the accent colour once
+           edited. -->
+      <template v-if="zoomedCut.length" #over>
+        <div
+          v-for="(cell, i) in zoomedCut"
           :key="i"
           class="cs-cell"
-          :class="{ 'cs-cell--unclean': zoomed.cuts_cleanly === false }"
+          :class="{
+            'cs-cell--unclean':
+              !boxEdited(zoomed, i) && zoomed.cuts_cleanly === false,
+            'cs-cell--edited': boxEdited(zoomed, i),
+            'cs-cell--editable': !cutLocked,
+          }"
           :style="cellStyle(cell)"
-          aria-hidden="true"
+          :tabindex="cutLocked ? undefined : 0"
+          :role="cutLocked ? undefined : 'group'"
+          :aria-label="
+            cutLocked
+              ? undefined
+              : `${panelName(i)}${boxEdited(zoomed, i) ? ', edited' : ''}`
+          "
+          :aria-hidden="cutLocked ? 'true' : undefined"
+          :aria-describedby="cutLocked ? undefined : 'cs-cut-hint'"
           data-testid="cs-cell"
-        />
+          @pointerdown="beginDrag($event, zoomed, i, null)"
+          @pointermove="moveDrag"
+          @pointerup="endDrag"
+          @pointercancel="endDrag"
+          @dblclick.stop
+          @keydown="onCellKey($event, zoomed, i)"
+        >
+          <span
+            v-for="name in HANDLE_NAMES"
+            v-show="!cutLocked"
+            :key="name"
+            class="cs-handle"
+            :class="`cs-handle--${name}`"
+            aria-hidden="true"
+            data-testid="cs-handle"
+            @pointerdown="beginDrag($event, zoomed, i, HANDLES[name])"
+          />
+        </div>
       </template>
       <template #actions>
+        <!-- How the boxes move, said once beside them rather than as a
+             hover tip on a box being dragged; each box points to it. -->
+        <span
+          v-if="zoomed && !cutLocked"
+          id="cs-cut-hint"
+          class="cs-cap"
+          data-testid="cs-cut-hint"
+          >{{ CUT_HINT }}</span
+        >
+        <button
+          v-if="zoomedEdited"
+          type="button"
+          class="cs-link"
+          data-testid="cs-cut-reset"
+          :disabled="cutLocked"
+          @click="resetCut(zoomed.picture_id)"
+        >
+          Reset to automatic
+        </button>
         <!-- Both choices always shown, so the control never changes size and
              says which one the sheet is on. -->
         <Segmented
@@ -663,7 +756,6 @@ import {
   getReferencePictures,
   patchCharacter,
 } from "../../api/characters";
-import { cardForWorkflow } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
@@ -675,10 +767,7 @@ import {
   sheetCopyWorkflow,
 } from "../../api/workflows";
 import { useTasksStore } from "../../stores/useTasksStore";
-import {
-  proportionsFromDescription,
-  subjectFromDescription,
-} from "../../utils/trainingSetBuild";
+import { proportionsFromDescription } from "../../utils/trainingSetBuild";
 import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
 import { errorMessage } from "../../utils/apiError";
 import { runKey } from "../../utils/gpuMemory";
@@ -687,11 +776,16 @@ import { buildMediaUrl } from "../../utils/media";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import { SAMPLER_CHOICES, SAMPLER_HINT } from "../../utils/samplerChoice";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import RecentInput from "../widgets/RecentInput.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
+import { usePromptAssist } from "../../composables/usePromptAssist";
+import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
+import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
+import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
   /** { id, name } of the character. */
@@ -717,22 +811,25 @@ const SIZES = [
   { id: "small", label: "Small", passport: "300×384" },
   { id: "medium", label: "Medium", passport: "431×552" },
   { id: "large", label: "Large", passport: "600×768" },
-  { id: "4k", label: "4K", passport: "1237×1584" },
+  { id: "4k", label: "4K", passport: "900×1152" },
+  { id: "5k", label: "5K", passport: "1237×1584" },
+  { id: "6k", label: "6K", passport: "1462×1872" },
 ];
 // The sizes a model draws well, and the one it starts at; the rest are greyed
 // out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
-// wants a large canvas (`ENGINES.minimax.sizes`).
+// and H3 Image want a large canvas (an engine's own `sizes`).
 const SIZES_DRAWN_WELL = ["small", "medium", "large"];
-const SUBJECTS = [
-  { id: "woman", label: "Woman" },
-  { id: "man", label: "Man" },
-];
 // The figure the sheet draws (#1079): the words alone lose to a layout made
 // for a typical adult, so the layout changes with it.
 const PROPORTIONS = [
   { id: "typical", label: "Typical" },
   { id: "little_person", label: "Little person" },
   { id: "cartoon", label: "Cartoon" },
+];
+// A prose prompt asks for unedited camera photos unless this is off.
+const PHOTO_LOOKS = [
+  { id: true, label: "Natural" },
+  { id: false, label: "Off" },
 ];
 const MOSS = "moss_image";
 // Only MOSS-Image reads the layout JSON; every other engine's sheet is the
@@ -771,19 +868,20 @@ const ENGINES = {
     family: "minimax_h3",
     name: "MiniMax H3",
     fits: (lora) => lora.base_model_family === "minimax_h3",
-    sizes: ["large", "4k"],
+    sizes: ["large", "5k"],
+    size: "5k",
+  },
+  // MiniMax's still-image model, another architecture than H3 video: an H3
+  // video LoRA is no LoRA for it. A reference sheet at Large draws waxy
+  // faces that drift from the picture; from 4K up they hold (2026-11-22).
+  minimaxImage: {
+    family: "minimax_h3_image",
+    name: "MiniMax H3 Image",
+    fits: (lora) => lora.base_model_family === "minimax_h3_image",
+    sizes: ["4k", "5k", "6k"],
     size: "4k",
   },
 };
-// The sheet workflows PixlStash ships (#2700): a built-in has no card until
-// something asks for one, so the step asks before it lists the cards.
-const SHEET_BUILT_INS = [
-  "Sheet-Qwen-Image-2.1.json",
-  "Sheet-Qwen-Image-2.1-Reference.json",
-  "Sheet-Flux2-Klein-9B.json",
-  "Sheet-Flux2-Klein-9B-Reference.json",
-  "Sheet-MiniMax-H3-Reference.json",
-];
 const MODES = [
   { id: "text", label: "Text" },
   { id: "reference", label: "Reference and text" },
@@ -816,12 +914,11 @@ const FACE_WAIT_MS = 90_000;
 // can be chosen unscored, and the polling stops.
 const SHEET_FACE_WAIT_MS = 120_000;
 const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
-// The last choices made on this machine, which a fresh step starts from: the
-// mode, each mode's workflow, the size, the count, and each person's LoRA.
-const CHOICES_KEY = "pixlstash:characterSheetChoices";
-// The fields whose last values a fresh step starts from and offers as typed.
+// The last choices made on this machine (`readChoices`), which a fresh step
+// starts from: the mode, each mode's workflow, the size, the count, and each
+// person's LoRA. The fields whose last values a fresh step starts from and
+// offers as typed:
 const RECENT_FIELDS = ["top", "trousers", "shoes", "background"];
-const RECENT_KEPT = 20;
 
 const tasks = useTasksStore();
 const name = computed(() => props.character?.name || "");
@@ -835,13 +932,17 @@ const form = reactive({
   framing: "mid_thigh",
   size: "large",
   count: 4,
-  subject: "woman",
   proportions: "typical",
+  // An older saved form has none, and reads as on.
+  photo_look: true,
 });
 // A step with nothing saved starts from the choices last made.
 const remembered = props.saved ? null : readChoices();
 if (SIZES.some((s) => s.id === remembered?.size)) form.size = remembered.size;
 if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.count;
+if (typeof remembered?.photo_look === "boolean") {
+  form.photo_look = remembered.photo_look;
+}
 // Per field, the values sheets were drawn with, newest first; "" where the
 // last draw left the field empty, so an empty field stays empty.
 const recent = ref(readRecent(remembered || readChoices()));
@@ -854,8 +955,6 @@ const offered = computed(() =>
   ),
 );
 const framingTouched = ref(false);
-// Picked by hand: the description no longer decides who is drawn.
-const subjectTouched = ref(false);
 const proportionsTouched = ref(false);
 const savedDescription = ref("");
 const loras = ref([]);
@@ -890,6 +989,8 @@ const pickButton = ref(null);
 // How many faces the last ranking measured closeness against.
 const rankedAgainst = ref(0);
 const workflowsLoaded = ref(false);
+/** The workflow list is not known yet: its select shows a placeholder. */
+const workflowsPending = computed(() => !workflowsLoaded.value);
 const workflowId = ref("");
 // Every candidate workflow's pre-flight, by id: its width/height inputs, its
 // picture inputs, and why it can't draw a sheet ("" when it can). Only the
@@ -904,6 +1005,11 @@ const order = ref([]); // sheet picture ids in the order they arrived
 // until they tick or untick one themselves.
 const kept = ref([]);
 const keptTouched = ref(false);
+// The photo boxes the person drew, per sheet: picture id to six entries in
+// panel order, each `[left, top, right, bottom]` fractions of the sheet or null
+// where that photo is still the cutter's. A re-rank never touches an entry, so
+// an edited box is never overwritten; "Reset to automatic" removes the sheet's.
+const cutEdits = ref({});
 const mainPane = ref(null);
 const working = ref(false);
 const error = ref("");
@@ -925,6 +1031,10 @@ const drawnWith = ref("");
 // The step has read its choices and restored `saved`: until then its
 // snapshot would store the defaults over what was saved.
 const restored = ref(false);
+// What the owner picked by hand before then ("mode", "workflow", "lora",
+// "strength", "reference", "size"): the step is usable from its card cache at
+// once, and restoring, or a size defaulting, must not take a pick back.
+const picked = new Set();
 // The kept sheets were cut and their pictures filed; their faces are still
 // being read.
 const cutDone = ref(false);
@@ -966,7 +1076,108 @@ const engine = computed(() => {
     referenceCards.value[0];
   return referenceEngine(card) || ENGINES.qwen;
 });
+/** How the prompt route lays the sheet out: "" for MOSS-Image's layout JSON,
+ * "regions" for a sheet copy, "prose" (one sentence) for every other engine
+ * and for a draw from a reference. */
+const layout = computed(() => {
+  if (fromReference.value) return "prose";
+  if (engine.value.regions) return "regions";
+  return engine.value === ENGINES.moss ? "" : "prose";
+});
 /** The rail is the reference's: its control before drawing, the picture after. */
+/** The Photo look a check asks for with the shipped choices, on: what a first
+ * open shows. `SHEET_LOOK_OFF` is the same with the look turned off. */
+const SHEET_LOOK_DEFAULT = { context: "sheet", on: true, choices: {} };
+const SHEET_LOOK_OFF = { context: "sheet", on: false, choices: {} };
+/** The prompt a look check is asked with. A draw always sends the sheet
+ * prompt, and the server adds the look's lines (its `parts`) only to a prompt
+ * with words, so a check without one would answer that nothing is added. The
+ * sheet prompt itself is written only at the draw. */
+const SHEET_PROMPT_STAND_IN = "A character sheet.";
+/** The chosen workflow's Photo look for sheets, as its check answered (the
+ * check asks for it with the workflow's own pre-flight), or null. */
+const sheetAssist = computed(() =>
+  layout.value === "prose" ? checks.value[workflowId.value]?.assist || null : null,
+);
+/** The Photo look is not known yet: the chosen workflow has not answered its
+ * check (or, with none chosen, the list is not checked). Only then is its
+ * place held, so a workflow that never answers does not hold it for good. A
+ * chosen workflow holds it only on the prose layout, the one that can show a
+ * Photo look; with none chosen, only while a listed workflow could show one. */
+const sheetLookPending = computed(() =>
+  workflowId.value
+    ? layout.value === "prose" && !checks.value[workflowId.value]
+    : !workflowsLoaded.value &&
+      (!modeCards.value.length || modeCards.value.some(drawsProse)),
+);
+/** Whether *card* draws its sheet in prose, the layout a Photo look rides on:
+ * every draw from a reference, and any text one but MOSS-Image's and a sheet
+ * copy's regions. */
+function drawsProse(card) {
+  return fromReference.value || (!card.sheet_layout && cardEngine(card) !== ENGINES.moss);
+}
+const sheetLook = usePromptAssist(sheetAssist, "sheet");
+/** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
+const sheetSamplerChoice = computed(
+  () => layout.value === "prose" && checks.value[workflowId.value]?.samplerChoice === true,
+);
+/** The sampler of the draw: LCM as saved, or Euler on the run's copy. Per draw. */
+const sampler = ref("lcm");
+const samplerOptions = computed(() =>
+  SAMPLER_CHOICES.map((o) => ({ ...o, testid: `cs-sampler-${o.id}` })),
+);
+let sheetAssistAsk = 0;
+/** Put a workflow's answer about its look into its check, where the step reads it. */
+function setLookAnswer(id, answer) {
+  checks.value = { ...checks.value, [id]: { ...checks.value[id], ...answer } };
+}
+/**
+ * Ask the chosen workflow for the lines the owner's Photo look adds. Only the
+ * owner's own choices need this: the check already answered the shipped ones.
+ */
+async function askSheetAssist() {
+  const ask = ++sheetAssistAsk;
+  const id = workflowId.value;
+  if (!id || layout.value !== "prose") return;
+  try {
+    const answer = await preflightWorkflowRun({
+      workflow_id: id,
+      count: 1,
+      prompt: SHEET_PROMPT_STAND_IN,
+      prompt_assist: sheetLook.request() || SHEET_LOOK_OFF,
+    });
+    if (alive && ask === sheetAssistAsk) {
+      const prompt = answer?.groups?.[0]?.prompt;
+      setLookAnswer(id, {
+        assist: prompt?.assist || null,
+        samplerChoice: prompt?.sampler_choice === true,
+      });
+    }
+  } catch (e) {
+    console.warn("Couldn't ask for the photo look of sheet workflow", id, e);
+    if (alive && ask === sheetAssistAsk) setLookAnswer(id, { assist: null, samplerChoice: false });
+  }
+}
+// Another workflow or layout: the draw's sampler starts again. The look is the
+// check's answer for that workflow, so it arrives with the workflow's own
+// check; a remembered choice of the owner's is asked for once more.
+watch([workflowId, layout], () => {
+  sampler.value = "lcm";
+  if (sheetLook.changed.value) askSheetAssist();
+});
+// #2776's remembered Off seeds the group's Off, once.
+watch(sheetAssist, (assist) => {
+  if (assist && !form.photo_look && !sheetLook.hasStoredOn()) sheetLook.setOn(false);
+});
+// And back: the group stands in for the Natural/Off switch, so an engine
+// without the group (no presets) keeps the last On/Off the owner chose.
+watch(
+  () => (sheetAssist.value ? sheetLook.on.value : null),
+  (on) => {
+    if (on !== null && form.photo_look !== on) form.photo_look = on;
+  },
+);
+
 const railIsReference = computed(() =>
   phase.value === "describe" ? fromReference.value : !!drawnFrom.value,
 );
@@ -1070,14 +1281,17 @@ watch(engine, () => {
 // Each model its own sizes, so the size follows the chosen workflow's model
 // too: a model with a size of its own (MiniMax H3) starts there, any other
 // keeps a size it draws well. Only once restored, and a size saved with the
-// set stands over the one `load`'s first workflow would pick.
+// set, or last picked for this model, stands over the one it would start at.
 const sizesDrawnWell = computed(() => engine.value.sizes || SIZES_DRAWN_WELL);
 const sizeOptions = computed(() =>
   SIZES.map((s) => ({ ...s, disabled: !sizesDrawnWell.value.includes(s.id) })),
 );
 watch([engine, restored], ([now, done], [, wasDone]) => {
   if (!done) return;
-  const saved = !wasDone && !!(props.saved?.form?.size || remembered?.size);
+  const saved =
+    !wasDone &&
+    (picked.has("size") ||
+      !!(props.saved?.form?.size || remembered?.size_family === now.family));
   const keep =
     sizesDrawnWell.value.includes(form.size) && (!now.size || saved);
   if (!keep) form.size = now.size || "large";
@@ -1106,7 +1320,10 @@ function closePicker() {
 
 function onPicked(picture) {
   closePicker();
-  if (picture?.id) referenceId.value = picture.id;
+  if (picture?.id) {
+    picked.add("reference");
+    referenceId.value = picture.id;
+  }
 }
 
 const suggestedFraming = computed(() =>
@@ -1117,13 +1334,12 @@ watch(suggestedFraming, (framing) => {
   if (!framingTouched.value) form.framing = framing;
 });
 
-// "Adult man, …" draws a man: the description decides until a toggle is
-// picked by hand.
+// "Adult woman with dwarfism" draws a little person: the description decides
+// until a toggle is picked by hand. Who is drawn is the description's alone:
+// the sheet names "the person".
 watch(
   () => form.description,
   (text) => {
-    const subject = subjectFromDescription(text);
-    if (subject && !subjectTouched.value) form.subject = subject;
     const proportions = proportionsFromDescription(text);
     if (proportions && !proportionsTouched.value) form.proportions = proportions;
   },
@@ -1143,10 +1359,11 @@ const framingHint = computed(() => {
 
 const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
-  const why =
-    engine.value === ENGINES.minimax
-      ? " MiniMax H3 needs Large or 4K."
-      : " 4K is for MiniMax H3.";
+  const own = engine.value.sizes;
+  const labels = (own || []).map((id) => SIZES.find((s) => s.id === id).label);
+  const why = own
+    ? ` ${engine.value.name} needs ${labels.slice(0, -1).join(", ")} or ${labels.at(-1)}.`
+    : " 4K and 6K are for MiniMax H3 Image, 5K for both MiniMax models.";
   return `Passport photos come out ${size.passport}. Larger is slower to draw.${why}`;
 });
 
@@ -1423,8 +1640,10 @@ function sheetWords(sheet) {
     if (drawnFrom.value) words.unshift(`${sheet.closeness.toFixed(2)} ${near}`);
     else words.push(near);
   }
-  // A warning, not a refusal: the zoom shows where it cuts.
-  if (sheet.cuts_cleanly === false) words.push("may not cut cleanly");
+  // A warning, not a refusal: the zoom shows where it cuts. A cut the person
+  // drew is theirs, so it is no longer the cutter's to doubt.
+  if (sheetEdited(sheet)) words.push("cut edited");
+  else if (sheet.cuts_cleanly === false) words.push("may not cut cleanly");
   return words.join(" · ");
 }
 
@@ -1436,6 +1655,37 @@ function cellStyle([left, top, right, bottom]) {
     width: `${(right - left) * 100}%`,
     height: `${(bottom - top) * 100}%`,
   };
+}
+
+/** The photos a sheet is cut into now: each the person's box where they drew
+ * one, else the cutter's latest. */
+function cellsOf(sheet) {
+  const edits = cutEdits.value[sheet.picture_id] || [];
+  return (sheet.cells ?? []).map((cell, i) => edits[i] ?? cell);
+}
+
+function boxEdited(sheet, index) {
+  return !!cutEdits.value[sheet.picture_id]?.[index];
+}
+
+function sheetEdited(sheet) {
+  return (cutEdits.value[sheet.picture_id] || []).some(Boolean);
+}
+
+/** Write one photo's box. A new object each time, so the change is reactive. */
+function setBox(sheet, index, box) {
+  const edits = [
+    ...(cutEdits.value[sheet.picture_id] || Array(PANEL_COUNT).fill(null)),
+  ];
+  edits[index] = box;
+  cutEdits.value = { ...cutEdits.value, [sheet.picture_id]: edits };
+}
+
+/** Back to the cutter's latest boxes for a sheet. */
+function resetCut(id) {
+  const rest = { ...cutEdits.value };
+  delete rest[id];
+  cutEdits.value = rest;
 }
 
 /** Closeness in words: to the picture drawn from, else to the character. */
@@ -1459,6 +1709,76 @@ function sheetLocked(sheet) {
 const zoomed = computed(() =>
   phase.value === "describe" ? null : numbered(zoomedId.value),
 );
+const zoomedCut = computed(() => (zoomed.value ? cellsOf(zoomed.value) : []));
+const zoomedEdited = computed(() => !!zoomed.value && sheetEdited(zoomed.value));
+// Boxes are drawn but not moved while the sheets are being cut.
+const cutLocked = computed(() => working.value || phase.value === "filing");
+const HANDLE_NAMES = Object.keys(HANDLES);
+const PANEL_COUNT = 6;
+const CUT_HINT =
+  "Drag a box's edge or corner to resize it, or its middle to move it. " +
+  "Arrows move it; Shift or Alt with an arrow pushes or pulls that edge.";
+
+/** The photo a box is, for its label: the passports 1-4, then the bodies. */
+function panelName(index) {
+  return index < 4 ? `Passport photo ${index + 1}` : `Body photo ${index - 3}`;
+}
+
+// The box a pointer is dragging: its sheet, the photo's index, the edges it
+// moves (null for the whole box), where the drag began and the sheet's size on
+// screen. Only one at a time.
+let drag = null;
+
+/** A drag on a photo's box (`edges` null) or one of its handles. The zoom's
+ * pan must not take it, so the event stops here. */
+function beginDrag(event, sheet, index, edges) {
+  // A second finger on a touch screen is not a new drag: only the first moves.
+  if (cutLocked.value || event.button !== 0 || event.isPrimary === false) return;
+  event.stopPropagation();
+  const box = event.currentTarget.closest(".cs-cell");
+  const overlay = box?.closest(".zp-over");
+  if (!overlay) return;
+  box.setPointerCapture?.(event.pointerId);
+  drag = {
+    sheet,
+    index,
+    edges,
+    start: cellsOf(sheet)[index],
+    x: event.clientX,
+    y: event.clientY,
+    rect: overlay.getBoundingClientRect(),
+  };
+}
+
+function moveDrag(event) {
+  if (!drag) return;
+  const dx = (event.clientX - drag.x) / drag.rect.width;
+  const dy = (event.clientY - drag.y) / drag.rect.height;
+  const box = drag.edges
+    ? resizeBox(drag.start, drag.edges, dx, dy)
+    : moveBox(drag.start, dx, dy);
+  setBox(drag.sheet, drag.index, box);
+}
+
+function endDrag() {
+  drag = null;
+}
+
+/** An arrow moves the focused photo's box, or with Shift or Alt one of its
+ * edges. Only an arrow is taken: the zoom reads the arrows too, to step to the
+ * next sheet. */
+function onCellKey(event, sheet, index) {
+  if (cutLocked.value) return;
+  const box = cellsOf(sheet)[index];
+  const next = nudgeBox(box, event.key, {
+    shift: event.shiftKey,
+    alt: event.altKey,
+  });
+  if (!next) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setBox(sheet, index, next);
+}
 
 /** The sheet's own file, full size; the thumbnail until its format is known. */
 function sheetUrl(sheet) {
@@ -1466,6 +1786,25 @@ function sheetUrl(sheet) {
   return appendShareToken(
     buildMediaUrl({ backendUrl: API_BASE_URL, image: { id: sheet.picture_id, format: sheet.format } }),
   );
+}
+
+/** The workflow list and its checks as the last full check left them, on this
+ * machine: shown at once on the next open, then checked again behind it. */
+const CARD_CACHE_KEY = "pixlstash:sheetWorkflowCards:v1";
+function readCardCache() {
+  try {
+    return JSON.parse(localStorage.getItem(CARD_CACHE_KEY) || "null");
+  } catch (e) {
+    console.warn("Couldn't read the sheet workflows remembered here", e);
+    return null;
+  }
+}
+function writeCardCache(value) {
+  try {
+    localStorage.setItem(CARD_CACHE_KEY, JSON.stringify(value));
+  } catch (e) {
+    console.warn("Couldn't remember the sheet workflows", e);
+  }
 }
 
 /**
@@ -1477,13 +1816,24 @@ async function checkCard(card, reference) {
   try {
     const [{ card: full }, check] = await Promise.all([
       getWorkflowCard(card.id),
-      preflightWorkflowRun({ workflow_id: card.id, count: 1 }, { cached: true }),
+      // The Photo look rides in the same pre-flight: its catalogue and the
+      // sampler offer are what the step shows beside the workflow's list.
+      preflightWorkflowRun(
+        {
+          workflow_id: card.id,
+          count: 1,
+          prompt: SHEET_PROMPT_STAND_IN,
+          prompt_assist: SHEET_LOOK_DEFAULT,
+        },
+        { cached: true },
+      ),
     ]);
     const name = full?.name || card.name || "This workflow";
     const sizes = (full?.defaults || []).filter((d) =>
       ["width", "height"].includes(d.input_name),
     );
     const groups = check?.groups || [];
+    const prompt = groups[0]?.prompt;
     // ComfyUI never answered, so nothing is known about this workflow (nor
     // any other): that is what to say, not the workflow's own shortcomings.
     const down = comfyuiDown(groups);
@@ -1510,13 +1860,25 @@ async function checkCard(card, reference) {
     // All an edit workflow drawing at its picture's size lacks: a sheet copy
     // fixes that (#2700).
     const sizeless = reference && !sizes.length && !refused;
-    return { sizes, inputs, problem, sizeless, down };
+    return {
+      sizes,
+      inputs,
+      problem,
+      sizeless,
+      down,
+      assist: prompt?.assist || null,
+      samplerChoice: prompt?.sampler_choice === true,
+    };
   } catch (e) {
     console.warn("Couldn't check the sheet workflow", card.id, e);
     return {
       sizes: [],
       inputs: [],
       problem: `Couldn't check ${card.name || "this workflow"}: ${errorMessage(e)}`,
+      // Never answered, so not remembered: the next open checks it again.
+      failed: true,
+      assist: null,
+      samplerChoice: false,
     };
   }
 }
@@ -1551,9 +1913,23 @@ async function checkCards() {
   ].sort(([, a], [, b]) => Number(b === first) - Number(a === first));
   const results = await Promise.all(
     all.map(async ([card, ref]) => {
+      const askAt = sheetAssistAsk;
       const result = await checkCard(card, ref);
       if (alive && run === checkRun) {
-        checks.value = { ...checks.value, [card.id]: result };
+        // The check asked with the shipped look. Had the owner asked for their
+        // own, while it was out or before (the re-ask at open for a remembered
+        // look), their answer stands for the chosen workflow.
+        const own =
+          card.id === workflowId.value &&
+          (sheetAssistAsk !== askAt || sheetLook.changed.value);
+        const held = checks.value[card.id];
+        checks.value = {
+          ...checks.value,
+          [card.id]:
+            own && held
+              ? { ...result, assist: held.assist, samplerChoice: held.samplerChoice }
+              : result,
+        };
         if (!workflowId.value) workflowId.value = firstUsable();
       }
       return result;
@@ -1563,6 +1939,20 @@ async function checkCards() {
   checksDone.value = true;
   if (!usableCards.value.some((card) => card.id === workflowId.value)) {
     workflowId.value = usableCards.value[0]?.id || "";
+  }
+  // An outage, or a check that threw, is not remembered: the next open checks
+  // again, as this one did.
+  if (!results.some((result) => result.down || result.failed)) {
+    const faces = readCardCache()?.faces || {};
+    writeCardCache({
+      cards: cardRows,
+      // This run's answers only: `checks` also holds what `askSheetAssist`
+      // wrote for the owner's own look (or a failed ask's null), which is not
+      // what the workflow's check answered.
+      checks: Object.fromEntries(all.map(([card], i) => [card.id, results[i]])),
+      // Whether this character has faces to draw from: the mode rule's input.
+      faces: { ...faces, [props.character.id]: referenceIds.value.length > 0 },
+    });
   }
   // Not configured is fixed in Settings and said so; only a ComfyUI that may
   // yet start is waited for.
@@ -1745,11 +2135,14 @@ async function draw() {
   const count = form.count;
   const reference = fromReference.value ? referenceId.value : null;
   const inputs = workflowInputs.value;
+  const sheetLayout = layout.value;
+  // Where the group shows it is the photo look's On/Off: off adds no look.
+  const grouped = Boolean(sheetAssist.value) && sheetLayout === "prose";
+  const assist = grouped ? sheetLook.request() : null;
+  const photoLook = grouped ? false : form.photo_look;
+  // LCM is the graph as saved, so only Euler is sent.
+  const euler = sheetSamplerChoice.value && sampler.value === "euler";
   rememberRecent();
-  // Only MOSS-Image takes a layout: the others get the sheet in one sentence.
-  const prose = !!reference || engine.value !== ENGINES.moss;
-  // A sheet copy of another text-to-image workflow takes it as regions.
-  const regions = !reference && !!engine.value.regions;
   try {
     const description = form.description.trim();
     if (!savedDescription.value && description) {
@@ -1764,13 +2157,15 @@ async function draw() {
       background: form.background,
       framing: form.framing,
       size: form.size,
-      subject: form.subject,
       proportions: form.proportions,
+      // The route ignores it for any layout but prose.
+      photo_look: photoLook,
+      // The run adds Photo look's lines, so the sheet prompt adds none.
+      ...(assist ? { look_added_by_run: true } : {}),
       trigger: trigger.value,
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
-      ...(prose ? { layout: "prose" } : {}),
-      ...(regions ? { layout: "regions" } : {}),
+      ...(sheetLayout ? { layout: sheetLayout } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -1778,6 +2173,8 @@ async function draw() {
       lora?.sha256 || "",
       weight,
       reference,
+      assist,
+      euler,
     ]);
     const answer = await runWorkflowCard({
       workflow_id: workflow,
@@ -1813,6 +2210,8 @@ async function draw() {
       // Not the library's until kept: imported straight to the Scrapheap.
       hold: true,
       label: `Character sheet · ${name.value}`,
+      ...(assist ? { prompt_assist: assist } : {}),
+      ...(euler ? { sampler: "euler" } : {}),
     });
     const started = (answer?.prompts || []).filter((p) => runKey(p));
     if (!started.length) {
@@ -1835,6 +2234,7 @@ async function draw() {
       })),
     );
     runHistory.value.push(...started.map((p) => runKey(p)));
+    sheetLook.recordRun();
     phase.value = "drawing";
     gaveUpOnFaces.value = false;
     schedule();
@@ -1866,6 +2266,7 @@ function startOver() {
   runs.value = [];
   order.value = [];
   ranking.value = {};
+  cutEdits.value = {};
   kept.value = [];
   keptTouched.value = false;
   runsEndedAt = 0;
@@ -1928,9 +2329,16 @@ async function use() {
   working.value = true;
   error.value = "";
   phase.value = "filing";
+  // The boxes of each kept sheet that has one drawn by hand, all six as they
+  // are on screen; a sheet with none is cut as the cutter finds it.
+  const boxes = Object.fromEntries(
+    keptSheets.value
+      .filter((sheet) => sheetEdited(sheet))
+      .map((sheet) => [sheet.picture_id, cellsOf(sheet)]),
+  );
   let ids;
   try {
-    ({ picture_ids: ids } = await useSheets(props.character.id, keep));
+    ({ picture_ids: ids } = await useSheets(props.character.id, keep, boxes));
   } catch (e) {
     phase.value = "pick";
     error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
@@ -2081,15 +2489,23 @@ function cardEngine(card) {
  * the models that keep the person in the picture. */
 function referenceEngine(card) {
   const engine = cardEngine(card);
-  return [ENGINES.qwen, ENGINES.klein, ENGINES.minimax].includes(engine)
+  return [
+    ENGINES.qwen,
+    ENGINES.klein,
+    ENGINES.minimax,
+    ENGINES.minimaxImage,
+  ].includes(engine)
     ? engine
     : null;
 }
 
+/** The workflow cards as the server listed them, for the cache. */
+let cardRows = [];
 /** The cards each mode can draw with, most recently used first. */
 function sortCards(cards) {
   const recent = (a, b) =>
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
+  cardRows = cards;
   workflows.value = cards
     .filter(
       (card) =>
@@ -2119,26 +2535,34 @@ function sortCards(cards) {
         .sort(recent)[0] || null;
 }
 
-/** Give each shipped sheet workflow its card. Idempotent; one that fails is
- * logged and left out, and the owner's own workflows are still listed. */
-async function fileBuiltIns() {
-  const filed = await Promise.allSettled(SHEET_BUILT_INS.map(cardForWorkflow));
-  filed.forEach((result, i) => {
-    if (result.status === "rejected") {
-      console.warn(
-        `Couldn't add the built-in sheet workflow ${SHEET_BUILT_INS[i]}; the sheet step lists the owner's own workflows only`,
-        result.reason,
-      );
-    }
-  });
+/** Show the workflows of the last full check at once. Their checks are run
+ * again by `load`, which replaces each answer as it lands. */
+function restoreCardCache() {
+  const remembered = readCardCache();
+  if (!remembered?.cards?.length) return;
+  sortCards(remembered.cards);
+  checks.value = remembered.checks || {};
+  checksDone.value = true;
+  workflowsLoaded.value = true;
+  // The mode rule `load` applies once the references are read, from the last
+  // read of this character's faces.
+  const faces = remembered.faces?.[props.character.id] === true;
+  mode.value =
+    referenceCards.value.length && (faces || !workflows.value.length)
+      ? "reference"
+      : "text";
+  if (!workflowId.value) workflowId.value = usableCards.value[0]?.id || "";
 }
 
 async function load() {
   const id = props.character.id;
+  restoreCardCache();
   const [character, adapters, cards, references] = await Promise.allSettled([
     getCharacter(id),
     listAdapters({ characterId: id }),
-    fileBuiltIns().then(listWorkflowCards),
+    // The shipped sheet workflows are cards already: start-up lists every
+    // built-in the owner has not removed.
+    listWorkflowCards(),
     getReferencePictures(id),
   ]);
   if (!alive) return;
@@ -2158,11 +2582,14 @@ async function load() {
     sortCards(cards.value.cards);
     // A character with a face is drawn from it where a workflow can; one
     // with no pictures, from words.
-    if (
-      referenceCards.value.length &&
-      (referenceIds.value.length || !workflows.value.length)
-    ) {
-      mode.value = "reference";
+    // Both ways: a mode the last open left (restoreCardCache) is re-read here,
+    // unless the owner has picked a mode or a workflow of it since.
+    if (!picked.has("mode") && !picked.has("workflow")) {
+      mode.value =
+        referenceCards.value.length &&
+        (referenceIds.value.length || !workflows.value.length)
+          ? "reference"
+          : "text";
     }
     await checkCards();
   }
@@ -2190,7 +2617,6 @@ async function load() {
 function restoreState(saved) {
   if (!saved) return;
   framingTouched.value = !!saved.framing_touched;
-  subjectTouched.value = !!saved.subject_touched;
   proportionsTouched.value = !!saved.proportions_touched;
   // A build saved when the build had a field of its own joins the description.
   const { body = "", ...fields } = saved.form || {};
@@ -2211,6 +2637,7 @@ function restoreState(saved) {
   ranking.value = { ...(saved.ranking || {}) };
   kept.value = [...(saved.kept || [])];
   keptTouched.value = !!saved.kept_touched;
+  cutEdits.value = { ...(saved.cut_edits || {}) };
   drawnWith.value = saved.drawn_with || "";
   drawnFrom.value = saved.drawn_from ?? null;
   compareTo.value = saved.compare_to === "cluster" ? "cluster" : "picture";
@@ -2221,37 +2648,37 @@ function restoreState(saved) {
 }
 
 /** Put back the choices that name what `load` read (the mode, workflow,
- * LoRA and reference picture) over the defaults it picked. */
+ * LoRA and reference picture) over the defaults it picked, never over one
+ * the owner picked while `load` was reading. */
 async function restore(saved) {
   if (saved && alive) {
-    if (saved.mode && saved.mode !== mode.value) {
+    const kept = (key) => !picked.has(key);
+    // A workflow is picked from its mode's list: the mode stays with it.
+    if (kept("mode") && kept("workflow") && saved.mode && saved.mode !== mode.value) {
       mode.value = saved.mode;
       // The mode's own watcher picks its first workflow and a fitting LoRA;
       // the saved ones go over those.
       await nextTick();
     }
-    if (usableCards.value.some((card) => card.id === saved.workflow_id)) {
+    if (
+      kept("workflow") &&
+      usableCards.value.some((card) => card.id === saved.workflow_id)
+    ) {
       workflowId.value = saved.workflow_id;
     }
     if (
-      saved.lora_sha === "" ||
-      loras.value.some((lora) => lora.sha256 === saved.lora_sha)
+      kept("lora") &&
+      (saved.lora_sha === "" ||
+        loras.value.some((lora) => lora.sha256 === saved.lora_sha))
     ) {
       loraSha.value = saved.lora_sha;
     }
-    if (saved.strength != null) strength.value = saved.strength;
-    if (saved.reference_id != null) referenceId.value = saved.reference_id;
+    if (kept("strength") && saved.strength != null) strength.value = saved.strength;
+    if (kept("reference") && saved.reference_id != null) {
+      referenceId.value = saved.reference_id;
+    }
   }
   restored.value = true;
-}
-
-function readChoices() {
-  try {
-    return JSON.parse(localStorage.getItem(CHOICES_KEY) || "{}") || {};
-  } catch (e) {
-    console.warn("Couldn't read the remembered sheet choices", e);
-    return {};
-  }
 }
 
 /** The remembered choices as `restore` reads them, or null: a mode only where
@@ -2298,15 +2725,10 @@ function rememberRecent() {
   remember((all) => {
     const lists = readRecent(all);
     for (const field of fields) {
-      const value = String(form[field] || "").trim();
-      // Case folded, as the menu matches: "A red coat" replaces "a red coat".
-      const same = (v) => v.toLowerCase() === value.toLowerCase();
-      lists[field] = [value, ...lists[field].filter((v) => !same(v))].slice(
-        0,
-        RECENT_KEPT,
-      );
+      lists[field] = withRecent(lists[field], String(form[field] || "").trim());
     }
-    all.recent = lists;
+    // Photo look's typed entries share the document: keep them.
+    all.recent = { ...all.recent, ...lists };
     recent.value = lists;
   });
 }
@@ -2315,13 +2737,7 @@ function rememberRecent() {
  * step is restored, so a default is never remembered as a choice. */
 function remember(update) {
   if (!restored.value || restoring) return;
-  try {
-    const all = readChoices();
-    update(all);
-    localStorage.setItem(CHOICES_KEY, JSON.stringify(all));
-  } catch (e) {
-    console.warn("Couldn't remember the sheet choices", e);
-  }
+  writeChoices(update);
 }
 
 watch(mode, (now) =>
@@ -2340,6 +2756,7 @@ watch(
   (size) =>
     remember((all) => {
       all.size = size;
+      all.size_family = engine.value.family;
     }),
 );
 watch(
@@ -2347,6 +2764,13 @@ watch(
   (count) =>
     remember((all) => {
       all.count = count;
+    }),
+);
+watch(
+  () => form.photo_look,
+  (look) =>
+    remember((all) => {
+      all.photo_look = look;
     }),
 );
 // Per person. A LoRA left at the default is forgotten, so a newer LoRA of the
@@ -2373,7 +2797,6 @@ const snapshot = computed(() => {
         : phase.value,
     form: { ...form },
     framing_touched: framingTouched.value,
-    subject_touched: subjectTouched.value,
     proportions_touched: proportionsTouched.value,
     mode: mode.value,
     workflow_id: workflowId.value,
@@ -2395,6 +2818,8 @@ const snapshot = computed(() => {
     ranking: cut ? {} : ranking.value,
     kept: cut ? [] : kept.value,
     kept_touched: cut ? false : keptTouched.value,
+    // The photo boxes drawn by hand, kept with the sheets they belong to.
+    cut_edits: cut ? {} : cutEdits.value,
     drawn_with: cut ? "" : drawnWith.value,
     drawn_from: cut ? null : drawnFrom.value,
     compare_to: compareTo.value,
@@ -2412,7 +2837,7 @@ const snapshot = computed(() => {
 
 function showReferences(body) {
   referenceIds.value = (body?.reference_picture_ids || []).slice(0, 4);
-  referenceId.value = referenceIds.value[0] ?? null;
+  if (!picked.has("reference")) referenceId.value = referenceIds.value[0] ?? null;
 }
 
 /** The reference faces again, after the reference cluster changed. */
@@ -2441,8 +2866,16 @@ onBeforeUnmount(() => {
 const zooming = computed(() => !!zoomed.value || pickerOpen.value);
 
 defineExpose({
-  workflowId,
+  // The parents' toolbar select is the owner picking a workflow.
+  workflowId: computed({
+    get: () => workflowId.value,
+    set: (id) => {
+      picked.add("workflow");
+      workflowId.value = id;
+    },
+  }),
   workflowOptions,
+  workflowsPending,
   footer,
   error,
   working,
@@ -2534,6 +2967,14 @@ defineExpose({
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* The Photo look's place while the workflows are checked: a skeleton of the
+   group's size, so the step opens on the layout it keeps. */
+.cs-look-pending {
+  min-height: calc(var(--space-7) * 4);
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
 }
 
 .cs-fld--grow {
@@ -2773,6 +3214,83 @@ defineExpose({
 .cs-cell--unclean {
   border-style: dashed;
   border-color: rgb(var(--v-theme-dark-surface-warning));
+}
+
+/* A photo the person drew: a double line in the accent colour, so it reads
+   as edited by its line as well as its colour. The zoom's overlay lets no
+   pointer through except to an editable photo. */
+.cs-cell--edited {
+  border: 4px double rgb(var(--v-theme-primary));
+}
+
+.cs-cell--editable {
+  pointer-events: auto;
+  cursor: move;
+}
+
+/* The grips on an editable photo: its corners and edge midpoints. */
+.cs-handle {
+  position: absolute;
+  width: var(--space-2);
+  height: var(--space-2);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--scrim-photo-strong);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-on-dark-surface));
+}
+
+.cs-handle--nw,
+.cs-handle--se {
+  cursor: nwse-resize;
+}
+
+.cs-handle--ne,
+.cs-handle--sw {
+  cursor: nesw-resize;
+}
+
+.cs-handle--n,
+.cs-handle--s {
+  cursor: ns-resize;
+}
+
+.cs-handle--e,
+.cs-handle--w {
+  cursor: ew-resize;
+}
+
+.cs-handle--nw,
+.cs-handle--w,
+.cs-handle--sw {
+  left: 0;
+}
+
+.cs-handle--n,
+.cs-handle--s {
+  left: 50%;
+}
+
+.cs-handle--ne,
+.cs-handle--e,
+.cs-handle--se {
+  left: 100%;
+}
+
+.cs-handle--nw,
+.cs-handle--n,
+.cs-handle--ne {
+  top: 0;
+}
+
+.cs-handle--w,
+.cs-handle--e {
+  top: 50%;
+}
+
+.cs-handle--sw,
+.cs-handle--s,
+.cs-handle--se {
+  top: 100%;
 }
 
 .cs-cap {

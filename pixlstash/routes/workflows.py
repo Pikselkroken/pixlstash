@@ -66,6 +66,7 @@ from fastapi import (
 )
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     StrictBool,
     ValidationError,
@@ -97,7 +98,7 @@ from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
     set_model_fix,
 )
-from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
+from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, run_family
 from pixlstash.hub.workflow_group_writes import (
     LORA_ADDRESS_PREFIX,
     RAN,
@@ -221,6 +222,7 @@ from pixlstash.services.edit_selection import (
     Selection,
     write_masked_picture,
 )
+from pixlstash.services import prompt_assist
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -314,6 +316,7 @@ from pixlstash.services.workflow_identity import (
     TWO_PASS,
     loader_swaps,
     core_node_labels,
+    node_addresses,
     match_type,
     model_fix_kind,
 )
@@ -355,6 +358,7 @@ from pixlstash.utils.comfyui_utilities import (
     find_comfy_workflow,
     iter_model_fields_api,
     loaded_model_widgets,
+    prompt_assist_tail,
 )
 from pixlstash.stacking import (
     build_stack_filename_prefix,
@@ -1819,6 +1823,44 @@ class WorkflowChanges(BaseModel):
         )
 
 
+_ASSIST_ID = Annotated[str, Field(pattern=r"^[a-z0-9_]+$", max_length=64)]
+
+
+class PromptAssistPick(BaseModel):
+    """A shipped preset, by its option id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: _ASSIST_ID
+
+
+class PromptAssistText(BaseModel):
+    """Text the owner typed into a category, used as given (trimmed and closed
+    as a sentence). Render vocabulary in it is flagged, never refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., max_length=prompt_assist.MAX_TEXT_LENGTH)
+
+
+class PromptAssistRequest(BaseModel):
+    """The prompt assist's choices for one run (backend §25).
+
+    The run carries choices, never stored state: a category left out takes
+    the shipped default, so ``{}`` is the defaults. ``on: false`` names the
+    context whose catalogue the pre-flight reports and adds nothing, so a
+    surface whose group is off can still draw it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: Literal["photo", "sheet"] = "photo"
+    on: bool = True
+    choices: dict[_ASSIST_ID, Literal["none"] | PromptAssistPick | PromptAssistText] = (
+        Field(default_factory=dict, max_length=16)
+    )
+
+
 class RunRequest(BaseModel):
     """``POST /workflows/run`` and its dry run, which take the same body.
 
@@ -1850,6 +1892,26 @@ class RunRequest(BaseModel):
 
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
+    # Whether a prompt enhancer rewrites this run's prompt (a group's
+    # `prompt.enhancer` says the graph has one). False sends the prompt to the
+    # encoder as written and cuts the enhancer out of the run's copy, so its
+    # model is never loaded; null and true run the graph as it is.
+    enhance_prompt: bool | None = None
+    # Whether a blank picture (an `EmptyImage` a conditioning encoder reads,
+    # as MiniMax H3 Image's text workflows feed one) stays in the run. False
+    # takes it off the encoder's image input, so the run draws without it; null
+    # and true run the graph as it is. Only a graph with one is changed.
+    blank_picture: bool | None = None
+    # The sampler a MiniMax H3 Image graph with a picture input samples with
+    # (a group's `prompt.sampler_choice` says where the choice is offered).
+    # "lcm" and null run the graph as saved; "euler" samples the run's copy
+    # with Euler in place of LCM, and is a no-op on a graph without the choice.
+    sampler: Literal["lcm", "euler"] | None = None
+    # Curated text for the model family added after the prompt (backend §25).
+    # Absent is off, and that is load-bearing: a JSON layout prompt or a
+    # `prompt: null` replay stays byte for byte what it was. With it applied,
+    # `enhance_prompt: null` runs without the enhancer; `true` keeps it.
+    prompt_assist: PromptAssistRequest | None = None
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
     # LoRAs this run adds in new loaders of their own, after `loras` and the
     # recipe's LoRAs are placed: nothing the graph loads is replaced, so a
@@ -2456,6 +2518,36 @@ class RunPictureInput(ParameterAddress):
     fill: Literal["request", "fixed", "original", "selection", "graph"] | None = None
 
 
+class RunPromptAssist(BaseModel):
+    """What the prompt assist offers and does for one group (backend §25)."""
+
+    # The graph's one base-model family; null for none, an unknown model or
+    # two families, which get the generic presets.
+    family: str | None = None
+    # The presets file used: the family's own, else `_default`.
+    presets: str
+    context: Literal["photo", "sheet"]
+    preset_version: int
+    # Whether a surface starts with it on: the presets file says so (only a
+    # family whose model needs it), the prompt is settable, and a `photo`
+    # graph takes no picture.
+    default_on: bool
+    # Its parts were written into this request's graph.
+    applied: bool = False
+    # `[{id, label, default, options: [{id, label, text, finish}]}]`, in the
+    # order their text follows the prompt; `default` is an option id or
+    # "none"; an option's `text` or `finish` is null where it has none.
+    categories: list[dict] = Field(default_factory=list)
+    # What this request adds, in order: `[{category, kind, id, text}]`, kind
+    # "choice" per category, then "finish" for a chosen option's closing
+    # sentence; `id` null for typed text. Empty where nothing is applied.
+    parts: list[dict] = Field(default_factory=list)
+    # The stamp on the source graph's prompt (a replay): `{context,
+    # preset_version, parts}`. Null where it carries none or it does not
+    # match the prompt's end.
+    recorded: dict | None = None
+
+
 class RunPrompt(BaseModel):
     """Where one group's graph takes a run's prompts, and what it holds (#1832)."""
 
@@ -2466,6 +2558,24 @@ class RunPrompt(BaseModel):
     # The graph's own positive prompt, before this request's was written. Null
     # where it is not a literal or the graph's prompt nodes disagree.
     positive_text: str | None = None
+    # True where a prompt enhancer (a `TextGenerate` language model) rewrites
+    # a prompt before its encoder reads it, whether or not this request's
+    # `enhance_prompt: false` cut it out: the Run popup's switch for it.
+    enhancer: bool = False
+    # True where a conditioning encoder reads a blank picture, whether or not
+    # this request's `blank_picture: false` took it off: the Run popup's switch.
+    blank_picture: bool = False
+    # True where the sampler choice applies: the graph samples with LCM and
+    # takes a picture input. Null `sampler` is LCM; the Run popup's control.
+    sampler_choice: bool = False
+    # What the run's copy samples with, where the choice applies; else null.
+    sampler: Literal["lcm", "euler"] | None = None
+    # Whether the enhancer rewrites this request's prompt: `enhancer` unless
+    # `enhance_prompt: false`, or `null` with the prompt assist applied, cut it.
+    enhancer_on: bool = False
+    # The prompt assist for this graph (`RunPromptAssist`): the family's own
+    # presets, else the generic ones. Null only for a context no file has.
+    assist: RunPromptAssist | None = None
 
 
 class RunGroup(BaseModel):
@@ -2543,7 +2653,9 @@ class RunGroup(BaseModel):
     # another family or modality, `model_not_applied` for one this ComfyUI
     # cannot load where it was asked for, `prompt_not_applied` (with its
     # `side`) for a prompt this request sent that the graph has no place for
-    # (#1832). Not reasons: nothing here refuses.
+    # (#1832), `prompt_assist_not_applied` (with its `why`) and
+    # `prompt_assist_render_words` (with `category` and `words`) for the
+    # prompt assist (backend §25). Not reasons: nothing here refuses.
     flags: list[dict] = Field(default_factory=list)
     # Null for a group refused before its graph was resolved.
     prompt: RunPrompt | None = None
@@ -4500,6 +4612,99 @@ _CHANGED_SINCE = (
 )
 
 
+def _assemble_prompt_assist(
+    family: str | None, body: RunRequest, layout: bool = False
+) -> dict | None:
+    """The prompt assist stamp for *body*, or a 422 naming the field at fault.
+
+    The choices are checked whatever the prompt is, so a bad choice is refused
+    the same way on every graph. With *layout* (a JSON layout prompt, which
+    the assist never writes into) there is no stamp and no length to check.
+    """
+    choices = {
+        name: choice if isinstance(choice, str) else choice.model_dump()
+        for name, choice in body.prompt_assist.choices.items()
+    }
+    try:
+        stamp = prompt_assist.assemble(
+            family, body.prompt_assist.context, choices, body.prompt or ""
+        )
+    except prompt_assist.PromptAssistError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {
+                    "loc": ["body", *exc.field.split(".")],
+                    "msg": str(exc),
+                    "type": "value_error",
+                }
+            ],
+        ) from exc
+    if layout:
+        return None
+    added = len(prompt_assist_tail(stamp) or "")
+    # The tail is written only after words (`apply_prompts`), so a blank
+    # prompt gains nothing to count.
+    if (
+        body.prompt
+        and body.prompt.strip()
+        and len(body.prompt) + added > MAX_PROMPT_LENGTH
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {
+                    "loc": ["body", "prompt_assist"],
+                    "msg": f"The prompt with its {added} added characters is over "
+                    f"{MAX_PROMPT_LENGTH}.",
+                    "type": "value_error",
+                }
+            ],
+        )
+    return stamp
+
+
+def _prompt_assist_flags(
+    asked: PromptAssistRequest | None,
+    offered: dict | None,
+    stamp: dict | None,
+    placed: dict,
+    body: RunRequest,
+) -> list[dict]:
+    """What a group says about the prompt assist it was asked for: facts, never
+    refusals. ``prompt_assist_not_applied`` with ``why`` (``no_presets``: no
+    presets file has the context; ``layout_prompt``: the prompt is a JSON
+    layout, which prose would break; ``no_prompt``: the request writes no
+    words to add to; ``not_settable``: the graph's prompt cannot be
+    written), and
+    ``prompt_assist_render_words`` per typed text holding render vocabulary.
+    """
+    if not asked or not asked.on:
+        return []
+    if placed["assist_applied"]:
+        return [
+            {
+                "code": "prompt_assist_render_words",
+                "category": part["category"],
+                "words": prompt_assist.render_words(part["text"]),
+            }
+            for part in stamp["parts"]
+            if part["id"] is None and prompt_assist.render_words(part["text"])
+        ]
+    if stamp is not None and not stamp["parts"]:
+        return []
+    if offered is None:
+        why = "no_presets"
+    elif prompt_assist.is_layout_prompt(body.prompt):
+        why = "layout_prompt"
+    elif not (body.prompt or "").strip():
+        why = "no_prompt"
+    else:
+        why = "not_settable"
+    logger.info("Prompt assist asked for and not applied: %s.", why)
+    return [{"code": "prompt_assist_not_applied", "why": why}]
+
+
 def create_router(server) -> APIRouter:
     """Create the workflow-library router.
 
@@ -6029,13 +6234,13 @@ def create_router(server) -> APIRouter:
         }
         found = set()
         sized = size_inputs(graph)
+        # A node is addressed only by a label no other node on the graph shares.
+        addresses = node_addresses(labels, core)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
-            addressed_as = [labels.get(node_id)]
-            if node_id in core:
-                addressed_as.append(CORE_ADDRESS_PREFIX + core[node_id])
+            addressed_as = addresses.get(str(node_id), [])
             for name in list(inputs):
                 # A wired input is left alone - overwriting drops the link -
                 # so it counts as not applied and is logged below. Except the
@@ -6056,10 +6261,11 @@ def create_router(server) -> APIRouter:
         for slot_label, input_name in sorted(set(wanted) - found):
             # Not an error: a card's defaults are read off every variant, and a
             # stage-node address goes stale when the base topology changes
-            # (#1622). Logged, because it used to vanish without a word.
+            # (#1622). Logged, because it used to vanish without a word. Also
+            # what an address shared by two nodes comes to: applied to neither.
             logger.info(
                 "[workflows] Parameter %s/%s matches no settable input on the "
-                "run graph, so it is not applied.",
+                "run graph, or names more than one node, so it is not applied.",
                 slot_label,
                 input_name,
             )
@@ -6111,6 +6317,7 @@ def create_router(server) -> APIRouter:
         if not models:
             return []
         labels, core = _graph_labels(graph, "models")
+        addresses = node_addresses(labels, core)
         shelf = _swap_models(hub)
         by_digest = {
             str(row["sha256"]).lower(): row["filename"]
@@ -6148,16 +6355,12 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
+            # A loader two nodes share a label for is no loader to name: the file
+            # would go into both, so it is flagged below and left as it is.
             node_ids = [
                 node_id
                 for node_id in graph
-                if labels.get(node_id) == slot_label
-                # Only a node the core kept has a core address: spelled with
-                # an empty label, the prefix alone would name every other one.
-                or (
-                    node_id in core
-                    and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
-                )
+                if slot_label in addresses.get(str(node_id), ())
             ]
             loaders = [
                 node_id
@@ -7623,16 +7826,60 @@ def create_router(server) -> APIRouter:
                     body.count,
                 )
             group.flags = _apply_models(hub, graph, body.models, object_info, request)
-            placed = run_service.apply_prompts(graph, body.prompt, body.negative)
+            # The family is read off the graph the models were laid over.
+            asked = body.prompt_assist
+            context = asked.context if asked else "photo"
+            family = run_family(hub, graph)
+            offered = prompt_assist.catalogue(family, context)
+            stamp = (
+                _assemble_prompt_assist(
+                    family, body, layout=prompt_assist.is_layout_prompt(body.prompt)
+                )
+                if asked and asked.on and offered
+                else None
+            )
+            placed = run_service.apply_prompts(
+                graph,
+                body.prompt,
+                body.negative,
+                body.enhance_prompt,
+                stamp,
+                blank_picture=body.blank_picture,
+                sampler=body.sampler,
+            )
             group.prompt = RunPrompt(
                 positive_settable=placed["positive_settable"],
                 negative_settable=placed["negative_settable"],
                 positive_text=placed["positive_text"],
+                enhancer=placed["enhancer"],
+                blank_picture=placed["blank_picture"],
+                sampler_choice=placed["sampler_choice"],
+                sampler=placed["sampler"],
+                enhancer_on=placed["enhancer_on"],
+                assist=offered
+                and RunPromptAssist(
+                    **{
+                        **offered,
+                        "default_on": offered["default_on"]
+                        and placed["positive_settable"]
+                        and (context != "photo" or not card_inputs),
+                    },
+                    family=family,
+                    context=context,
+                    applied=placed["assist_applied"],
+                    parts=stamp["parts"] if placed["assist_applied"] else [],
+                    recorded=placed["recorded"]
+                    and {
+                        key: placed["recorded"].get(key)
+                        for key in ("context", "preset_version", "parts")
+                    },
+                ),
             )
             group.flags += [
                 {"code": "prompt_not_applied", "side": side}
                 for side in placed["unplaced"]
             ]
+            group.flags += _prompt_assist_flags(asked, offered, stamp, placed, body)
             if alone and recipe is not None:
                 # First, so every step below reads the graph without them.
                 _leave_out_character_loras(
@@ -13779,13 +14026,12 @@ def create_router(server) -> APIRouter:
             )
             return []
         holds: dict[tuple[str, str], list] = {}
+        addresses = node_addresses(labels, core)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
                 continue
-            names = [labels.get(node_id)]
-            if node_id in core:
-                names.append(CORE_ADDRESS_PREFIX + core[node_id])
+            names = addresses.get(str(node_id), [])
             for name, value in inputs.items():
                 if (
                     isinstance(value, (bool, int, float, str))

@@ -981,7 +981,52 @@ Seven rules the client must not re-derive:
    has anywhere to go, and the graph's own positive prompt before the
    request's was written. The Run popup offers no prompt box where
    `positive_settable` is false, and opens an otherwise empty box on
-   `positive_text`.
+   `positive_text`. `prompt.enhancer` is true where a prompt enhancer (a
+   `TextGenerate` language model) rewrites a prompt before its encoder reads
+   it, and stays true on a request that switched it off: it is the Run
+   popup's cue to offer the switch. `enhance_prompt: false` on the body runs
+   without it: the prompt (or the graph's own words) goes to the encoder as
+   written, and the enhancer's nodes, its model loader among them, leave the
+   run's copy, so the pre-flight does not ask for that model and ComfyUI
+   never loads it. Null or true runs the graph as it is. Per run only: no
+   recipe, saved recipe or workflow default stores it.
+   `prompt.enhancer_on` is the effective answer for this request: false
+   where `enhance_prompt: false`, or `null` with the prompt assist applied,
+   cut it; the checkbox draws from it.
+   **The prompt assist** (backend §25.31), offered on every graph.
+   `prompt.assist` is `{family, presets, context, preset_version,
+   default_on, applied, categories, parts, recorded}`: `family` the graph's
+   one base-model family or null, `presets` the file used (the family's own,
+   else `_default`), `default_on` the file's answer for the context
+   (`photo`: MiniMax H3 Image only; `sheet`: everywhere, as #2776's look is)
+   with a settable prompt, and for `photo` a graph that takes no picture; the catalogue rides in the
+   pre-flight, so no route of its own exists. `categories[].options[]` are
+   `{id, label, text, finish}`, and `parts` are `{category, kind, id,
+   text}`: a `kind: "choice"` per category, then `kind: "finish"` for a
+   chosen option's closing sentence. The body's `prompt_assist:
+   {context: "photo" | "sheet", on: true, choices: {<category>: "none" |
+   {"id": <option>} | {"text": <typed>}}}` asks for it; **absent is off**,
+   so every existing caller, a JSON layout prompt and a `prompt: null`
+   replay are unchanged. A category left out takes the shipped default (`{}`
+   is the defaults); `on: false` names the context to report and adds
+   nothing. The parts are written after the request's `prompt`, only where
+   it has words; `prompt` and `positive_text` stay the owner's words
+   everywhere, and "Show full prompt" is `prompt` plus `parts`. A choice the
+   family lacks is a 422 whose `loc` names it. Flags, never refusals:
+   `prompt_assist_not_applied` with `why` (`layout_prompt`, a JSON layout
+   that prose would break; `no_prompt`; `not_settable`; `no_presets`, a
+   context no file has) and `prompt_assist_render_words` with `category` and
+   `words` for typed text holding render vocabulary.
+   `prompt.blank_picture` is the same kind of cue for a blank picture a
+   conditioning encoder reads (MiniMax H3 Image's `images.image_1`): true
+   wherever one is found. `blank_picture: false` on the body takes its input
+   links off the run's copy and leaves the `EmptyImage` unread; null or true
+   runs the graph as it is. Per run only, like `enhance_prompt`.
+   `prompt.sampler_choice` says the sampler choice is offered: the graph samples
+   with LCM and takes a picture input. `prompt.sampler` is what the run's copy
+   samples with (`"lcm"` or `"euler"`; null where not offered). The body's
+   `sampler: "euler"` samples the copy with Euler in place of LCM; `"lcm"` or
+   null runs the graph as it is. Per run only, like `blank_picture`.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
@@ -1427,9 +1472,9 @@ the two sides have agreed:
    deduplicates on `workflow_origin` only, so a restart
    re-imports nothing. `POST /api/v1/comfyui/workflows/{workflow_name}/card`
    (`OWNER_ONLY`) makes a **built-in** workflow file a manual workflow once
-   (`origin: builtin`) and answers `{name, workflow_id}`: Edit with ComfyUI
-   asks it for the Flux.2 Klein edit workflow and opens the Run popup on the
-   id. 404 for an unknown name or a user file (data step 7 made that a
+   (`origin: builtin`) and answers `{name, workflow_id}`. Start-up does the
+   same for every built-in never listed (`list_builtin_workflows`), so this is
+   only the explicit way back for one the owner removed. 404 for an unknown name or a user file (data step 7 made that a
    workflow already, and one deleted must not come back), 409 when it is not
    a workflow. A document past `MAX_WORKFLOW_FILE_BYTES` serialised is a 413
    on every route that stores one.
@@ -2091,6 +2136,23 @@ ordinary members, so every other set route is unchanged; membership changes
 made by the refresh arrive as `CHANGED_PICTURES` with `source: "smart_set"` and
 no `origin_client_id`, which refreshes the sidebar like another tab's edit.
 Backend: the *Smart sets* paragraph in §5 of the backend document.
+
+### 2.11 The character sheets contract
+
+`POST /characters/{id}/sheets/rank` with `{picture_ids, reference_picture_ids?}`
+answers `{sheets, references}`; each sheet carries its `cells` (the six photos
+it would cut to, `[left, top, right, bottom]` fractions) and `cuts_cleanly`
+from the moment the sheet has a readable file, before its `faces_read` turns
+true. `POST /characters/{id}/sheets/use` with `{picture_ids, boxes?}` answers
+`{picture_ids}`, the six panels of each sheet, passport photos first. `boxes`
+is an object keyed by sheet picture id (JSON keys are strings), each value six
+`[left, top, right, bottom]` fractions of that sheet in panel order: the
+photos are cropped at exactly those boxes. A sheet with no entry is cut
+automatically, and `boxes` may be left out altogether. A 422 whose `detail`
+names the reason refuses the whole request, filing nothing, when a sheet's
+boxes are not six, not inside the sheet, inverted, under 32 px a side on the
+sheet, or keyed by a picture not among `picture_ids`. Both routes are
+owner-only. Backend: §25.29 of the backend document.
 
 ---
 

@@ -368,6 +368,46 @@ _RUN_SCHEMA = {
         "workflow_id": _WORKFLOW_ID,
         "prompt": {"type": "string", "description": "Positive prompt override."},
         "negative": {"type": "string", "description": "Negative prompt override."},
+        "enhance_prompt": {
+            "type": "boolean",
+            "description": "false runs without the workflow's prompt "
+            "enhancer (a group's prompt.enhancer is true where it has one): "
+            "the prompt reaches the encoder as written and the enhancer's "
+            "model is not loaded. Omitted runs the workflow as it is.",
+        },
+        "blank_picture": {
+            "type": "boolean",
+            "description": "false runs without the blank picture a MiniMax H3 "
+            "Image workflow feeds its conditioning (a group's "
+            "prompt.blank_picture is true where it has one). Without it, "
+            "different seeds draw more varied people. Omitted runs the "
+            "workflow as it is.",
+        },
+        "sampler": {
+            "type": "string",
+            "enum": ["lcm", "euler"],
+            "description": "euler samples a MiniMax H3 Image graph with a "
+            "picture input with Euler instead of LCM (a group's "
+            "prompt.sampler_choice is true where it applies). lcm, or left "
+            "out, runs the workflow as it is.",
+        },
+        "prompt_assist": {
+            "type": "object",
+            "description": "Curated photography text added after prompt "
+            "(camera, light, skin and makeup, then the camera's closing "
+            "sentence). Off unless sent: {} adds the defaults. Every group's "
+            "prompt.assist lists the categories and options (the model "
+            "family's own, else generic ones), and its "
+            'parts say what was added. A choice is "none", {"id": '
+            'option} or {"text": your own sentence}; a category left out '
+            "takes its default. With it applied, the prompt enhancer is off "
+            "unless enhance_prompt is true. Leave it out for a prompt that is "
+            "not a photograph (a painting, a poster, a layout).",
+            "properties": {
+                "context": {"type": "string", "enum": ["photo", "sheet"]},
+                "choices": {"type": "object"},
+            },
+        },
         "count": {"type": "integer", "description": "How many runs (default 1)."},
         "seed_mode": {"type": "string", "enum": ["new", "keep", "fixed"]},
         "seed": {"type": "integer", "description": "The seed, for seed_mode fixed."},

@@ -394,6 +394,16 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
         "maker": "MiniMax",
         "aliases": [],
     },
+    # MiniMax's own still-image model (2026-11), not H3 video drawing a frame:
+    # ComfyUI loads it as another architecture (`minimax_h3_image`), so an H3
+    # video LoRA is no LoRA for it.
+    "MiniMax H3 Image": {
+        "family": "minimax_h3_image",
+        "modality": "image",
+        "mark": ["MINI", "H3I"],
+        "maker": "MiniMax",
+        "aliases": ["MiniMaxAI/MiniMax-H3-Image"],
+    },
     # --- OpenMOSS -------------------------------------------------------------
     "MOSS-Image": {
         "family": "moss_image",
@@ -616,6 +626,7 @@ FAMILY_LABELS: dict[str, str] = {
     "ideogram": "Ideogram 4",
     "seedvr2": "SeedVR2",
     "minimax_h3": "MiniMax H3",
+    "minimax_h3_image": "MiniMax H3 Image",
     "moss_image": "MOSS-Image",
     "closed": "Closed models",
 }

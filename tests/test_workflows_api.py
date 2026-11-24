@@ -45,7 +45,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from types import SimpleNamespace
 
 import numpy as np
@@ -119,8 +119,11 @@ from pixlstash.services.workflow_hash import (
     structural_document,
     topology_hash,
 )
+from pixlstash.hub import workflow_origin
 from pixlstash.hub import workflow_versions
+from pixlstash.hub import workflow_thumbnails
 from pixlstash.services import (
+    character_sheet,
     comfyui_connections,
     comfyui_link_service,
     comfyui_pack_service,
@@ -141,12 +144,15 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
+from pixlstash.utils.comfyui_utilities import extract_generation_info
 from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import MAX_PROMPT_LENGTH, RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.services.model_downloads import digest_source
+from pixlstash.services.workflow_templates import load_templates
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
@@ -6082,30 +6088,521 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
         lambda: [("user", str(tmp_path)), ("built-in", builtin)],
     )
     owner = workflow_env.owner
-    path = f"{API}/comfyui/workflows/Flux2-Klein-Image-Edit.json/card"
+    path = f"{API}/comfyui/workflows/{quote('FLUX.2 Klein 9B Edit.json')}/card"
 
     r = owner.post(path)
     assert r.status_code == 200, r.text
     key = r.json()["workflow_id"]
     assert key.startswith("manual:")
-    assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
+    assert r.json()["name"] == "FLUX.2 Klein 9B Edit.json"
     # Idempotent: the second ask answers the same workflow.
     assert owner.post(path).json()["workflow_id"] == key
     card = _by_key(_cards(owner))[key]
-    assert (card["manual"], card["name"]) == (True, "Flux2-Klein-Image-Edit")
+    assert (card["manual"], card["name"]) == (True, "FLUX.2 Klein 9B Edit")
 
     r = owner.get(f"{API}/workflows/{key}/graph")
     assert r.status_code == 200, r.text
     assert r.json()["source"] == "file"
     assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
 
-    assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
+    assert (
+        owner.post(f"{API}/comfyui/workflows/{quote('nope.json')}/card").status_code
+        == 404
+    )
+
+
+def test_built_ins_are_listed_once_and_a_removed_one_stays_off(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Every built-in is on the Workflows page until the owner removes it:
+    start-up lists one never listed, never one taken off, and the card route
+    is the explicit way back."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    for name in (
+        "FLUX.2 Klein 9B Edit.json",
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image T2I (PixlStash).webp",
+    ):
+        shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+
+    klein, h3 = comfyui_module.list_builtin_workflows(hub)
+    cards = _by_key(_cards(owner))
+    assert cards[klein]["name"] == "FLUX.2 Klein 9B Edit"
+    assert cards[h3]["name"] == "MiniMax H3 Image T2I (PixlStash)"
+    # The picture shipped beside a built-in is its thumbnail, unpinned.
+    shipped = workflow_thumbnails.thumbnails(hub)
+    assert klein not in shipped
+    assert shipped[h3] == workflow_thumbnails.Thumbnail(
+        hashlib.sha256(
+            (builtin / "MiniMax H3 Image T2I (PixlStash).webp").read_bytes()
+        ).hexdigest(),
+        False,
+    )
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+
+    deleted = owner.delete(f"{API}/workflows/{h3}")
+    assert deleted.status_code == 200
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+    assert h3 not in _by_key(_cards(owner))
+
+    r = owner.post(
+        f"{API}/comfyui/workflows/{quote('MiniMax H3 Image T2I (PixlStash).json')}/card"
+    )
+    assert r.status_code == 200, r.text
+    back = r.json()["workflow_id"]
+    assert _by_key(_cards(owner))[back]["name"] == "MiniMax H3 Image T2I (PixlStash)"
+    relisted = comfyui_module.list_builtin_workflows(hub)
+    assert relisted == []
+
+
+def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The H3 Image text sheet hands its conditioning a 32×32 blank picture.
+    The sheet step sets every width and height default to the sheet's size, so
+    wrong if the blank's 32 is offered: it would be drawn at that size."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = comfyui_module.WORKFLOW_BUILTIN_DIR
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
+    )
+    owner = workflow_env.owner
+    r = owner.post(
+        f"{API}/comfyui/workflows/{quote('MiniMax H3 Image Sheet (PixlStash).json')}/card"
+    )
+    assert r.status_code == 200, r.text
+    sizes = {
+        (row["input_name"], row["value"])
+        for row in _detail(owner, r.json()["workflow_id"])["card"]["defaults"]
+        if row["input_name"] in ("width", "height")
+    }
+    # The canvas and the conditioning, both the sheet's size: 4K for H3 Image.
+    width, height = character_sheet.SIZES["4k"]
+    assert sizes == {("width", width), ("height", height)}
+
+
+def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if one unreadable file stops start-up, or every built-in after it."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(
+        os.path.join(
+            comfyui_module.WORKFLOW_BUILTIN_DIR, "MiniMax H3 Image T2I (PixlStash).json"
+        ),
+        builtin,
+    )
+    (builtin / "A-unreadable.json").write_text("{}")
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    real_load = comfyui_module._load_workflow_json
+
+    def load(path):
+        if path.endswith("A-unreadable.json"):
+            raise PermissionError(13, "Permission denied", path)
+        return real_load(path)
+
+    monkeypatch.setattr(comfyui_module, "_load_workflow_json", load)
+    hub = workflow_env.server.hub
+
+    (h3,) = comfyui_module.list_builtin_workflows(hub)
+    assert (
+        _by_key(_cards(workflow_env.owner))[h3]["name"]
+        == "MiniMax H3 Image T2I (PixlStash)"
+    )
+    # The card route answers it as a file it could not store, not a 500.
+    card = workflow_env.owner.post(
+        f"{API}/comfyui/workflows/{quote('A-unreadable.json')}/card"
+    )
+    assert card.status_code == 409, card.text
+
+
+def _shipped_builtin(tmp_path, monkeypatch, name: str):
+    """A built-in folder holding a copy of the shipped *name*, for a release
+    to change. Returns the copy's path."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir()
+    shutil.copy(os.path.join(comfyui_module.WORKFLOW_BUILTIN_DIR, name), builtin)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    return builtin / name
+
+
+def _ship_steps(path, steps: int) -> None:
+    """Release a new graph of the built-in edit workflow at *path*."""
+    graph = json.loads(path.read_text(encoding="utf-8"))
+    graph["75:62"]["inputs"]["steps"] = steps
+    path.write_text(json.dumps(graph), encoding="utf-8")
+
+
+def test_a_built_in_a_release_changed_is_updated_as_a_new_version(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a copy the owner never edited keeps the old graph after a
+    release changed the file, or gets it as a new workflow rather than a
+    version, or the graph it replaced cannot be gone back to."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "FLUX.2 Klein 9B Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    filed_steps = manual_document(hub, key)["75:62"]["inputs"]["steps"]
+
+    _ship_steps(path, filed_steps + 7)
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == filed_steps + 7
+    versions = workflow_versions.list_versions(hub, key)
+    assert [(v["version"], v["source"]) for v in versions] == [
+        (2, workflow_versions.FROM_RELEASE),
+        (1, "builtin"),
+    ]
+    assert versions[0]["reason"] == "updated with PixlStash"
+    earlier = workflow_versions.document_of(hub, key, 1)
+    assert earlier["75:62"]["inputs"]["steps"] == filed_steps
+    assert _by_key(_cards(workflow_env.owner))[key]["name"] == "FLUX.2 Klein 9B Edit"
+
+    # Idempotent: the next start finds the copy holding the file.
+    comfyui_module.list_builtin_workflows(hub)
+    assert len(workflow_versions.list_versions(hub, key)) == 2
+
+
+def test_a_built_in_the_owner_edited_keeps_their_graph_after_a_release(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if a release's file is stored over a copy the owner saved over:
+    their graph must stay the one that runs."""
+    path = _shipped_builtin(tmp_path, monkeypatch, "FLUX.2 Klein 9B Edit.json")
+    hub = workflow_env.server.hub
+    (key,) = comfyui_module.list_builtin_workflows(hub)
+    edited = manual_document(hub, key)
+    edited["75:62"]["inputs"]["steps"] = 41
+    comfyui_module.store_over_workflow(hub, key, edited, "mcp", expected_version=1)
+
+    _ship_steps(path, 42)
+    comfyui_module.list_builtin_workflows(hub)
+    assert manual_document(hub, key)["75:62"]["inputs"]["steps"] == 41
+    assert [v["source"] for v in workflow_versions.list_versions(hub, key)] == [
+        "mcp",
+        "builtin",
+    ]
+
+
+# The shipped built-in folder, read before a test points the route at a copy.
+REAL_BUILTIN_DIR = comfyui_module.WORKFLOW_BUILTIN_DIR
+
+
+def _fill_builtin_folder(builtin: Path, copies: dict[str, str]) -> None:
+    """Make *builtin* hold a copy of each shipped file in *copies*, and nothing else.
+
+    *copies* maps the name a file has in the folder to the shipped built-in it
+    is copied from, so one folder can hold a v2.0.1 name over a v2.0.2 graph.
+    """
+    for entry in builtin.iterdir():
+        entry.unlink()
+    for name, shipped in copies.items():
+        shutil.copy(os.path.join(REAL_BUILTIN_DIR, shipped), builtin / name)
+
+
+def _builtin_folder(tmp_path, monkeypatch, copies: dict[str, str]) -> Path:
+    """A built-in folder the routes read, filled from *copies*."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in"
+    builtin.mkdir(exist_ok=True)
+    _fill_builtin_folder(builtin, copies)
+    monkeypatch.setattr(comfyui_module, "WORKFLOW_BUILTIN_DIR", str(builtin))
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", str(builtin))],
+    )
+    return builtin
+
+
+def _v201_folder() -> dict[str, str]:
+    """The built-ins a v2.0.1 library filed: the renamed ones under their old
+    names, and the Edit that release shipped. The Edit's graph is stood in for
+    by the t2i one, since the retired file is no longer shipped to copy."""
+    copies = {old: new for old, new in comfyui_module.BUILTIN_RENAMES.items()}
+    copies["MiniMax-H3-Image-Edit.json"] = "MiniMax H3 Image T2I (PixlStash).json"
+    return copies
+
+
+def _v202_folder() -> dict[str, str]:
+    """The built-ins v2.0.2 ships that a v2.0.1 library had under other names."""
+    return {new: new for new in comfyui_module.BUILTIN_RENAMES.values()}
+
+
+def test_a_renamed_built_in_is_one_copy_under_its_new_name(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A library that filed the v2.0.1 names gets each built-in once, under its
+    new name, with the same workflow. Wrong if a rename files a second copy,
+    if the old name's card survives, or if a second start files anything."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    filed = comfyui_module.list_builtin_workflows(hub)
+    cards = _by_key(_cards(owner))
+    before = {cards[wid]["name"]: wid for wid in filed}
+    assert set(before) == {
+        comfyui_module._stem(old)
+        for old in [*comfyui_module.BUILTIN_RENAMES, "MiniMax-H3-Image-Edit.json"]
+    }
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    cards = _by_key(_cards(owner))
+    names = [card["name"] for card in cards.values()]
+    for old, new in comfyui_module.BUILTIN_RENAMES.items():
+        wid = before[comfyui_module._stem(old)]
+        assert cards[wid]["name"] == comfyui_module._stem(new)
+        assert names.count(comfyui_module._stem(new)) == 1
+        assert comfyui_module._stem(old) not in names
+    # The second start changes nothing.
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _by_key(_cards(owner)) == cards
+
+
+def test_a_built_in_removed_before_the_rename_stays_removed(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The owner took a built-in off the page in v2.0.1. Its record is dismissed,
+    and the rename must not bring it back under the new name. Wrong if the new
+    name gets a live card."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    filed = comfyui_module.list_builtin_workflows(hub)
+    wid = next(
+        w
+        for w in filed
+        if _by_key(_cards(owner))[w]["name"] == "Sheet-MiniMax-H3-Image"
+    )
+    assert owner.delete(f"{API}/workflows/{wid}").status_code == 200
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert wid not in _by_key(_cards(owner))
+    assert not any(
+        card["name"] == "MiniMax H3 Image Sheet (PixlStash)"
+        for card in _cards(owner)["cards"]
+    )
+
+
+def test_a_built_in_the_owner_renamed_keeps_their_name(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if the rename overwrites a name the owner chose."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    (wid,) = [
+        w
+        for w in comfyui_module.list_builtin_workflows(hub)
+        if _by_key(_cards(owner))[w]["name"] == "Flux2-Klein-Image-Edit"
+    ]
+    assert (
+        owner.patch(f"{API}/workflows/{wid}", json={"name": "My klein"}).status_code
+        == 200
+    )
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _by_key(_cards(owner))[wid]["name"] == "My klein"
+    assert workflow_origin.stored_at(hub, "builtin", "FLUX.2 Klein 9B Edit.json") == wid
+
+
+def test_a_built_in_the_owner_edited_keeps_its_graph_through_the_rename(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if the rename or the refresh that follows it replaces the owner's
+    graph. Its name still says the old stem, so the name does move."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(tmp_path, monkeypatch, _v201_folder())
+    (wid,) = [
+        w
+        for w in comfyui_module.list_builtin_workflows(hub)
+        if _by_key(_cards(owner))[w]["name"] == "Flux2-Klein-Image-Edit"
+    ]
+    edited = manual_document(hub, wid)
+    edited["75:62"]["inputs"]["steps"] = 41
+    comfyui_module.store_over_workflow(hub, wid, edited, "mcp", expected_version=1)
+
+    _fill_builtin_folder(builtin, _v202_folder())
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert manual_document(hub, wid)["75:62"]["inputs"]["steps"] == 41
+    assert _by_key(_cards(owner))[wid]["name"] == "FLUX.2 Klein 9B Edit"
+    assert [v["source"] for v in workflow_versions.list_versions(hub, wid)] == [
+        "mcp",
+        "builtin",
+    ]
+
+
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "MiniMax-H3-Image-Edit.json",
+        "MiniMax-H3-Image-Edit-nvfp4-TE.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+    ],
+)
+def test_a_retired_built_in_is_hidden_once_and_an_unhide_sticks(
+    workflow_env, tmp_path, monkeypatch, retired
+):
+    """A retired built-in the owner never edited is hidden when a release stops
+    shipping it: the Edit and the NVFP4 text-encoder twins. Wrong if a later
+    start hides it again over the owner's choice to show it, or if it is hidden
+    before the release retires it."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {retired: "MiniMax H3 Image T2I (PixlStash).json"},
+    )
+    (wid,) = comfyui_module.list_builtin_workflows(hub)
+    assert _detail(owner, wid)["hidden"] is False
+
+    _fill_builtin_folder(builtin, {})
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is True
+
+    assert (
+        owner.patch(f"{API}/workflows/{wid}", json={"hidden": False}).status_code == 200
+    )
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is False
+
+
+def test_a_retired_built_in_the_owner_edited_is_left_on_the_page(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Wrong if an edited copy is hidden: its graph is the owner's work."""
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"MiniMax-H3-Image-Edit.json": "MiniMax H3 Image T2I (PixlStash).json"},
+    )
+    (wid,) = comfyui_module.list_builtin_workflows(hub)
+    edited = manual_document(hub, wid)
+    edited["6"]["inputs"]["prompt"] = "the owner's words"
+    comfyui_module.store_over_workflow(hub, wid, edited, "mcp", expected_version=1)
+
+    _fill_builtin_folder(builtin, {})
+    assert comfyui_module.list_builtin_workflows(hub) == []
+    assert _detail(owner, wid)["hidden"] is False
+    assert manual_document(hub, wid)["6"]["inputs"]["prompt"] == "the owner's words"
+
+
+def test_a_built_in_whose_store_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """A hub write can raise sqlite3.Error. Wrong if that one built-in ends the
+    start-up pass, so every one after it is never listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {
+            "A-broken.json": "MiniMax H3 Image T2I (PixlStash).json",
+            "B-listed.json": "FLUX.2 Klein 9B Edit.json",
+        },
+    )
+    real_store = comfyui_module.store_builtin_workflow
+
+    def store(hub_, name, path):
+        if name == "A-broken.json":
+            raise sqlite3.OperationalError("database is locked")
+        return real_store(hub_, name, path)
+
+    monkeypatch.setattr(comfyui_module, "store_builtin_workflow", store)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "B-listed"
+    assert [r for r in caplog.records if "A-broken.json" in r.getMessage()]
+
+
+def test_a_rename_that_fails_on_the_hub_is_logged_and_the_built_ins_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """Moving a renamed built-in's record can raise sqlite3.Error. Wrong if
+    that ends the start-up pass, so no built-in is listed, or if it is not logged."""
+    hub = workflow_env.server.hub
+    _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    old = next(iter(comfyui_module.BUILTIN_RENAMES))
+
+    def rename(hub_, old_, new_):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "_rename_builtin", rename)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == "FLUX.2 Klein 9B Edit"
+    assert [r for r in caplog.records if old in r.getMessage()]
+
+
+def test_a_built_in_whose_refresh_fails_on_the_hub_is_logged_and_the_rest_listed(
+    workflow_env, tmp_path, monkeypatch, caplog
+):
+    """The refresh of a filed built-in can raise sqlite3.Error too. Wrong if
+    the next built-in in the folder is never filed."""
+    hub = workflow_env.server.hub
+    builtin = _builtin_folder(
+        tmp_path,
+        monkeypatch,
+        {"FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json"},
+    )
+    comfyui_module.list_builtin_workflows(hub)
+    _fill_builtin_folder(
+        builtin,
+        {
+            "FLUX.2 Klein 9B Edit.json": "FLUX.2 Klein 9B Edit.json",
+            "MiniMax H3 Image T2I (PixlStash).json": "MiniMax H3 Image T2I (PixlStash).json",
+        },
+    )
+
+    def refresh(hub_, name, path):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module, "refresh_builtin_workflow", refresh)
+    with caplog.at_level(logging.WARNING, logger=comfyui_module.logger.name):
+        (filed,) = comfyui_module.list_builtin_workflows(hub)
+    assert _by_key(_cards(workflow_env.owner))[filed]["name"] == (
+        "MiniMax H3 Image T2I (PixlStash)"
+    )
+    assert [r for r in caplog.records if "FLUX.2 Klein 9B Edit.json" in r.getMessage()]
 
 
 def _builtin_edit_graph(steps: int) -> dict:
     """The built-in edit workflow with its own step count: not a copy of it."""
     path = os.path.join(
-        comfyui_module.WORKFLOW_BUILTIN_DIR, "Flux2-Klein-Image-Edit.json"
+        comfyui_module.WORKFLOW_BUILTIN_DIR, "FLUX.2 Klein 9B Edit.json"
     )
     with open(path, encoding="utf-8") as handle:
         graph = json.load(handle)
@@ -13352,6 +13849,262 @@ def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
 
 
+def _parallel_branches_document(titled: bool = False) -> dict:
+    """Two same-shaped KSampler branches and one that differs, all of one class.
+
+    Branches 2 and 4 are topologically identical, so their KSampler nodes share
+    a slot label and only their widget values tell them apart. Branch 6 ends in
+    an extra scale, so its KSampler has a label of its own.
+    """
+    document = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["4", 0], "filename_prefix": "b"},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 3, "steps": 30, "cfg": 6.5},
+        },
+        "7": {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["6", 0],
+                "upscale_method": "nearest-exact",
+                "width": 512,
+                "height": 512,
+                "crop": "disabled",
+            },
+        },
+        "8": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["7", 0], "filename_prefix": "c"},
+        },
+    }
+    if titled:
+        for node_id, node in document.items():
+            node["_meta"] = {"title": f"Branch {node_id}"}
+    return document
+
+
+def _parallel_label(document: dict, node_id: str) -> str:
+    """A node's slot label, read off the stored form (model names by reference).
+
+    A label is topology alone, so the widget spelling does not change it; the
+    reduction only wants every model name as a reference.
+    """
+    stored = json.loads(json.dumps(document))
+    for node in stored.values():
+        for name, value in node.get("inputs", {}).items():
+            if isinstance(value, str) and value.endswith(".safetensors"):
+                node["inputs"][name] = asset_reference(value)
+    return topology_node_labels(stored)[node_id]
+
+
+def _run_parallel_branches(runnable, monkeypatch, document, values=()) -> dict:
+    """Run *document* as a manual workflow and return the graph ComfyUI gets."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["ImageScale"] = {
+        "input": {
+            "required": {
+                "image": ["IMAGE", {}],
+                "upscale_method": [["nearest-exact"], {}],
+                "width": ["INT", {}],
+                "height": ["INT", {}],
+                "crop": [["disabled"], {}],
+            }
+        }
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    manual = create_manual_workflow(
+        runnable.server.hub, "Parallel branches", document, "import"
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": manual, "values": list(values)},
+    )
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert not group["reasons"], group
+    return runnable.submitted[-1]["graph"]
+
+
+@pytest.mark.parametrize("titled", [False, True])
+def test_parallel_branches_of_one_class_keep_their_own_values(
+    runnable, monkeypatch, titled
+):
+    """Same-class nodes in parallel branches each keep their stored value (#1622).
+
+    The default recipe reads one value per slot label, and branches 2 and 4
+    share a label. Before the fix the recipe's one value landed on both; the
+    titles must not change that either way.
+    """
+    graph = _run_parallel_branches(
+        runnable, monkeypatch, _parallel_branches_document(titled)
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def test_a_run_value_for_one_slot_changes_only_the_node_it_names(runnable, monkeypatch):
+    """A slot label only one node carries reaches only that node."""
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "6")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        99,
+    ]
+
+
+def test_a_run_value_for_a_label_two_nodes_share_is_applied_to_neither(
+    runnable, monkeypatch
+):
+    """The label names no single node, so neither keeps a value it was not given.
+
+    Both nodes keep their own steps, and the request is logged as matching no
+    settable input rather than copied over the pair.
+    """
+    document = _parallel_branches_document()
+    label = _parallel_label(document, "2")
+    graph = _run_parallel_branches(
+        runnable,
+        monkeypatch,
+        document,
+        [{"slot_label": label, "input_name": "steps", "value": 99}],
+    )
+    assert [graph[node]["inputs"]["steps"] for node in ("2", "4", "6")] == [
+        20,
+        25,
+        30,
+    ]
+
+
+def _two_model_branches() -> dict:
+    """Two identical UNET branches, each loading a different model."""
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": _ZIMAGE_UNET}},
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "seed": 1, "steps": 20, "cfg": 6.5},
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["2", 0], "filename_prefix": "a"},
+        },
+        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": _KREA_UNET}},
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["4", 0], "seed": 2, "steps": 25, "cfg": 6.5},
+        },
+        "6": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["5", 0], "filename_prefix": "b"},
+        },
+    }
+
+
+@pytest.fixture
+def model_branches(runnable, monkeypatch):
+    """The two-branch graph as a manual workflow, its two models on the shelf."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["UNETLoader"] = {
+        "input": {"required": {"unet_name": [[_ZIMAGE_UNET, _KREA_UNET], {}]}}
+    }
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
+    hub = runnable.server.hub
+    with hub.transaction() as conn:
+        for filename, base_model in (
+            (_ZIMAGE_UNET, "Z-Image Turbo"),
+            (_KREA_UNET, "Krea 2"),
+        ):
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, base_model, "
+                "provenance) VALUES ('checkpoint', ?, ?, ?, 'scanned')",
+                (filename, _h(filename), base_model),
+            )
+    manual = create_manual_workflow(
+        hub, "Two model branches", _two_model_branches(), "import"
+    )
+    yield SimpleNamespace(runnable=runnable, manual=manual)
+    delete_manual_workflow(hub, manual)
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model WHERE filename IN (?, ?)", (_ZIMAGE_UNET, _KREA_UNET)
+        )
+
+
+def test_two_loaders_of_one_model_keep_their_own_files(model_branches):
+    """The default recipe's one model for a shared address goes to neither loader.
+
+    Both the run and the export apply the default recipe; the export is the
+    path that writes its models from the recipe (``_export_default_recipe``).
+    """
+    runnable = model_branches.runnable
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_id": model_branches.manual}
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+    r = runnable.owner.get(f"{API}/workflows/{model_branches.manual}/export")
+    assert r.status_code == 200, r.text
+    exported = r.json()["workflow"]
+    assert (
+        exported["1"]["inputs"]["unet_name"],
+        exported["4"]["inputs"]["unet_name"],
+    ) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
+def test_a_run_model_for_a_shared_address_is_applied_to_neither_loader(model_branches):
+    """A model the request names by an address two loaders share is not copied."""
+    runnable = model_branches.runnable
+    label = _parallel_label(_two_model_branches(), "1")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": model_branches.manual,
+            "models": [{"address": f"{label}/unet_name", "filename": _KREA_UNET}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[-1]["graph"]
+    assert (graph["1"]["inputs"]["unet_name"], graph["4"]["inputs"]["unet_name"]) == (
+        _ZIMAGE_UNET,
+        _KREA_UNET,
+    )
+
+
 def test_one_input_named_two_ways_takes_the_later_value(runnable):
     """A saved recipe's core-addressed override must not beat a request's slot label."""
     core = {"slot_label": _core_address("3", "steps").rpartition("/")[0]}
@@ -13624,10 +14377,18 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
     )
     group = r.json()["groups"][0]
+    # Every graph is offered the generic prompt assist, off by default.
+    assist = group["prompt"].pop("assist")
+    assert (assist["presets"], assist["default_on"]) == ("_default", False)
     assert group["prompt"] == {
         "positive_settable": True,
         "negative_settable": False,
         "positive_text": "the saved prompt",
+        "enhancer": False,
+        "enhancer_on": False,
+        "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
     }
     assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     # A negative this graph has no node for is said before the run (#1832).
@@ -13639,6 +14400,408 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     assert {"code": "prompt_not_applied", "side": "negative"} in (
         r.json()["groups"][0]["flags"]
     )
+
+
+def test_a_run_can_go_without_the_prompt_enhancer(runnable):
+    """`enhance_prompt: false` hands the prompt to the encoder as written and
+    takes the enhancer out, so its model is never loaded; left out, the
+    enhancer rewrites it as before. Wrong if either run sends the other's graph."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document.update(
+        {
+            "5": {"class_type": "CLIPTextEncode", "inputs": {"text": ["23", 0]}},
+            "20": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen.st"}},
+            "21": {
+                "class_type": "StringReplace",
+                "inputs": {
+                    "string": "Expand this: {input text}",
+                    "find": "{input text}",
+                    "replace": "the saved prompt",
+                },
+            },
+            "22": {
+                "class_type": "TextGenerateV2",
+                "inputs": {"clip": ["20", 0], "prompt": ["21", 0]},
+            },
+            "23": {
+                "class_type": "JsonExtractString",
+                "inputs": {"json_string": ["22", 0], "key": "expanded_caption"},
+            },
+        }
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    for class_type in ("CLIPTextEncode", "StringReplace", "JsonExtractString"):
+        info[class_type] = {"input": {"required": {}}}
+    info["TextGenerateV2"] = {"input": {"required": {"clip": ["CLIP", {}]}}}
+    info["CLIPLoader"] = {"input": {"required": {"clip_name": [["qwen.st"], {}]}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    for enhance in (None, True):
+        body = asked if enhance is None else {**asked, "enhance_prompt": enhance}
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+        sent = runnable.submitted.pop()["graph"]
+        assert sent["5"]["inputs"]["text"] == ["23", 0]
+        assert sent["21"]["inputs"]["replace"] == "a lighthouse at dusk"
+        assert {"20", "21", "22", "23"} <= set(sent)
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    # Still said, so the Run popup keeps the switch it was turned off with.
+    assert r.json()["groups"][0]["prompt"]["enhancer"] is True
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    assert not {"20", "21", "22", "23"} & set(sent)
+    assert extract_generation_info(sent)["positive_prompt"] == ("a lighthouse at dusk")
+    # The pre-flight judges the graph that would run: no enhancer model.
+    del info["CLIPLoader"]
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "enhance_prompt": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
+
+
+def _assist_runnable(runnable, family):
+    """RUN_DOCUMENT with a literal prompt, read as a graph of *family*."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document["5"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "the saved prompt"},
+    }
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CLIPTextEncode"] = {"input": {"required": {}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    if family is not None:
+        # Which family a graph is, is `run_family`'s (test_prompt_assist.py).
+        runnable.monkeypatch.setattr(
+            workflows_routes, "run_family", lambda hub, graph: family
+        )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+
+
+def test_the_prompt_assist_is_off_unless_asked_and_on_by_default_only_for_h3(runnable):
+    """Absent is off: the prompt goes byte for byte. Every graph is offered
+    it: SDXL (no file of its own; an unknown or mixed family reads the same)
+    gets the generic presets, off by default; MiniMax H3 Image its own, on."""
+    _assist_runnable(runnable, None)
+    asked = {
+        "workflow_id": RUN_WF,
+        "prompt": "A woman.",
+        "seed_mode": "fixed",
+        "seed": 1,
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "_default",
+        False,
+        False,
+    )
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman."
+    assert "_meta" not in sent["5"]
+    # Asked for, the generic presets apply like any other.
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "prompt_assist": {}})
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is True
+    runnable.submitted.pop()
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["presets"], assist["default_on"], assist["applied"]) == (
+        "minimax_h3_image",
+        True,
+        False,
+    )
+    assert assist["parts"] == []
+    assert [c["id"] for c in assist["categories"]] == ["camera", "light", "skin"]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == "A woman."
+
+
+def test_the_sheet_look_rides_in_a_preflight_with_no_prompt(runnable):
+    """The sheet step's check asks for the Photo look with no prompt of its
+    own, in the same pre-flight as the workflow's other checks. It answers
+    with the catalogue and submits nothing."""
+    _assist_runnable(runnable, None)
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_id": RUN_WF,
+            "count": 1,
+            "prompt_assist": {"context": "sheet", "on": True, "choices": {}},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert assist["context"] == "sheet"
+    assert assist["categories"], assist
+    assert not runnable.submitted
+
+
+def test_a_json_layout_prompt_is_never_given_the_prompt_assist(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    layout = '{"summary": {"caption": "a sheet"}}'
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "prompt": layout, "prompt_assist": {}},
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert group["prompt"]["assist"]["applied"] is False
+    assert {"code": "prompt_assist_not_applied", "why": "layout_prompt"} in group[
+        "flags"
+    ]
+    assert runnable.submitted.pop()["graph"]["5"]["inputs"]["text"] == layout
+    # The choices are still checked: a bad one is refused as on a prose prompt.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": layout,
+            "prompt_assist": {"choices": {"lens": "none"}},
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_blank_prompt_near_the_limit_is_not_refused_for_lines_it_never_gets(runnable):
+    """The tail is only written after words, so a blank prompt counts as is."""
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "prompt": " " * (MAX_PROMPT_LENGTH - 5),
+            "prompt_assist": {},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["assist"]["applied"] is False
+    runnable.submitted.pop()
+
+
+def test_the_prompt_assist_writes_its_parts_after_the_words_and_stamps_them(runnable):
+    _assist_runnable(runnable, "minimax_h3_image")
+    asked = {"workflow_id": RUN_WF, "seed_mode": "fixed", "seed": 1}
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            **asked,
+            "prompt": "A woman.",
+            "prompt_assist": {
+                "choices": {"skin": "none", "light": {"text": "a photorealistic lamp"}}
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assist = group["prompt"]["assist"]
+    assert assist["applied"] is True
+    assert [(p["category"], p["kind"], p["id"]) for p in assist["parts"]] == [
+        ("camera", "choice", "phone_snapshot"),
+        ("light", "choice", None),
+        ("camera", "finish", "phone_snapshot"),
+    ]
+    assert assist["parts"][1]["text"] == "a photorealistic lamp."
+    assert group["prompt"]["positive_text"] == "the saved prompt"
+    assert {
+        "code": "prompt_assist_render_words",
+        "category": "light",
+        "words": ["photorealistic"],
+    } in group["flags"]
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["5"]["inputs"]["text"] == "A woman. " + " ".join(
+        p["text"] for p in assist["parts"]
+    )
+    assert sent["5"]["_meta"]["pixlstash_prompt_assist"]["parts"] == assist["parts"]
+    assert extract_generation_info(sent)["positive_prompt"] == "A woman."
+    # No words to add to: nothing is written, byte for byte, and it is said.
+    graphs = []
+    for extra in ({}, {"prompt_assist": {}}):
+        r = runnable.owner.post(f"{API}/workflows/run", json={**asked, **extra})
+        assert r.status_code == 200, r.text
+        graphs.append(runnable.submitted.pop()["graph"])
+    assert graphs[0] == graphs[1]
+    assert {"code": "prompt_assist_not_applied", "why": "no_prompt"} in r.json()[
+        "groups"
+    ][0]["flags"]
+    # Off, in the sheet context: that context's catalogue, nothing added.
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            **asked,
+            "prompt": "x",
+            "prompt_assist": {"context": "sheet", "on": False},
+        },
+    )
+    assist = r.json()["groups"][0]["prompt"]["assist"]
+    assert (assist["context"], assist["applied"]) == ("sheet", False)
+    assert assist["categories"][0]["options"][0]["id"] == "agency_digitals"
+    assert r.json()["groups"][0]["flags"] == []
+
+
+@pytest.mark.parametrize(
+    "prompt_assist, loc",
+    [
+        ({"choices": {"lens": "none"}}, ["body", "prompt_assist", "choices", "lens"]),
+        (
+            {"choices": {"camera": {"id": "webcam"}}},
+            ["body", "prompt_assist", "choices", "camera"],
+        ),
+    ],
+)
+def test_a_prompt_assist_choice_the_family_lacks_is_a_422(runnable, prompt_assist, loc):
+    _assist_runnable(runnable, "minimax_h3_image")
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": prompt_assist},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"][0]["loc"] == loc
+
+
+def test_a_prompt_assist_body_is_checked_at_the_door(runnable):
+    for body in (
+        {"choices": {"camera": {"text": "x" * 401}}},
+        {"choices": {"camera": {"id": "a", "text": "b"}}},
+        {"choices": {"Camera!": "none"}},
+        {"context": "video"},
+    ):
+        r = runnable.owner.post(
+            f"{API}/workflows/run/preflight",
+            json={"workflow_id": RUN_WF, "prompt": "x", "prompt_assist": body},
+        )
+        assert r.status_code == 422, body
+
+
+def test_a_run_can_go_without_the_blank_picture(runnable):
+    """`blank_picture: false` takes the blank picture off the conditioning's
+    image input and the prompt goes in as written; left out, the graph runs as
+    saved. The answer says there is one either way, so the switch stays drawn."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["positive"] = ["5", 0]
+    document.update(
+        {
+            "5": {
+                "class_type": "MiniMaxH3ImageConditioning",
+                "inputs": {
+                    "clip": ["1", 1],
+                    "prompt": "the saved prompt",
+                    "images.image_1": ["20", 0],
+                },
+            },
+            "20": {
+                "class_type": "EmptyImage",
+                "inputs": {"width": 512, "height": 512, "batch_size": 1, "color": 0},
+            },
+        }
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["MiniMaxH3ImageConditioning"] = {
+        "input": {
+            "required": {"clip": ["CLIP", {}], "prompt": ["STRING", {}]},
+            "optional": {"images.image_1": ["IMAGE", {}]},
+        }
+    }
+    info["EmptyImage"] = {
+        "input": {
+            "required": {
+                "width": ["INT", {}],
+                "height": ["INT", {}],
+                "batch_size": ["INT", {}],
+                "color": ["INT", {}],
+            }
+        }
+    }
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    for blank in (None, True):
+        body = asked if blank is None else {**asked, "blank_picture": blank}
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        assert r.json()["groups"][0]["prompt"]["blank_picture"] is True
+        sent = runnable.submitted.pop()["graph"]
+        assert sent["5"]["inputs"]["images.image_1"] == ["20", 0]
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={**asked, "blank_picture": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert r.json()["groups"][0]["prompt"]["blank_picture"] is True
+    sent = runnable.submitted.pop()["graph"]
+    assert "images.image_1" not in sent["5"]["inputs"]
+    assert sent["5"]["inputs"]["prompt"] == "a lighthouse at dusk"
+    # The pre-flight judges the graph that would run, and says nothing is missing.
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "blank_picture": False}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
+
+
+def test_a_run_can_sample_with_euler_where_lcm_meets_a_picture(runnable):
+    """`sampler: "euler"` samples the run's copy with Euler where the graph
+    samples with LCM and takes a picture; the pre-flight says the choice is
+    offered and what the run samples with. Left out, or "lcm", the graph runs
+    as saved. A text-to-image graph is not offered and ignores it."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["sampler_name"] = "lcm"
+    document["6"] = {"class_type": "LoadImage", "inputs": {"image": "a.png"}}
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoadImage"] = {"input": {"required": {"image": [["a.png"], {}]}}}
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(document), RUN_INSTANCE),
+        )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    asked = {"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"}
+    r = runnable.owner.post(f"{API}/workflows/run", json=asked)
+    assert r.status_code == 200, r.text
+    prompt = r.json()["groups"][0]["prompt"]
+    assert (prompt["sampler_choice"], prompt["sampler"]) == (True, "lcm")
+    assert runnable.submitted.pop()["graph"]["3"]["inputs"]["sampler_name"] == "lcm"
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "sampler": "euler"})
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["prompt"]["sampler"] == "euler"
+    sent = runnable.submitted.pop()["graph"]
+    assert sent["3"]["inputs"]["sampler_name"] == "euler"
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={**asked, "sampler": "euler"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == []
+    r = runnable.owner.post(f"{API}/workflows/run", json={**asked, "sampler": "warp"})
+    assert r.status_code == 422, r.text
 
 
 def test_more_runs_than_one_request_starts_are_refused(runnable):
@@ -14497,6 +15660,13 @@ def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
         "negative_settable": False,
         "positive_text": "the saved prompt",
         "unplaced": [],
+        "enhancer": False,
+        "enhancer_on": False,
+        "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
+        "recorded": None,
+        "assist_applied": False,
     }
 
 
@@ -14527,6 +15697,13 @@ def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
         "negative_settable": False,
         "positive_text": None,
         "unplaced": ["positive"],
+        "enhancer": False,
+        "enhancer_on": False,
+        "blank_picture": False,
+        "sampler_choice": False,
+        "sampler": None,
+        "recorded": None,
+        "assist_applied": False,
     }
     assert "positive prompt was not applied" in caplog.text
     # Nothing was sent, so nothing is unplaced: only the popup needs telling.
@@ -15533,14 +16710,22 @@ def test_a_peak_that_filled_the_room_it_had_fits_that_room_again():
     assert vram_history._need([row(10000, total), filled], None) == int(
         10000 * vram_history.COMFYUI_PEAK_MARGIN
     )
-    # A larger run is judged against proportionally more room, never the
-    # smaller room the measured run had: 5 GB filling 6 GB at 1 MP, run at
-    # 1.5 MP, had 9 GB of room, not 6.
+    # A larger run asks for no more than the room the measured run finished
+    # in: ComfyUI moves weights out to RAM to make room, so a need scaled
+    # past that room only makes the run wait. 5 GB filling 6 GB at 1 MP, run
+    # at 1.5 MP, asks for those 6 GB.
     sized = {**row(5000, 6000), "pixels": 1_000_000}
-    assert vram_history._need([sized], 1_500_000) == 9000 - margin
-    # Scaled past the card, the room is the card.
+    assert vram_history._need([sized], 1_500_000) == 6000 - margin
+    # A 5K sheet that peaked at 30 GB in 31.5 GB of room, drawn at 6K (1.4x
+    # the pixels): it fits beside the same 1.1 GB of other apps, where the
+    # whole card less the margin never came free and the run waited for ever.
+    five_k, six_k = 5280 * 3168, 6240 * 3744
+    sheet = {**row(30000, total - 1100), "pixels": five_k}
+    assert vram_history._need([sheet], six_k) == total - 1100 - margin
+    assert vram_history._need([sheet], six_k) <= budget(1100)
+    # Scaled past the card, the room is still the room it had.
     big = {**sized, "peak_mb": 25000, "room_mb": 25050}
-    assert vram_history._need([big], 1_500_000) == total - margin
+    assert vram_history._need([big], 1_500_000) == 25050 - margin
     # Rows with no recorded room keep the largest need, as before the column.
     legacy = [row(total - 100, None), row(22000, None)]
     assert vram_history._need(legacy, None) == total - margin
@@ -25266,6 +26451,88 @@ def test_a_graph_saved_with_pixlstashs_own_checkpoint_loader_still_names_it(
             conn.execute(
                 "UPDATE model_file SET state = 'present' WHERE model_id = ?",
                 (env.checkpoint,),
+            )
+
+
+def test_a_digest_vae_nobody_has_yet_is_still_the_workflows_vae_row(with_pack):
+    """A built-in can load its VAE through the pack's digest loader before
+    anybody has downloaded the file. Its model row names the file the
+    template list links under that digest, the name the pre-flight reports it
+    missing by, so the Workflow tab can match the two and offer the download.
+
+    Wrong if the default recipe has no VAE row (the tab then reads "From the
+    checkpoint"), or its row names a file the pre-flight does not.
+    """
+    env = with_pack
+    # A ComfyUI that has the stock VAE nodes and no VAE file at all.
+    info = {
+        **json.loads(json.dumps(CHAIN_OBJECT_INFO)),
+        **PACK_OBJECT_INFO,
+        "VAELoader": {
+            "input": {"required": {"vae_name": [[], {}]}},
+            "output": ["VAE"],
+        },
+        "VAEDecode": {
+            "input": {"required": {"samples": ["LATENT", {}], "vae": ["VAE", {}]}},
+            "output": ["IMAGE"],
+        },
+    }
+    env.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (info, None)
+    )
+    listed = next(
+        entry
+        for template in load_templates()["templates"]
+        for entry in template.get("files") or []
+        if entry.get("directory") == "vae"
+        and entry.get("sha256")
+        and digest_source(entry["sha256"])
+    )
+    digest = listed["sha256"]
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["9"] = {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": digest}}
+    graph["10"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["9", 0]},
+    }
+    graph["4"]["inputs"]["images"] = ["10", 0]
+    hub = env.server.hub
+    manual = workflows_routes.store_manual_workflow(hub, "Digest VAE", graph, "import")
+
+    models = _detail(env.owner, manual)["card"]["default_recipe"]["models"]
+    vae = [m for m in models if m["kind"] == "vae"]
+    assert [m["filename"] for m in vae] == [digest_source(digest)["name"]], models
+    assert vae[0]["address"].endswith("/vae_name")
+    missing = [
+        model["file"]
+        for group in _preflight(env.owner, workflow_id=manual)["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert vae[0]["filename"] in missing, missing
+
+    # A digest the list does not link names no file: it stays the pack's.
+    unlisted = {"9": {**graph["9"], "inputs": {"vae_sha256": "0" * 64}}}
+    assert with_stock_loaders(hub, unlisted) == unlisted
+
+    # Nor where the shelf knows that name under another digest: the run's
+    # shelf swap finds a file by name and would load that one instead.
+    loader = {"9": graph["9"]}
+    assert with_stock_loaders(hub, loader)["9"]["class_type"] == "VAELoader"
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('vae', ?, ?, 'scanned')",
+            (listed["name"].upper(), _h("another-vae-of-that-name")),
+        )
+    try:
+        assert with_stock_loaders(hub, loader) == loader
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE sha256 = ?",
+                (_h("another-vae-of-that-name"),),
             )
 
 

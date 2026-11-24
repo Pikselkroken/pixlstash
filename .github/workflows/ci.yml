@@ -550,6 +550,7 @@ jobs:
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
+          tests/test_finder_pixel_budget.py
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
@@ -637,6 +638,7 @@ jobs:
           tests/test_process_teardown.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
+          tests/test_prompt_assist.py
           tests/test_prompt_match.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
@@ -655,6 +657,7 @@ jobs:
           tests/test_scrapheap_retention.py
           tests/test_security_supported_versions.py
           tests/test_server.py
+          tests/test_server_config_encoding.py
           tests/test_share_copies.py
           tests/test_share_link_library_pin.py
           tests/test_sidebar_counts_query_cost.py

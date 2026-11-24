@@ -4,6 +4,7 @@ from abc import ABC, ABCMeta, abstractmethod
 from typing import TYPE_CHECKING, Callable, Optional
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.worker_config import UNKNOWN_PICTURE_PIXELS
 
 if TYPE_CHECKING:
     from pixlstash.tasks.base_task import BaseTask
@@ -54,7 +55,9 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         self._last_check_at = now
         return True
 
-    def _filter_and_claim(self, pictures, batch_limit: int) -> list:
+    def _filter_and_claim(
+        self, pictures, batch_limit: int, pixel_budget: Optional[int] = None
+    ) -> list:
         """Return up to *batch_limit* pictures whose IDs are not yet claimed.
 
         Atomically marks the returned IDs as claimed.  The caller is
@@ -64,6 +67,11 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         Args:
             pictures: Candidate picture objects (must expose an ``id`` attr).
             batch_limit: Maximum number of pictures to include in one task.
+            pixel_budget: Optional cap on the batch's summed recorded
+                ``width * height``. The batch stops before the picture that
+                would pass it, but always takes its first picture, so an
+                oversized one still runs, alone. A picture with no recorded
+                dimensions counts as ``UNKNOWN_PICTURE_PIXELS`` (#2750).
 
         Pictures whose image file cannot be decoded (issue #585) are excluded
         here, at the one point every batch finder claims through, so a corrupt
@@ -79,6 +87,7 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
         database = getattr(self, "_db", None)
         registry = getattr(database, "unprocessable_images", None)
         selected = []
+        pixels = 0
         with self._claim_lock:
             for picture in pictures:
                 picture_id = getattr(picture, "id", None)
@@ -86,6 +95,15 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
                     continue
                 if registry is not None and registry.is_suppressed(picture_id):
                     continue
+                if pixel_budget is not None:
+                    width = getattr(picture, "width", None)
+                    height = getattr(picture, "height", None)
+                    size = (
+                        width * height if width and height else UNKNOWN_PICTURE_PIXELS
+                    )
+                    if selected and pixels + size > pixel_budget:
+                        break
+                    pixels += size
                 self._claimed_picture_ids.add(picture_id)
                 selected.append(picture)
                 if len(selected) >= batch_limit:

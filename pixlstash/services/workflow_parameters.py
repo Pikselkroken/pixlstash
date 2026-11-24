@@ -42,6 +42,11 @@ _NOT_PICTURE_BATCH_CLASSES = frozenset(
         "SV3D_BatchSchedule",
     }
 )
+# Nodes that make a blank picture. Their width and height are that picture's,
+# handed to a model as a picture input (MiniMax H3 Image's text sheet gives
+# its conditioning one), so they are a setting only when they size the run
+# (`size_inputs`): a run that sets every size must not grow the blank too.
+BLANK_PICTURE_CLASSES = frozenset({"EmptyImage"})
 # Loaders that carry their own empty latent (Efficiency Nodes), for the name
 # rule; with ComfyUI's answer they are found by their LATENT output.
 _LATENT_LOADER_CLASSES = frozenset({"Efficient Loader", "Eff. Loader SDXL"})

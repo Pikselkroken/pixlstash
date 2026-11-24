@@ -52,6 +52,11 @@ CHECK_INTERVAL_SECONDS = 60 * 60
 #: pollute exactly the cohorts this exists to measure.
 _SUPPRESS_ENV_VARS = ("PYTEST_CURRENT_TEST", "CI", "PIXLSTASH_DEMO_MODE")
 
+#: Serialises "is a ping due?" with the attempt that answers it. Two senders run
+#: in one process: the hourly loop and the immediate send when the owner opts
+#: in. Without this both can see the day as unsent and ping twice.
+_SEND_LOCK = threading.Lock()
+
 
 def _state_path(server_config_path: str) -> str:
     """Path of the last-sent marker, beside the server config."""
@@ -225,6 +230,25 @@ def send_install_ping(
     return ok
 
 
+def send_if_due(server_config_path: str, install_type: str) -> bool:
+    """Send one ping if none was attempted yet on this UTC day.
+
+    The due check and the attempt hold one lock, so the periodic loop and an
+    opt-in send cannot both claim the same day. Never raises.
+
+    Args:
+        server_config_path: Locates the install ID and the send-state marker.
+        install_type: One of docker, pip, electron, other.
+
+    Returns:
+        True if a ping was sent and accepted.
+    """
+    with _SEND_LOCK:
+        if not is_due(server_config_path):
+            return False
+        return send_install_ping(server_config_path, install_type)
+
+
 def maybe_send_in_background(
     server_config_path: str,
     install_type: str,
@@ -248,7 +272,7 @@ def maybe_send_in_background(
         return None
 
     thread = threading.Thread(
-        target=send_install_ping,
+        target=send_if_due,
         args=(server_config_path, install_type),
         name="telemetry-ping",
         daemon=True,
@@ -289,12 +313,8 @@ def run_periodic_sender(
     cycles = 0
     while not stopper.is_set():
         try:
-            if (
-                consent_check()
-                and not suppressed_reason()
-                and is_due(server_config_path)
-            ):
-                send_install_ping(server_config_path, install_type)
+            if consent_check() and not suppressed_reason():
+                send_if_due(server_config_path, install_type)
         except Exception as exc:
             # The loop must outlive any single failure, including a consent
             # check that raises. Never let telemetry take a thread down.

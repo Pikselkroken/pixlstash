@@ -9,10 +9,11 @@
     :aria-expanded="String(menuShown)"
     :aria-controls="menuShown ? menuId : undefined"
     :aria-activedescendant="
-      menuShown && index >= 0 ? `${menuId}-${index}` : undefined
+      menuShown && shown >= 0 ? `${menuId}-${shown}` : undefined
     "
     @input="onInput"
     @keydown="onKeydown"
+    @focus="onFocus"
     @blur="onBlur"
   />
   <!-- A layer on the overlay stack and fixed, like the tag panel's list,
@@ -29,31 +30,76 @@
         top: `${rect.bottom + 4}px`,
         left: `${rect.left}px`,
         minWidth: `${Math.max(rect.width, 160)}px`,
+        maxWidth: `${Math.max(rect.width, 360)}px`,
       }"
       role="listbox"
       :aria-label="listLabel"
     >
+      <div v-if="hint" class="bmi-hint-line" aria-hidden="true">{{ hint }}</div>
+      <template v-for="(item, idx) in matches" :key="`${item.section}:${item.value}`">
+        <div
+          v-if="item.section && item.section !== matches[idx - 1]?.section"
+          class="bmi-section"
+          aria-hidden="true"
+        >
+          {{ item.section }}
+        </div>
+        <button
+          :id="`${menuId}-${idx}`"
+          type="button"
+          tabindex="-1"
+          class="bmi-item"
+          :class="{
+            'bmi-item--active': idx === shown,
+            'bmi-item--own': item.removable,
+            'bmi-use': item.use,
+          }"
+          role="option"
+          :aria-selected="idx === shown"
+          :aria-label="item.use ? `Use your own: ${item.value}` : undefined"
+          :title="item.removable ? item.value : undefined"
+          @mousedown.prevent="choose(item)"
+        >
+          {{ item.use ? "" : item.value }}
+          <template v-if="item.use">
+            <v-icon size="14" aria-hidden="true">mdi-pencil-outline</v-icon>
+            Use “{{ item.value }}”
+            <span class="bmi-detail">Adds your own line</span>
+          </template>
+          <span v-if="item.detail" class="bmi-detail">{{ item.detail }}</span>
+          <!-- Hidden from the accessible name: it is a hint about the keyboard,
+               and read out it turns every first option into "SDXL 1.0 TAB". -->
+          <span
+            v-if="!openOnFocus && idx === (shown >= 0 ? shown : 0)"
+            class="bmi-hint"
+            aria-hidden="true"
+            >TAB</span
+          >
+          <!-- A pointer's way to forget an entry. Not a control of its own: a
+               button inside an option is not valid ARIA, and Delete on the
+               highlighted entry is the keyboard and assistive route. -->
+          <span
+            v-if="item.removable"
+            class="bmi-remove"
+            aria-hidden="true"
+            @mousedown.prevent.stop="emit('remove', item.value)"
+          >
+            <v-icon size="14">mdi-close</v-icon>
+          </span>
+        </button>
+      </template>
       <button
-        v-for="(item, idx) in matches"
-        :id="`${menuId}-${idx}`"
-        :key="item"
+        v-if="footShown"
+        :id="`${menuId}-${matches.length}`"
         type="button"
         tabindex="-1"
-        class="bmi-item"
-        :class="{ 'bmi-item--active': idx === index }"
+        class="bmi-item bmi-foot"
+        :class="{ 'bmi-item--active': shown === matches.length }"
         role="option"
-        :aria-selected="idx === index"
-        @mousedown.prevent="choose(item)"
+        :aria-selected="shown === matches.length"
+        @mousedown.prevent="footAct"
       >
-        {{ item }}
-        <!-- Hidden from the accessible name: it is a hint about the keyboard,
-             and read out it turns every first option into "SDXL 1.0 TAB". -->
-        <span
-          v-if="idx === (index >= 0 ? index : 0)"
-          class="bmi-hint"
-          aria-hidden="true"
-          >TAB</span
-        >
+        {{ footAction }}
       </button>
     </div>
   </StackLayer>
@@ -110,6 +156,19 @@
  * **`options` makes it any completing field.** Given a list, it completes
  * against that instead of the base models (the sheet step's recent clothes and
  * backgrounds, through `RecentInput`); `listLabel` names the menu for it.
+ *
+ * **The prompt assistant's rows add four opt-ins** (`PromptAssistGroup`).
+ * `openOnFocus` opens the full list on focus, filtering only once something is
+ * typed; those rows are never focused on their own, so the rule above does not
+ * bite, and Tab there leaves the field rather than filling it. An option may be
+ * `{ value, detail, section, removable }`: a second line, a heading over each
+ * run of one `section`, and on a `removable` one an (x) and Delete on its
+ * highlight, both emitting `remove`. `footAction` adds a last row, in the arrow
+ * order, under a list holding a removable option; it emits `foot-action`.
+ * Picking an option emits `pick` as well as the value. `ownText` says plainly
+ * that typing is not only a filter: typed text no option equals is offered
+ * first, as Use "...", and highlighted, so Enter takes it; typed text equal to
+ * an option highlights that option instead. `hint` is a line atop the list.
  */
 import {
   computed,
@@ -121,6 +180,8 @@ import {
   watch,
 } from "vue";
 
+import { VIcon } from "vuetify/components";
+
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import StackLayer from "./StackLayer.vue";
 
@@ -131,8 +192,20 @@ const props = defineProps({
   // What to complete against; null is this machine's base models.
   options: { type: Array, default: null },
   listLabel: { type: String, default: "Base model suggestions" },
+  openOnFocus: { type: Boolean, default: false },
+  maxShown: { type: Number, default: 8 },
+  footAction: { type: String, default: "" },
+  ownText: { type: Boolean, default: false },
+  hint: { type: String, default: "" },
 });
-const emit = defineEmits(["update:modelValue", "confirm", "cancel"]);
+const emit = defineEmits([
+  "update:modelValue",
+  "confirm",
+  "cancel",
+  "pick",
+  "remove",
+  "foot-action",
+]);
 
 const store = useModelShelfStore();
 
@@ -143,8 +216,6 @@ function norm(value) {
     .replace(/[^a-z0-9]/g, "");
 }
 
-const MAX_SHOWN = 8;
-
 /** Unique per instance, because `aria-controls` has to name one menu. */
 const menuId = `bmi-menu-${useId()}`;
 
@@ -152,22 +223,49 @@ const inputEl = ref(null);
 const isOpen = ref(false);
 const index = ref(-1);
 const rect = ref(null);
+// Opened on focus, the list is everything until a key is typed.
+const filtering = ref(true);
 
 const matches = computed(() => {
-  const key = norm(props.modelValue);
-  const options = props.options ?? store.baseModelCompletions;
+  const key = filtering.value ? norm(props.modelValue) : "";
+  const options = (props.options ?? store.baseModelCompletions).map((o) =>
+    typeof o === "string" ? { value: o } : o,
+  );
+  const starts = (o) => norm(o.value).startsWith(key);
   // Prefix matches ahead of substring ones, each already sorted by the server,
-  // so typing narrows predictably instead of reshuffling.
-  const starts = options.filter((o) => norm(o).startsWith(key));
-  const contains = key
-    ? options.filter((o) => norm(o).includes(key) && !norm(o).startsWith(key))
-    : [];
-  const hits = [...starts, ...contains].slice(0, MAX_SHOWN);
+  // so typing narrows predictably instead of reshuffling. A second line counts
+  // as a substring.
+  const contains = (o) =>
+    !starts(o) && (norm(o.value).includes(key) || norm(o.detail).includes(key));
+  const hits = [
+    ...options.filter(starts),
+    ...(key ? options.filter(contains) : []),
+  ].slice(0, props.maxShown);
+  if (props.ownText) {
+    const typed = filtering.value ? String(props.modelValue || "").trim() : "";
+    const exact = (o) => o.value.toLowerCase() === typed.toLowerCase();
+    return typed && !hits.some(exact) ? [{ value: typed, use: true }, ...hits] : hits;
+  }
   // Nothing left to complete: the field already says exactly the one thing on
   // offer, so a menu would only cover the row under it.
-  if (hits.length === 1 && norm(hits[0]) === key && key) return [];
+  if (hits.length === 1 && norm(hits[0].value) === key && key) return [];
   return hits;
 });
+/** The row highlighted before any arrow: Use "...", or the option typed. */
+const defaultIndex = computed(() => {
+  if (!props.ownText || !filtering.value) return -1;
+  const typed = String(props.modelValue || "").trim().toLowerCase();
+  return typed
+    ? matches.value.findIndex((o) => o.use || o.value.toLowerCase() === typed)
+    : -1;
+});
+/** The highlighted row: an arrow's, else the default. */
+const shown = computed(() => (index.value >= 0 ? index.value : defaultIndex.value));
+const footShown = computed(
+  () => Boolean(props.footAction) && matches.value.some((o) => o.removable),
+);
+/** The rows the arrows walk: the options, then the foot action. */
+const rowCount = computed(() => matches.value.length + (footShown.value ? 1 : 0));
 
 /** The one condition the menu, `aria-expanded` and the key ladder all read. */
 const menuShown = computed(() =>
@@ -219,8 +317,15 @@ function close() {
   index.value = -1;
 }
 
+function onFocus() {
+  if (!props.openOnFocus) return;
+  filtering.value = false;
+  open();
+}
+
 function onInput(event) {
   index.value = -1;
+  filtering.value = true;
   open();
   emit("update:modelValue", event.target.value);
 }
@@ -231,7 +336,13 @@ function onBlur() {
 
 /** Fill the field from the list. Never commits: a bulk write is a click away. */
 function choose(item) {
-  emit("update:modelValue", item);
+  emit("update:modelValue", item.value);
+  emit("pick", item.value);
+  close();
+}
+
+function footAct() {
+  emit("foot-action");
   close();
 }
 
@@ -248,20 +359,39 @@ function onKeydown(event) {
     }
     event.preventDefault();
     event.stopPropagation();
-    index.value = Math.min(index.value + 1, list.length - 1);
+    index.value = Math.min(shown.value + 1, rowCount.value - 1);
   } else if (event.key === "ArrowUp" && menuShown.value) {
     event.preventDefault();
     event.stopPropagation();
-    index.value = Math.max(index.value - 1, -1);
-  } else if (event.key === "Tab" && !event.shiftKey && menuShown.value) {
+    index.value = Math.max(shown.value - 1, -1);
+  } else if (
+    event.key === "Delete" &&
+    menuShown.value &&
+    list[index.value]?.removable
+  ) {
     event.preventDefault();
     event.stopPropagation();
-    choose(list[index.value >= 0 ? index.value : 0]);
+    emit("remove", list[index.value].value);
+    index.value = Math.min(index.value, rowCount.value - 2);
+  } else if (
+    event.key === "Tab" &&
+    !event.shiftKey &&
+    menuShown.value &&
+    !props.openOnFocus
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    // The highlighted row, as Enter takes it; the first when none is.
+    choose(list[shown.value >= 0 ? shown.value : 0]);
   } else if (event.key === "Enter") {
     event.preventDefault();
     event.stopPropagation();
-    if (menuShown.value && index.value >= 0 && list[index.value]) {
-      emit("update:modelValue", list[index.value]);
+    if (menuShown.value && shown.value === list.length && footShown.value) {
+      footAct();
+      return;
+    }
+    if (menuShown.value && list[shown.value]) {
+      emit("update:modelValue", list[shown.value].value);
     }
     close();
     // After the value the highlight chose, so the parent writes what the field
@@ -281,6 +411,12 @@ function onKeydown(event) {
 }
 
 defineExpose({
+  /** The whole list, as focusing an `openOnFocus` field shows it. */
+  open() {
+    inputEl.value?.focus();
+    filtering.value = false;
+    open();
+  },
   /** Focus only, no select-all: its sibling field in the same dialog does the
    *  same, and a seeded value that vanishes on the first keystroke is not what
    *  a correction wants. The shelf's inline editor selects on its own, where
@@ -294,7 +430,10 @@ defineExpose({
 <style scoped>
 /* The tag field's treatment, repeated on purpose: two completion menus that
    looked different would be two things to learn. The values below are copied
-   from the old lightbox tag field along with the reasons they are off-token. */
+   from the old lightbox tag field along with the reasons they are off-token.
+   Block flow, never a flex column: under `max-height` a column shrinks its
+   rows (their `overflow: hidden` lets them go to nothing) instead of
+   scrolling, and a long list is drawn as labels on top of each other. */
 .bmi-menu {
   position: fixed;
   max-height: 240px;
@@ -304,8 +443,6 @@ defineExpose({
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
   border-radius: var(--radius-md);
   box-shadow: var(--elevation-3);
-  display: flex;
-  flex-direction: column;
 }
 
 .bmi-item {
@@ -336,6 +473,77 @@ defineExpose({
       rgba(var(--v-theme-on-dark-surface), 0.16)
     )
     rgba(var(--v-theme-dark-surface-primary), 0.2);
+}
+
+.bmi-item--own {
+  position: relative;
+  padding-right: calc(var(--control-h-sm) + var(--space-3));
+}
+
+.bmi-detail {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.bmi-section {
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.bmi-section:first-child {
+  border-top: 0;
+}
+
+/* The (x): seen on the row under the pointer, on the keyboard's row, and
+   always where nothing hovers. */
+.bmi-remove {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  border-radius: var(--radius-sm);
+  visibility: hidden;
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.bmi-item:hover .bmi-remove,
+.bmi-item--active .bmi-remove {
+  visibility: visible;
+}
+
+.bmi-remove:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+@media (hover: none), (pointer: coarse) {
+  .bmi-remove {
+    visibility: visible;
+  }
+}
+
+.bmi-foot {
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.bmi-hint-line {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
 }
 
 .bmi-hint {

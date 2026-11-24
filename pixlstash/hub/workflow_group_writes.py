@@ -23,7 +23,6 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub import workflow_origin, workflow_versions
 from pixlstash.hub.workflow_origin import (
-    BUILTIN_ORIGIN,
     FILE_ORIGIN,
     INBOX_ORIGIN,
     TEMPLATE_ORIGIN,
@@ -643,19 +642,20 @@ def restore_manual_workflow(
 def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
     """Forget one manual workflow's rows, in one transaction.
 
-    Its inbox, built-in, file and template origin rows go, so handing the same content
-    over again stores it again. A row the removed pull of ComfyUI's saved
-    workflows left (#1854) is marked **dismissed** instead: this build reads
-    past it, and an older build sharing the hub, which still pulls, does not
-    bring the workflow back. Then its document, name, defaults, pins and
+    Its inbox, file and template origin rows go, so handing the same content
+    over again stores it again. A built-in's row, and one the removed pull of
+    ComfyUI's saved workflows left (#1854), is marked **dismissed** instead:
+    a removed built-in stays off the Workflows page (start-up lists only one
+    never listed, ``list_builtin_workflows``), and an older build sharing the
+    hub, which still pulls, does not bring a pulled workflow back. Then its document, name, defaults, pins and
     picture inputs. Nothing in any vault is written: its pictures fall back to
     the automatic workflow their graph is in.
     """
     with hub.transaction() as conn:
         conn.execute(
             "DELETE FROM workflow_origin WHERE workflow_name = ? "
-            "AND origin IN (?, ?, ?, ?)",
-            (workflow_id, INBOX_ORIGIN, BUILTIN_ORIGIN, FILE_ORIGIN, TEMPLATE_ORIGIN),
+            "AND origin IN (?, ?, ?)",
+            (workflow_id, INBOX_ORIGIN, FILE_ORIGIN, TEMPLATE_ORIGIN),
         )
         conn.execute(
             "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",

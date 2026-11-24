@@ -76,8 +76,20 @@ def upsert(
         "workflow_name = excluded.workflow_name, "
         "remote_modified = excluded.remote_modified, "
         "last_seen_at = excluded.last_seen_at, "
-        "content_hash = excluded.content_hash",
+        "content_hash = excluded.content_hash, dismissed = 0",
         (origin, remote_path, workflow_name, remote_modified, now, now, content_hash),
+    )
+
+
+def move(conn, origin: str, remote_path: str, new_path: str) -> None:
+    """Re-key *remote_path*'s row at *origin* to *new_path*.
+
+    The workflow, hash and dismissed flag stay as they are. Inside the caller's
+    transaction; the caller checks *new_path* has no row yet.
+    """
+    conn.execute(
+        "UPDATE workflow_origin SET remote_path = ? WHERE origin = ? AND remote_path = ?",
+        (new_path, origin, remote_path),
     )
 
 
@@ -108,3 +120,31 @@ def stored_at(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
         (origin, remote_path),
     )
     return row["workflow_name"] if row else None
+
+
+def stored_with_hash(
+    hub: HubDatabase, origin: str, remote_path: str
+) -> Optional[tuple[str, Optional[str]]]:
+    """``(workflow id, content hash)`` of the live workflow one origin's path
+    is stored as, or ``None``: :func:`stored_at` with the hash it was filed with.
+    """
+    row = hub.fetchone(
+        "SELECT o.workflow_name, o.content_hash FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.origin = ? AND o.remote_path = ?",
+        (origin, remote_path),
+    )
+    return (row["workflow_name"], row["content_hash"]) if row else None
+
+
+def ever_stored(hub: HubDatabase, origin: str, remote_path: str) -> bool:
+    """Whether one origin's path was ever stored, its workflow live or not.
+
+    A removed built-in keeps its row, dismissed, so this is how start-up
+    tells one the owner took off the Workflows page from one never listed.
+    """
+    row = hub.fetchone(
+        "SELECT 1 FROM workflow_origin WHERE origin = ? AND remote_path = ?",
+        (origin, remote_path),
+    )
+    return row is not None

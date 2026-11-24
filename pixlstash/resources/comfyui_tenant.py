@@ -507,8 +507,17 @@ class PeakSampler:
 
     def _run(self) -> None:
         while not self._stop.wait(PEAK_SAMPLE_S):
-            if self._started():
-                self._sample()
+            try:
+                if self._started():
+                    self._sample()
+            except Exception:
+                # One probe failure must not end the sampler: the peak it reports
+                # feeds the arbiter's room figure for the rest of the run.
+                logger.error(
+                    "ComfyUI peak sampler failed; trying again in %ss",
+                    PEAK_SAMPLE_S,
+                    exc_info=True,
+                )
 
     def _sample(self) -> None:
         self._probe.stats(max_age_s=PEAK_SAMPLE_S / 2)

@@ -800,6 +800,39 @@ class TestStaleFilenameGuesses:
             "pony_diffusion_v7.safetensors": ("Pony V7", "filename")
         }
 
+    def test_apply_migrations_reads_minimax_h3_image_apart_on_a_data_v25_hub(self, hub):
+        """Data step 26: H3 Image's own file was a guess of H3, the video
+        model, until it was a base model of its own."""
+        apply_migrations(hub)
+        for n, filename in enumerate(
+            (
+                "minimax_h3_image_pruned_int8_convrot.safetensors",
+                "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            )
+        ):
+            add_model(
+                hub,
+                sha256=str(n),
+                filename=filename,
+                base_model_canonical="MiniMax H3",
+                base_model_source="filename",
+            )
+        hub.execute("PRAGMA user_version = 25")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert TestBaseModelCanonicalBackfill._identified(hub) == {
+            "minimax_h3_image_pruned_int8_convrot.safetensors": (
+                "MiniMax H3 Image",
+                "filename",
+            ),
+            "minimax_h3_ref2va_pruned_int8_convrot.safetensors": (
+                "MiniMax H3",
+                "filename",
+            ),
+        }
+
 
 class TestComponentRoleBackfill:
     """Re-filing support files that were registered before they had kinds.

@@ -93,7 +93,11 @@ from pixlstash.services.builtin_models import (
     declare_builtin_models,
 )
 from pixlstash.services.managed_model_store import ensure_managed_folder
-from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
+from pixlstash.telemetry import (
+    ensure_install_identity,
+    maybe_send_in_background,
+    start_periodic_sender,
+)
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.character_face_clusters import (
@@ -116,6 +120,7 @@ from pixlstash.routes.pictures import (
 )
 from pixlstash.routes.comfyui import (
     create_router as create_comfyui_router,
+    list_builtin_workflows,
     store_inbox_workflow,
     workflow_user_dir,
 )
@@ -367,6 +372,10 @@ class Server(
         DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
             ``workflows/`` folder and keeps watching it. ``False`` in the test
             suite: that folder is machine-global too.
+        DEFAULT_LIST_BUILTIN_WORKFLOWS: Whether start-up puts each built-in
+            workflow never listed before on the Workflows page. ``False`` in
+            the test suite, whose workflow counts would otherwise all grow by
+            every built-in; the tests that need it turn it on.
         DEFAULT_WATCH_EDIT_COPIES: Whether start-up imports edits saved in an
             Open-with edit copy and keeps watching them. ``False`` in the test
             suite, which calls the import directly rather than waiting on a
@@ -382,6 +391,7 @@ class Server(
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
     DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
+    DEFAULT_LIST_BUILTIN_WORKFLOWS: bool = True
     DEFAULT_WATCH_EDIT_COPIES: bool = True
 
     @staticmethod
@@ -793,6 +803,18 @@ class Server(
                     exc,
                 )
             _log_stage("workflow inbox reconcile")
+        if Server.DEFAULT_LIST_BUILTIN_WORKFLOWS:
+            # Every built-in is the owner's until removed or hidden. After the
+            # inbox, so a built-in dropped there too is already stored.
+            try:
+                list_builtin_workflows(self.hub)
+            except (sqlite3.Error, OSError) as exc:
+                logger.error(
+                    "Could not list the built-in workflows on the Workflows "
+                    "page; they are listed at the next start: %s",
+                    exc,
+                )
+            _log_stage("built-in workflows listed")
         if self._hub_bootstrap.migrated:
             logger.info(
                 "First run after the hub/vault split: identity now lives in %s",
@@ -1005,6 +1027,30 @@ class Server(
             logger.warning(
                 "Could not dispatch the telemetry ping (%s); continuing. This "
                 "affects reporting only, never the running server.",
+                exc,
+            )
+
+    def send_telemetry_ping_after_opt_in(self) -> None:
+        """Send today's install ping now that the owner has just opted in.
+
+        The periodic loop checks consent at startup, when a fresh install has
+        not answered the consent dialog yet, and then sleeps an hour. A desktop
+        session shorter than that closed before it woke, so a new user who
+        opted in went unseen until a later launch, and a one-off trial not at
+        all. ``send_if_due`` shares the loop's lock, so this cannot add a
+        second ping for the day.
+        """
+        try:
+            maybe_send_in_background(
+                self._server_config_path,
+                Server.detect_install_type(),
+                consent_enabled=True,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Narrow on purpose, as in _maybe_send_telemetry_ping.
+            logger.warning(
+                "Could not send the telemetry ping after opt-in (%s); the daily "
+                "loop will send it instead.",
                 exc,
             )
 
@@ -1538,7 +1584,7 @@ class Server(
             }
             write_json_atomic(server_config_path, server_config)
         else:
-            with open(server_config_path, "r") as f:
+            with open(server_config_path, "r", encoding="utf-8") as f:
                 server_config = json.load(f)
 
                 # Ensure server config options exist

@@ -1,0 +1,339 @@
+{
+  "family": "_default",
+  "version": 2,
+  "contexts": {
+    "photo": {
+      "default_on": false,
+      "categories": [
+        {
+          "id": "camera",
+          "label": "Camera",
+          "default": "phone_snapshot",
+          "options": [
+            {
+              "id": "phone_snapshot",
+              "label": "Phone snapshot",
+              "text": "Taken by a friend on an iPhone main camera, held at chest height about a metre away, default photo mode, no portrait blur.",
+              "finish": "It looks like an ordinary unedited iPhone photo: natural colours, true-to-life skin tones, the slight HDR flatness phones give a bright window, a touch of sensor noise in the shadows, and sharpness that falls off softly rather than looking crisp or retouched.",
+              "evidence": "tested",
+              "note": "Text and finish are the tested camera and closing-look lines; the finish goes last. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "pro_dslr",
+              "label": "Professional DSLR",
+              "text": "Taken by a professional photographer on a full-frame DSLR with an 85 mm lens at f/2: sharp eyes, soft background blur.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "mirrorless",
+              "label": "Mirrorless",
+              "text": "Taken on a modern mirrorless camera with a 35 mm lens: natural perspective, crisp but not over-sharpened.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "film_slr",
+              "label": "35 mm film",
+              "text": "Shot on 35 mm colour film with a manual SLR: fine grain, soft warm colours, gentle highlights.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "disposable",
+              "label": "Disposable camera",
+              "text": "Taken with a cheap disposable film camera and its flash: grainy, slightly soft, washed-out colours.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "older_phone",
+              "label": "Older phone",
+              "text": "Taken on a mid-2010s smartphone: slightly soft, limited dynamic range, blown highlights and smudgy shadow noise.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            }
+          ]
+        },
+        {
+          "id": "light",
+          "label": "Light",
+          "default": "window_daylight",
+          "options": [
+            {
+              "id": "window_daylight",
+              "label": "Window daylight",
+              "text": "Window daylight from one side, gentle shadows under the jaw, small window catchlights in the eyes.",
+              "evidence": "tested",
+              "note": "The content document's tested phrase, capitalised and closed with a full stop. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "overcast",
+              "label": "Overcast",
+              "text": "Overcast daylight, soft and even, with no hard shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "golden_hour",
+              "label": "Golden hour",
+              "text": "Low golden-hour sun from one side, warm light and long shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "winter_daylight",
+              "label": "Winter daylight",
+              "text": "Pale winter daylight, cool and low, from a white sky.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "dusk",
+              "label": "Dusk",
+              "text": "Blue-hour dusk light after sunset, cool and dim.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "street_night",
+              "label": "Street light at night",
+              "text": "Night, lit only by orange street lights from above, with deep shadows.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "flash",
+              "label": "On-camera flash",
+              "text": "Lit by a single direct on-camera flash, with a faint shadow on the wall behind.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            },
+            {
+              "id": "office",
+              "label": "Office",
+              "text": "Flat overhead office fluorescent lighting, slightly cool.",
+              "evidence": "tested",
+              "note": "Tested on MiniMax H3 Image, 2026-11-21, in a nine-combination camera and light test (report figure 7)."
+            }
+          ]
+        },
+        {
+          "id": "skin",
+          "label": "Skin and makeup",
+          "default": "smooth_youthful",
+          "options": [
+            {
+              "id": "smooth_youthful",
+              "label": "Smooth and youthful",
+              "text": "Smooth and youthful skin with a natural, unretouched look.",
+              "evidence": "tested",
+              "note": "Subject-neutral rewording of the tested \"She has smooth and youthful skin with a natural, unretouched look.\" (2026-11-21, indicative). Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "sun_kissed",
+              "label": "Sun-kissed",
+              "text": "Smooth, youthful skin with a light golden summer tan.",
+              "evidence": "tested",
+              "note": "Opt-in, never a default. Retested 2026-11-21 on a young woman and a man in his late forties, seed 1701. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "mature",
+              "label": "Mature (older subjects)",
+              "text": "Lived-in, mature skin with natural fine lines, unretouched but kindly shown.",
+              "evidence": "tested",
+              "note": "Ages a young face by about 30 years: for older subjects only. GPU-tested 2026-11-21, seed 1701. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "weathered",
+              "label": "Weathered (older, outdoorsy subjects)",
+              "text": "Weathered, outdoorsy skin from years of wind and sun, shown naturally.",
+              "evidence": "tested",
+              "note": "GPU-tested 2026-11-21 on a young woman and a man in his late forties, seed 1701. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "makeup_daytime",
+              "label": "Natural daytime makeup",
+              "text": "Natural daytime makeup: light foundation, mascara and a tinted lip.",
+              "evidence": "tested",
+              "note": "Feminises a male subject: never a default. GPU-tested 2026-11-21, seed 1701. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "makeup_evening",
+              "label": "Evening makeup",
+              "text": "Dressed-up evening makeup with defined eyes and a bold lip.",
+              "evidence": "tested",
+              "note": "Feminises a male subject: never a default. GPU-tested 2026-11-21, seed 1701. Tested on MiniMax H3 Image only (2026-11-21)."
+            }
+          ]
+        }
+      ]
+    },
+    "sheet": {
+      "default_on": true,
+      "categories": [
+        {
+          "id": "camera",
+          "label": "Camera",
+          "default": "agency_digitals",
+          "options": [
+            {
+              "id": "agency_digitals",
+              "label": "Model agency digitals",
+              "finish": "The photos look like a model agency's digitals: plain unedited camera photos, natural colour, true-to-life skin, little or no makeup, soft focus falloff, nothing retouched or sharpened.",
+              "evidence": "tested",
+              "note": "The sheet's photo look from #2776, word for word. Tested on MiniMax H3 Image only (2026-11-21)."
+            },
+            {
+              "id": "pro_dslr",
+              "label": "Professional DSLR",
+              "text": "Taken by a professional photographer on a full-frame DSLR with an 85 mm lens at f/2: sharp eyes, soft background blur.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "mirrorless",
+              "label": "Mirrorless",
+              "text": "Taken on a modern mirrorless camera with a 35 mm lens: natural perspective, crisp but not over-sharpened.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "film_slr",
+              "label": "35 mm film",
+              "text": "Shot on 35 mm colour film with a manual SLR: fine grain, soft warm colours, gentle highlights.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "disposable",
+              "label": "Disposable camera",
+              "text": "Taken with a cheap disposable film camera and its flash: grainy, slightly soft, washed-out colours.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "older_phone",
+              "label": "Older phone",
+              "text": "Taken on a mid-2010s smartphone: slightly soft, limited dynamic range, blown highlights and smudgy shadow noise.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            }
+          ]
+        },
+        {
+          "id": "light",
+          "label": "Light",
+          "default": "none",
+          "options": [
+            {
+              "id": "window_daylight",
+              "label": "Window daylight",
+              "text": "Window daylight from one side, gentle shadows under the jaw, small window catchlights in the eyes.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "overcast",
+              "label": "Overcast",
+              "text": "Overcast daylight, soft and even, with no hard shadows.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "golden_hour",
+              "label": "Golden hour",
+              "text": "Low golden-hour sun from one side, warm light and long shadows.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "winter_daylight",
+              "label": "Winter daylight",
+              "text": "Pale winter daylight, cool and low, from a white sky.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "dusk",
+              "label": "Dusk",
+              "text": "Blue-hour dusk light after sunset, cool and dim.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "street_night",
+              "label": "Street light at night",
+              "text": "Night, lit only by orange street lights from above, with deep shadows.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "flash",
+              "label": "On-camera flash",
+              "text": "Lit by a single direct on-camera flash, with a faint shadow on the wall behind.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "office",
+              "label": "Office",
+              "text": "Flat overhead office fluorescent lighting, slightly cool.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            }
+          ]
+        },
+        {
+          "id": "skin",
+          "label": "Skin and makeup",
+          "default": "none",
+          "options": [
+            {
+              "id": "smooth_youthful",
+              "label": "Smooth and youthful",
+              "text": "Smooth and youthful skin with a natural, unretouched look.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "sun_kissed",
+              "label": "Sun-kissed",
+              "text": "Smooth, youthful skin with a light golden summer tan.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "mature",
+              "label": "Mature (older subjects)",
+              "text": "Lived-in, mature skin with natural fine lines, unretouched but kindly shown.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "weathered",
+              "label": "Weathered (older, outdoorsy subjects)",
+              "text": "Weathered, outdoorsy skin from years of wind and sun, shown naturally.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "makeup_daytime",
+              "label": "Natural daytime makeup",
+              "text": "Natural daytime makeup: light foundation, mascara and a tinted lip.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            },
+            {
+              "id": "makeup_evening",
+              "label": "Evening makeup",
+              "text": "Dressed-up evening makeup with defined eyes and a bold lip.",
+              "evidence": "untested",
+              "note": "Wording tested on single MiniMax H3 Image photos (2026-11-21); untested on sheets."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

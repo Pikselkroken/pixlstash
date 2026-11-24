@@ -28,6 +28,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.comfyui_service import PIXLSTASH_PICTURE_LOADER
 from pixlstash.services.workflow_hash import WorkflowGraphError
+from pixlstash.utils.comfyui_utilities import rewritten_prompt_input
 from pixlstash.services.workflow_io import (
     api_graph,
     detect_workflow_io,
@@ -332,9 +333,10 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
 
     Bindings win when the file has them, even an empty list. Otherwise the
     detected inputs of an API-format graph: exactly one picture input, and
-    exactly one positive prompt's text, followed one link upstream when a
-    primitive node feeds it. Two of either is ambiguous and fills nothing, so a
-    fixed style prompt beside a subject prompt is never overwritten. A UI-format
+    the text of the one positive prompt, followed one link upstream when a
+    primitive node feeds it. Encoders that carry the same prompt are that one
+    prompt; two different prompts are ambiguous and fill nothing, so a fixed
+    style prompt beside a subject prompt is never overwritten. A UI-format
     file fills nothing, because the run routes can only submit API format
     (#1307).
 
@@ -374,10 +376,14 @@ def run_targets(document: dict, detected=None) -> dict[str, list[dict]]:
                     {"path": prefix + [node_id, "inputs", field], "template": None}
                 )
                 break
-    if len(found.positive_prompts) == 1:
-        path = _text_path(graph, found.positive_prompts[0])
-        if path:
-            targets[CAPTION].append({"path": prefix + path, "template": None})
+    # Every encoder of one prompt is captioned; a primitive they share is one
+    # path, so it is listed once.
+    paths = []
+    for node_id in found.positive_prompt_nodes:
+        path = _text_path(graph, node_id)
+        if path and path not in paths:
+            paths.append(path)
+    targets[CAPTION].extend({"path": prefix + path, "template": None} for path in paths)
     return targets
 
 
@@ -412,10 +418,14 @@ def _text_path(graph: dict, node_id: str, hops: int = 1) -> list | None:
     field = prompt_field(inputs)
     if field is None:
         return None
-    value = inputs[field]
+    # Behind a prompt enhancer, the words it rewrites are the prompt.
+    node_id, field = rewritten_prompt_input(graph, node_id, field)
+    value = (graph[node_id].get("inputs") or {}).get(field)
     if isinstance(value, str):
         return [node_id, "inputs", field]
-    return _text_path(graph, value[0], hops - 1) if hops > 0 else None
+    if not isinstance(value, list) or hops <= 0:
+        return None
+    return _text_path(graph, value[0], hops - 1)
 
 
 def fill(document: dict, targets: dict[str, list[dict]], values: dict) -> None:

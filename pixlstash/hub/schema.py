@@ -78,7 +78,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 25
+CURRENT_DATA_VERSION = 26
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -2763,7 +2763,8 @@ def _reidentify_filename_guesses(conn: sqlite3.Connection) -> int:
     left alone. Written, not cleared, so an offline file keeps an answer.
     ``user`` and ``declared`` rows are never touched.
 
-    Runs exactly once per hub (see :data:`CURRENT_DATA_VERSION`).
+    Runs once per hub at data step 22, and again at 26 for a base model that
+    joined the table (see :data:`CURRENT_DATA_VERSION`).
 
     Args:
         conn: An open hub connection, inside the caller's transaction.
@@ -2787,7 +2788,7 @@ def _reidentify_filename_guesses(conn: sqlite3.Connection) -> int:
     )
     if updates:
         logger.info(
-            "Hub data v22: re-identified %d of %d filename-identified shelf row(s).",
+            "Hub data: re-identified %d of %d filename-identified shelf row(s).",
             len(updates),
             len(rows),
         )
@@ -3090,6 +3091,11 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                         FILE_VAE,
                         lambda header: VIT_DECODER_VAE_LAYOUT <= set(header),
                     )
+                if data_version < 26:
+                    # MiniMax H3 Image joined the base models, and its files
+                    # (`minimax_h3_image_*`) were filename guesses of MiniMax
+                    # H3, the video model, so a sheet offered it video LoRAs.
+                    _reidentify_filename_guesses(conn)
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

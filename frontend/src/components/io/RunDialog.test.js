@@ -6215,6 +6215,495 @@ describe("a LoRA row's ×, for the keyboard", () => {
   });
 });
 
+// "Enhance prompt": shown only where a language model rewrites the prompt, on
+// by default, and off is `enhance_prompt: false` on every request of the run.
+describe("the prompt enhancer", () => {
+  const box = (wrapper) => wrapper.find('[data-testid="rund-enhance"]');
+  const answer = (enhancer) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, enhancer } }],
+  });
+
+  it("is not offered where no enhancer rewrites the prompt", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).exists()).toBe(false);
+  });
+
+  it("is offered, on, and sends what it always did", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Enhance prompt");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("enhance_prompt");
+    }
+  });
+
+  it("off, sends enhance_prompt: false on the pre-flight it asks and the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    // Asked again, so a model only the enhancer needed stops blocking.
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].enhance_prompt).toBe(false);
+    // Still drawn: the server reports the enhancer whether or not it was cut.
+    expect(box(wrapper).element.checked).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].enhance_prompt).toBe(false);
+  });
+
+  it("a tick on one workflow is not carried to the next one picked", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    preflightWorkflowRun.mockClear();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("enhance_prompt");
+  });
+});
+
+// Photo look: the server's presets for a model family, under the prompt. What
+// can silently go wrong: it shows for a family without presets, it costs a
+// click before Run, its lines land in the owner's prompt box, or a typed look
+// is lost instead of remembered.
+describe("Photo look", () => {
+  const ASSIST = {
+    family: "minimax_h3_image",
+    context: "photo",
+    preset_version: 1,
+    default_on: true,
+    applied: true,
+    categories: [
+      {
+        id: "camera",
+        label: "Camera",
+        default: "phone",
+        options: [{ id: "phone", label: "Phone snapshot", text: "Taken on a phone." }],
+      },
+      {
+        id: "light",
+        label: "Light",
+        default: "window",
+        options: [{ id: "window", label: "Window daylight", text: "Window daylight." }],
+      },
+      {
+        id: "skin",
+        label: "Skin and makeup",
+        default: "none",
+        options: [{ id: "mature", label: "Mature (older subjects)", text: "Mature skin." }],
+      },
+    ],
+    parts: [
+      { category: "camera", id: "phone", text: "Taken on a phone." },
+      { category: "light", id: "window", text: "Window daylight." },
+      { category: "camera", id: "phone", kind: "finish", text: "An unedited phone photo." },
+    ],
+    recorded: null,
+  };
+  const answer = (assist = ASSIST, extra = {}) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, assist, ...extra } }],
+  });
+  const group = (wrapper) => wrapper.find('[data-testid="pa"]');
+  const LABELS = { camera: "Camera", light: "Light", skin: "Skin and makeup" };
+  const field = (wrapper, id) =>
+    wrapper
+      .findAllComponents({ name: "BaseModelInput" })
+      .find((c) => c.props("listLabel") === LABELS[id]);
+  const promptBox = (wrapper) =>
+    wrapper
+      .findAllComponents({ name: "AppTextarea" })
+      .find((c) => c.props("label") === "Prompt");
+  const sent = async (wrapper) => {
+    await wrapper.vm.submit();
+    await flushPromises();
+    return runWorkflowCard.mock.lastCall[0];
+  };
+  const typeIn = async (wrapper, id, text) => {
+    field(wrapper, id).vm.$emit("update:modelValue", text);
+    field(wrapper, id).vm.$emit("blur");
+    await flushPromises();
+  };
+
+  beforeEach(() => localStorage.clear());
+
+  it("half-typed text stays with its family when another workflow is read", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    field(wrapper, "camera").vm.$emit("update:modelValue", "Old Pentax");
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Old Pentax");
+    // The next workflow has no single family: the generic presets.
+    preflightWorkflowRun.mockResolvedValue(
+      answer({ ...ASSIST, family: null, presets: "_default" }),
+    );
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Phone snapshot");
+    // Leaving the field now keeps nothing for either family.
+    field(wrapper, "camera").vm.$emit("blur");
+    await flushPromises();
+    expect(JSON.stringify(localStorage)).not.toContain("Old Pentax");
+  });
+
+  it("is not drawn, and sends nothing, without presets for the family", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(null));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(group(wrapper).exists()).toBe(false);
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+  });
+
+  it("is on by default: typing a prompt and Run sends it, with no other click", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(group(wrapper).exists()).toBe(true);
+    expect(group(wrapper).find('[data-testid="pa-summary"]').text()).toBe(
+      "Phone snapshot · Window daylight",
+    );
+    // One field per category the server sends, in its order.
+    expect(
+      wrapper
+        .findAllComponents({ name: "BaseModelInput" })
+        .map((c) => c.props("listLabel")),
+    ).toEqual(["Camera", "Light", "Skin and makeup"]);
+    // Asked again with it, so the lines and the enhancer default are the run's.
+    expect(preflightWorkflowRun.mock.lastCall[0].prompt_assist).toEqual({
+      context: "photo",
+      choices: { camera: { id: "phone" }, light: { id: "window" }, skin: "none" },
+    });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a woman in a green coat");
+    await flushPromises();
+    const body = await sent(wrapper);
+    expect(body.prompt).toBe("a woman in a green coat");
+    expect(body.prompt_assist).toEqual({
+      context: "photo",
+      choices: { camera: { id: "phone" }, light: { id: "window" }, skin: "none" },
+    });
+  });
+
+  it("never writes into the prompt box, whatever is switched or typed", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a mug on a desk");
+    await flushPromises();
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await group(wrapper).find('[data-testid="pa-reset"]').trigger("click");
+    await flushPromises();
+    expect(promptBox(wrapper).props("modelValue")).toBe("a mug on a desk");
+    expect((await sent(wrapper)).prompt).toBe("a mug on a desk");
+  });
+
+  it("is drawn off for a family the server does not turn on, and On is remembered", async () => {
+    const qwen = { ...ASSIST, family: "qwen_image", default_on: false };
+    preflightWorkflowRun.mockResolvedValue(answer(qwen));
+    let wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const toggle = () => group(wrapper).find('[data-testid="pa-on"]');
+    expect(toggle().attributes("aria-checked")).toBe("false");
+    expect(group(wrapper).find('[data-testid="pa-summary"]').text()).toBe(
+      "Off. Turn on to add camera, light and skin lines.",
+    );
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+    await toggle().trigger("click");
+    wrapper.unmount();
+    wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(toggle().attributes("aria-checked")).toBe("true");
+    expect((await sent(wrapper)).prompt_assist.context).toBe("photo");
+    // Per family: MiniMax H3 Image keeps its own default.
+    expect(JSON.parse(localStorage.getItem("pixlstash:promptAssist"))).toEqual({
+      qwen_image: { photo: { on: true } },
+    });
+  });
+
+  it("off sends no prompt_assist", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    expect(group(wrapper).find('[data-testid="pa-on"]').attributes("aria-checked")).toBe(
+      "false",
+    );
+    expect(await sent(wrapper)).not.toHaveProperty("prompt_assist");
+  });
+
+  it("a typed look is sent as typed and joins Your entries once the run is sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    const offered = () => field(wrapper, "camera").props("options").map((o) => o.value);
+    expect(offered()).toEqual(["Phone snapshot"]);
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toEqual({
+      text: "Old Pentax K1000",
+    });
+    expect(offered()).toEqual(["Phone snapshot", "Old Pentax K1000"]);
+  });
+
+  it("Enter on typed text keeps it as typed, and the run adds it to Your entries", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const input = field(wrapper, "camera").find("input");
+    await input.trigger("focus");
+    await input.setValue("Old Pentax K1000");
+    await flushPromises();
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Old Pentax K1000");
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toEqual({
+      text: "Old Pentax K1000",
+    });
+    expect(
+      field(wrapper, "camera")
+        .props("options")
+        .filter((o) => o.removable)
+        .map((o) => o.value),
+    ).toEqual(["Old Pentax K1000"]);
+  });
+
+  it("marks a kept text of your own, and never a preset, even typed by name", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const marker = () => wrapper.find('[data-testid="pa-own-camera"]');
+    expect(marker().exists()).toBe(false);
+    await typeIn(wrapper, "camera", "Old Pentax K1000");
+    expect(marker().text()).toBe("Your own");
+    await typeIn(wrapper, "camera", "phone snapshot");
+    expect(field(wrapper, "camera").props("modelValue")).toBe("Phone snapshot");
+    expect(marker().exists()).toBe(false);
+  });
+
+  it("an entry's (x) removes it and Clear all removes them all", async () => {
+    localStorage.setItem(
+      "pixlstash:characterSheetChoices",
+      JSON.stringify({
+        recent: {
+          "photoLook:minimax_h3_image:photo:camera": ["Old Pentax", "Webcam", "Polaroid"],
+        },
+      }),
+    );
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const entries = () =>
+      field(wrapper, "camera")
+        .props("options")
+        .filter((o) => o.removable)
+        .map((o) => o.value);
+    expect(entries()).toEqual(["Old Pentax", "Webcam", "Polaroid"]);
+    field(wrapper, "camera").vm.$emit("remove", "Webcam");
+    await flushPromises();
+    expect(entries()).toEqual(["Old Pentax", "Polaroid"]);
+    field(wrapper, "camera").vm.$emit("foot-action");
+    await flushPromises();
+    expect(entries()).toEqual([]);
+  });
+
+  it("an emptied field adds nothing for that category, and stays empty", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    let wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await typeIn(wrapper, "camera", "");
+    expect(field(wrapper, "camera").props("modelValue")).toBe("");
+    expect(field(wrapper, "camera").find("input").attributes("placeholder")).toBe(
+      "Nothing added",
+    );
+    expect((await sent(wrapper)).prompt_assist.choices.camera).toBe("none");
+    wrapper.unmount();
+    wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(field(wrapper, "camera").props("modelValue")).toBe("");
+  });
+
+  it("with no prompt yet, the foot says the lines come with words, never that nothing is added", async () => {
+    // As the server does: the look's lines are added only to a prompt with words.
+    preflightWorkflowRun.mockImplementation(async (body) =>
+      answer({ ...ASSIST, parts: body.prompt?.trim() ? ASSIST.parts : [] }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const foot = () => group(wrapper).find(".pa-foot > span").text();
+    expect(foot()).toBe("Adds its lines once your prompt has words.");
+    await group(wrapper).find('[data-testid="pa-on"]').trigger("click");
+    await flushPromises();
+    expect(foot()).toBe("Nothing added to your prompt.");
+  });
+
+  it("Show full prompt reads your words, then each added line marked + and named", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer());
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    promptBox(wrapper).vm.$emit("update:modelValue", "a mug on a desk");
+    await group(wrapper).find('[data-testid="pa-show-full"]').trigger("click");
+    const lines = group(wrapper)
+      .findAll('[data-testid="pa-full"] .pa-line')
+      .map((line) =>
+        line
+          .findAll(":scope > span")
+          .map((span) => span.text())
+          .join(" ")
+          .trim(),
+      );
+    expect(lines).toEqual([
+      "Your prompt a mug on a desk",
+      "+ Camera, line added by Photo look Taken on a phone.",
+      "+ Light, line added by Photo look Window daylight.",
+      // The camera's built-in finish, last, on a line of its own.
+      "+ Look, line added by Photo look An unedited phone photo.",
+    ]);
+  });
+
+  it("the Enhance box starts from the server's enhancer_on, and a tick is sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer(ASSIST, { enhancer: true, enhancer_on: false }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const box = wrapper.find('[data-testid="rund-enhance"]');
+    expect(box.element.checked).toBe(false);
+    expect(wrapper.text()).toContain("Off because Photo look is on");
+    expect(await sent(wrapper)).not.toHaveProperty("enhance_prompt");
+    await box.setValue(true);
+    await flushPromises();
+    expect((await sent(wrapper)).enhance_prompt).toBe(true);
+  });
+});
+
+// "Blank picture": shown only where the graph feeds a blank picture to its
+// encoder, on by default, and off is `blank_picture: false` on every request.
+describe("the blank picture", () => {
+  const box = (wrapper) => wrapper.find('[data-testid="rund-blank"]');
+  const answer = (blank_picture) => ({
+    ok: true,
+    runs: 1,
+    groups: [{ prompt: { positive_settable: true, blank_picture } }],
+  });
+
+  it("is not offered where the graph has no blank picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).exists()).toBe(false);
+  });
+
+  it("is offered, on, and sends what it always did", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(box(wrapper).element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Blank picture");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("blank_picture");
+    }
+  });
+
+  it("off, sends blank_picture: false on the pre-flight it asks and the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].blank_picture).toBe(false);
+    // Still drawn: the server reports the blank picture whether or not it was cut.
+    expect(box(wrapper).element.checked).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].blank_picture).toBe(false);
+  });
+
+  it("off on one workflow is on again on the next, and is not sent", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await box(wrapper).setValue(false);
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(false);
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(box(wrapper).element.checked).toBe(true);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("blank_picture");
+  });
+});
+
+// "Sampler": shown only where the graph samples with LCM and takes a picture,
+// LCM by default, and Euler is the one value sent. Per run, never remembered.
+describe("the sampler choice", () => {
+  const control = (wrapper) => wrapper.find('[data-testid="rund-sampler"]');
+  const option = (wrapper, id) =>
+    wrapper.find(`[data-testid="rund-sampler-${id}"]`);
+  const answer = (sampler_choice) => ({
+    ok: true,
+    runs: 1,
+    groups: [
+      { prompt: { positive_settable: true, sampler_choice, sampler: sampler_choice ? "lcm" : null } },
+    ],
+  });
+
+  it("is not offered where the graph does not sample with LCM over a picture", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(false));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Euler keeps");
+  });
+
+  it("is offered on LCM, and sends nothing for LCM", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(control(wrapper).exists()).toBe(true);
+    expect(wrapper.text()).toContain("LCM keeps the person closest");
+    expect(control(wrapper).attributes("aria-label")).toBe("Sampler");
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    for (const [body] of [
+      ...preflightWorkflowRun.mock.calls,
+      ...runWorkflowCard.mock.calls,
+    ]) {
+      expect(body).not.toHaveProperty("sampler");
+    }
+  });
+
+  it("Euler is asked on the pre-flight and sent with the run", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    preflightWorkflowRun.mockClear();
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun.mock.calls[0][0].sampler).toBe("euler");
+    expect(option(wrapper, "euler").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0].sampler).toBe("euler");
+  });
+
+  it("back on LCM after Euler, and back to LCM on the next workflow", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer(true));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await option(wrapper, "euler").trigger("click");
+    await flushPromises();
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    expect(option(wrapper, "lcm").attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls.at(-1)[0]).not.toHaveProperty("sampler");
+  });
+});
+
 // The footer's Open in ComfyUI: this run, in the owner's ComfyUI, where a save
 // makes a NEW workflow. What can silently go wrong: the workflow opens without
 // the form's changes (the body is not the run's), or the tab is opened after
@@ -6299,6 +6788,20 @@ describe("Open in ComfyUI", () => {
     expect(tab.location.replace).toHaveBeenCalledTimes(1);
     expect(tab.location.replace).toHaveBeenCalledWith(LINK);
     expect(tab.close).not.toHaveBeenCalled();
+  });
+
+  it("opens without the prompt enhancer when the run is set without it", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ prompt: { positive_settable: true, enhancer: true } }],
+    });
+    const wrapper = await mountRun(fromCard);
+    await wrapper.find('[data-testid="rund-enhance"]').setValue(false);
+    await flushPromises();
+    await openButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(openWorkflowRun.mock.calls[0][0].enhance_prompt).toBe(false);
   });
 
   it("is refused, and says why, when ComfyUI's nodes open no run", async () => {

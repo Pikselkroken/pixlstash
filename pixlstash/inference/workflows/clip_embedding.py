@@ -56,6 +56,11 @@ class ClipEmbeddingWorkflow:
         """CPU preprocessing for :meth:`encode_images`; ``None`` if not loaded."""
         return self._engine.clip_service.preprocess_images(images)
 
+    def reduce_for_preprocess(self, images: list) -> list:
+        """*images* reduced to what :meth:`preprocess_images` reads; see
+        :meth:`ClipService.reduce_for_preprocess`."""
+        return self._engine.clip_service.reduce_for_preprocess(images)
+
     def encode_images(
         self, images: list, tensors: Optional[list] = None
     ) -> Optional[np.ndarray]:

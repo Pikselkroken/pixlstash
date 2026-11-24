@@ -532,7 +532,7 @@ class TestDetectSeedTargets:
     def test_a_width_primitive_is_never_scanned_directly(self):
         # PrimitiveInt carries control_after_generate unconditionally, so
         # scanning it directly would randomize the image dimensions. The
-        # shipped Flux2-Klein-t2i template has exactly this wiring.
+        # shipped FLUX.2 Klein 9B T2I template has exactly this wiring.
         graph = {
             "68": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
             "66": {

@@ -64,8 +64,8 @@ def test_the_klein_edit_graph_converts_to_the_klein_inpaint_built_in():
     crop) rather than a literal, and ``DifferentialDiffusion`` sits on the
     model, which the built-in omits.
     """
-    converted = _edges(convert_to_inpaint(_built_in("Flux2-Klein-Image-Edit.json")))
-    expected = _edges(_built_in("Inpaint-Flux2-Klein-9B.json"))
+    converted = _edges(convert_to_inpaint(_built_in("FLUX.2 Klein 9B Edit.json")))
+    expected = _edges(_built_in("FLUX.2 Klein 9B Inpaint.json"))
     expected -= Counter(
         {
             ("UNETLoader", 0, "CFGGuider", "model"): 1,
@@ -88,8 +88,8 @@ def test_the_klein_edit_graph_converts_to_the_klein_inpaint_built_in():
 
 
 def test_the_klein_crop_node_takes_the_built_ins_settings():
-    converted = convert_to_inpaint(_built_in("Flux2-Klein-Image-Edit.json"))
-    reference = _built_in("Inpaint-Flux2-Klein-9B.json")
+    converted = convert_to_inpaint(_built_in("FLUX.2 Klein 9B Edit.json"))
+    reference = _built_in("FLUX.2 Klein 9B Inpaint.json")
     crop = converted[_one(converted, "InpaintCropImproved")]["inputs"]
     want = reference[_one(reference, "InpaintCropImproved")]["inputs"]
     assert {k: v for k, v in crop.items() if k not in ("image", "mask")} == {
@@ -347,7 +347,7 @@ def test_the_last_resize_in_a_chain_sets_the_target():
 
 
 def test_the_input_is_untouched_and_the_output_is_the_same_every_time():
-    graph = _built_in("Flux2-Klein-Image-Edit.json")
+    graph = _built_in("FLUX.2 Klein 9B Edit.json")
     before = copy.deepcopy(graph)
     first = convert_to_inpaint(graph)
     assert graph == before
@@ -403,7 +403,7 @@ def _mask_loader() -> dict:
 
 
 def _already_inpaint() -> dict:
-    return _built_in("Inpaint-Flux2-Klein-9B.json")
+    return _built_in("FLUX.2 Klein 9B Inpaint.json")
 
 
 def _outpaint() -> dict:
@@ -423,7 +423,7 @@ def _video() -> dict:
 
 
 def _upscale() -> dict:
-    return _built_in("Upscale-2x-RealESRGAN.json")
+    return _built_in("RealESRGAN Upscale 2x.json")
 
 
 def _no_save() -> dict:

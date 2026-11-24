@@ -374,6 +374,81 @@
               </template>
             </Tooltip>
           </p>
+          <!-- Photo look: camera, light and skin sentences the server adds
+               after this prompt, wherever the pre-flight offers them. Never
+               written into the box above. -->
+          <PromptAssistGroup
+            v-if="!promptUnset"
+            :assist="graphPrompt?.assist || null"
+            :model="photoLook"
+            :words="prompt"
+            :disabled="submitting"
+            @change="runPreflight()"
+          />
+          <!-- A language model rewrites this prompt before the encoder reads
+               it (`prompt.enhancer`). Per run and never remembered, like the
+               stack and the stages. Its default is the server's
+               (`prompt.enhancer_on`: off while Photo look adds lines), and a
+               touched box is sent either way. -->
+          <template v-if="graphPrompt?.enhancer">
+            <div class="rund-f rund-check">
+              <input
+                :id="enhanceId"
+                class="rund-box"
+                type="checkbox"
+                data-testid="rund-enhance"
+                :checked="enhancePrompt"
+                :disabled="submitting"
+                :aria-describedby="`${enhanceId}-hint`"
+                @change="setEnhancePrompt($event.target.checked)"
+              />
+              <label :for="enhanceId">Enhance prompt</label>
+            </div>
+            <p :id="`${enhanceId}-hint`" class="rund-note">
+              {{
+                photoLook.on.value && !enhancePrompt && enhanceChoice === null
+                  ? "Off because Photo look is on: the enhancer would rewrite the photo look lines. You can still turn it on."
+                  : "Rewrites your prompt with a language model first. Off sends your words as written and skips loading that model."
+              }}
+            </p>
+          </template>
+          <!-- A blank picture feeds the encoder's image input (`prompt.blank_picture`).
+               Per run and never remembered, like the enhancer; off is `blank_picture: false`. -->
+          <template v-if="graphPrompt?.blank_picture">
+            <div class="rund-f rund-check">
+              <input
+                :id="blankId"
+                class="rund-box"
+                type="checkbox"
+                data-testid="rund-blank"
+                :checked="blankPicture"
+                :disabled="submitting"
+                :aria-describedby="`${blankId}-hint`"
+                @change="setBlankPicture($event.target.checked)"
+              />
+              <label :for="blankId">Blank picture</label>
+            </div>
+            <p :id="`${blankId}-hint`" class="rund-note">
+              Less crunch, but different seeds draw more alike people. Off draws
+              without it.
+            </p>
+          </template>
+          <!-- The sampler of a graph that samples with LCM and takes a picture
+               (`prompt.sampler_choice`). Per run; LCM sends nothing. -->
+          <template v-if="graphPrompt?.sampler_choice">
+            <div class="rund-f">
+              <FieldLabel>Sampler</FieldLabel>
+              <Segmented
+                :model-value="sampler"
+                aria-label="Sampler"
+                :options="samplerOptions"
+                full
+                data-testid="rund-sampler"
+                @update:model-value="setSampler"
+              />
+            </div>
+            <p class="rund-note">{{ SAMPLER_HINT }}</p>
+          </template>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -1248,6 +1323,8 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
+import FieldLabel from "../widgets/FieldLabel.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 import { characterThumbnailUrl } from "../../api/characters";
 import { getPictureRecipe } from "../../api/comfyui";
@@ -1273,6 +1350,7 @@ import {
 } from "../../api/workflows";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
 import { useModelPickUp } from "../../composables/useModelPickUp";
+import { usePromptAssist } from "../../composables/usePromptAssist";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -1289,6 +1367,7 @@ import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { deriveModelName } from "../../utils/modelShelf";
 import { insertWords, namesWord, triggerWord, wordSpans } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { SAMPLER_CHOICES, SAMPLER_HINT } from "../../utils/samplerChoice";
 import { runTaskLabel } from "../../utils/runTaskLabel";
 import { pickerOption, UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import {
@@ -1331,6 +1410,7 @@ import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunReasonNotice from "./RunReasonNotice.vue";
+import PromptAssistGroup from "./PromptAssistGroup.vue";
 import RunResetChip from "./RunResetChip.vue";
 import UpscaleChoice from "./UpscaleChoice.vue";
 
@@ -1380,6 +1460,8 @@ const loadFailedId = useId();
 const picsLabelId = useId();
 const stackId = useId();
 const stageId = useId();
+const enhanceId = useId();
+const blankId = useId();
 /**
  * Bumped per read of a workflow into the form: the open, a move of the
  * picker, the read after a band save. Only the newest may write any of the
@@ -1458,6 +1540,11 @@ const fellBack = ref([]);
 const prompt = ref("");
 /** `RunGroup.prompt` of the last pre-flight: the graph's own prompt facts. */
 const graphPrompt = ref(null);
+/** Photo look's remembered choices for the Run dialog. */
+const photoLook = usePromptAssist(
+  computed(() => graphPrompt.value?.assist || null),
+  "photo",
+);
 const negative = ref("");
 const count = ref(1);
 const seedMode = ref("new");
@@ -2241,6 +2328,10 @@ async function setStage(name, on) {
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
   addedUpscale.value = false;
+  // Per run like the stages: a tick on one workflow says nothing about another.
+  enhanceChoice.value = null;
+  blankPicture.value = true;
+  sampler.value = "lcm";
 }
 
 const upscale = useUpscaleStore();
@@ -2261,6 +2352,41 @@ const addedUpscale = ref(false);
 async function setAddedUpscale(on) {
   addedUpscale.value = on;
   // The answer changes: the upscale model may be one this ComfyUI lacks.
+  await runPreflight();
+}
+
+/** The "Enhance prompt" box: the owner's tick, else the server's default. */
+const enhanceChoice = ref(null);
+const enhancePrompt = computed(
+  () => enhanceChoice.value ?? graphPrompt.value?.enhancer_on ?? true,
+);
+
+async function setEnhancePrompt(on) {
+  enhanceChoice.value = on;
+  // Off, the enhancer's model is no longer one the run needs.
+  await runPreflight();
+}
+
+/** The "Blank picture" box; off is sent as `blank_picture: false`. */
+const blankPicture = ref(true);
+
+async function setBlankPicture(on) {
+  blankPicture.value = on;
+  await runPreflight();
+}
+
+/** The "Sampler" choice: LCM as saved, or Euler on the run's copy. */
+const sampler = ref("lcm");
+const samplerOptions = computed(() =>
+  SAMPLER_CHOICES.map((o) => ({
+    ...o,
+    testid: `rund-sampler-${o.id}`,
+    disabled: submitting.value,
+  })),
+);
+
+async function setSampler(id) {
+  sampler.value = id;
   await runPreflight();
 }
 
@@ -4232,6 +4358,18 @@ function runBody() {
   if (addedUpscale.value && addedUpscaleOffered.value) {
     body.upscale = upscale.body();
   }
+  // Only a touched box is sent; untouched, the server decides (off while
+  // Photo look adds lines). Not gated on the box being drawn: a pre-flight
+  // that failed hides it, and the run must still go as the owner left it. On
+  // a graph with no enhancer the server ignores it.
+  if (enhanceChoice.value !== null) body.enhance_prompt = enhanceChoice.value;
+  // Absent is off: only a family with presets, and the group on, sends it.
+  const assist = photoLook.request();
+  if (assist) body.prompt_assist = assist;
+  // Only off is sent, and a graph with no blank picture ignores it.
+  if (!blankPicture.value) body.blank_picture = false;
+  // Only Euler is sent; LCM is the graph as saved.
+  if (sampler.value === "euler") body.sampler = "euler";
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {
@@ -4930,7 +5068,8 @@ async function runPreflight() {
   preflightError.value = "";
   const askedFor = activeKey.value;
   try {
-    const answer = await preflightWorkflowRun(runBody());
+    const body = runBody();
+    const answer = await preflightWorkflowRun(body);
     // The popup has moved to another card since this was asked: its answer is
     // about a card nobody is looking at, and its rows must not become the set
     // a pin on the new card is written from.
@@ -4981,8 +5120,15 @@ async function runPreflight() {
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    const hadAssist = Boolean(graphPrompt.value?.assist);
     graphPrompt.value = answer?.groups?.[0]?.prompt || null;
     inputsKey.value = askedFor;
+    // The first answer on a family with presets was asked without them: ask
+    // again with Photo look, so its lines and the enhancer's default are the
+    // run's. Only when presets have just appeared, so never more than once.
+    if (!hadAssist && !body.prompt_assist && photoLook.request()) {
+      await runPreflight();
+    }
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
     // the two never disagree" - so a 4xx is this body being refused and is
@@ -5297,6 +5443,8 @@ async function submit() {
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
+    // Typed Photo look texts become entries once a run is sent with them.
+    photoLook.recordRun();
     if (props.source?.fromEditTab) {
       runDialog.editRun = {
         prompts,

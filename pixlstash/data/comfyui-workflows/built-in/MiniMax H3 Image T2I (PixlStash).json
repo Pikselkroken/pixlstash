@@ -1,0 +1,227 @@
+{
+ "3": {
+  "inputs": {
+   "unet_name": "minimax_h3_image_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader"
+ },
+ "4": {
+  "inputs": {
+   "clip_sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923",
+   "type": "minimax"
+  },
+  "class_type": "PixlStashCLIPLoader"
+ },
+ "5": {
+  "inputs": {
+   "vae_sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+  },
+  "class_type": "PixlStashVAELoader"
+ },
+ "6": {
+  "inputs": {
+   "clip": [
+    "4",
+    0
+   ],
+   "prompt": [
+    "21",
+    0
+   ],
+   "width": 2048,
+   "height": 2048,
+   "images.image_1": [
+    "20",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3ImageConditioning",
+  "_meta": {
+   "title": "With the blank picture, step 1"
+  }
+ },
+ "7": {
+  "inputs": {
+   "conditioning": [
+    "22",
+    0
+   ]
+  },
+  "class_type": "ConditioningZeroOut"
+ },
+ "8": {
+  "inputs": {
+   "width": 2048,
+   "height": 2048,
+   "batch_size": 1
+  },
+  "class_type": "EmptyLatentImage",
+  "_meta": {
+   "title": "Canvas"
+  }
+ },
+ "9": {
+  "inputs": {
+   "noise": [
+    "12",
+    0
+   ],
+   "guider": [
+    "13",
+    0
+   ],
+   "sampler": [
+    "14",
+    0
+   ],
+   "sigmas": [
+    "15",
+    0
+   ],
+   "latent_image": [
+    "8",
+    0
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced"
+ },
+ "10": {
+  "inputs": {
+   "samples": [
+    "9",
+    0
+   ],
+   "vae": [
+    "5",
+    0
+   ]
+  },
+  "class_type": "VAEDecode"
+ },
+ "11": {
+  "inputs": {
+   "images": [
+    "10",
+    0
+   ],
+   "filename_prefix": "MiniMax-H3-Image"
+  },
+  "class_type": "SaveImage"
+ },
+ "12": {
+  "inputs": {
+   "noise_seed": 1
+  },
+  "class_type": "RandomNoise"
+ },
+ "13": {
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "positive": [
+    "25",
+    0
+   ],
+   "negative": [
+    "7",
+    0
+   ],
+   "cfg": 1.0
+  },
+  "class_type": "CFGGuider"
+ },
+ "14": {
+  "inputs": {
+   "s_noise": 1.1,
+   "s_noise_end": 0.9,
+   "noise_clip_std": 0.0
+  },
+  "class_type": "SamplerLCM"
+ },
+ "15": {
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "scheduler": "simple",
+   "steps": 6,
+   "denoise": 1.0
+  },
+  "class_type": "BasicScheduler"
+ },
+ "20": {
+  "inputs": {
+   "width": 32,
+   "height": 32,
+   "batch_size": 1,
+   "color": 0
+  },
+  "class_type": "EmptyImage"
+ },
+ "21": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A photograph of a red fox standing in fresh snow at dawn, soft warm light."
+  },
+  "_meta": {
+   "title": "Prompt"
+  }
+ },
+ "22": {
+  "class_type": "MiniMaxH3ImageConditioning",
+  "inputs": {
+   "clip": [
+    "4",
+    0
+   ],
+   "prompt": [
+    "21",
+    0
+   ],
+   "width": 2048,
+   "height": 2048
+  },
+  "_meta": {
+   "title": "Text only, steps 2 to 6"
+  }
+ },
+ "23": {
+  "class_type": "ConditioningSetTimestepRange",
+  "inputs": {
+   "conditioning": [
+    "6",
+    0
+   ],
+   "start": 0.0,
+   "end": 0.1
+  }
+ },
+ "24": {
+  "class_type": "ConditioningSetTimestepRange",
+  "inputs": {
+   "conditioning": [
+    "22",
+    0
+   ],
+   "start": 0.1,
+   "end": 1.0
+  }
+ },
+ "25": {
+  "class_type": "ConditioningCombine",
+  "inputs": {
+   "conditioning_1": [
+    "23",
+    0
+   ],
+   "conditioning_2": [
+    "24",
+    0
+   ]
+  }
+ }
+}

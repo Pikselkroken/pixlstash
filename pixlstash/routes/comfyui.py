@@ -35,8 +35,10 @@ from pixlstash.hub.workflow_card_reads import (
     run_filed_workflow_ids,
     workflow_of_variant,
 )
+from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
+    set_group_attributes,
     set_manual_api_document,
 )
 from pixlstash.hub.workflows import (
@@ -181,6 +183,48 @@ WORKFLOW_BUILTIN_DIR = os.path.abspath(
         os.path.dirname(__file__), "..", "data", "comfyui-workflows", "built-in"
     )
 )
+
+# Built-ins a release renamed, old file name to new. A built-in is keyed by its
+# file name, so a plain rename would file a second copy for each owner who has
+# the old one; :func:`_migrate_builtin_names` moves the record instead.
+BUILTIN_RENAMES: dict[str, str] = {
+    "Flux2-Klein-t2i.json": "FLUX.2 Klein 9B T2I.json",
+    "Flux2-Klein-Image-Edit.json": "FLUX.2 Klein 9B Edit.json",
+    "Inpaint-Flux2-Klein-9B.json": "FLUX.2 Klein 9B Inpaint.json",
+    "Sheet-Flux2-Klein-9B.json": "FLUX.2 Klein 9B Sheet.json",
+    "Sheet-Flux2-Klein-9B-Reference.json": "FLUX.2 Klein 9B Sheet from Reference.json",
+    "Inpaint-Qwen-Image-2.1.json": "Qwen-Image 2.1 Inpaint.json",
+    "Inpaint-Qwen-Image-Edit-2511.json": "Qwen-Image-Edit 2511 Inpaint.json",
+    "Sheet-Qwen-Image-2.1.json": "Qwen-Image 2.1 Sheet.json",
+    "Sheet-Qwen-Image-2.1-Reference.json": "Qwen-Image 2.1 Sheet from Reference.json",
+    "MiniMax-H3-Image-t2i.json": "MiniMax H3 Image T2I (PixlStash).json",
+    "Inpaint-MiniMax-H3-Image.json": "MiniMax H3 Image Inpaint (PixlStash).json",
+    "Sheet-MiniMax-H3-Image.json": "MiniMax H3 Image Sheet (PixlStash).json",
+    "Sheet-MiniMax-H3-Image-Reference.json": (
+        "MiniMax H3 Image Sheet from Reference (PixlStash).json"
+    ),
+    "Upscale-2x-RealESRGAN.json": "RealESRGAN Upscale 2x.json",
+}
+# Built-ins a release took out. A live copy the owner did not edit is hidden;
+# one they edited is left on the Workflows page.
+BUILTIN_RETIRED: frozenset[str] = frozenset(
+    {
+        "MiniMax-H3-Image-Edit.json",
+        # The NVFP4 text-encoder twins: every MiniMax H3 Image built-in now
+        # loads the template's int8 encoder.
+        "MiniMax-H3-Image-Edit-nvfp4-TE.json",
+        "MiniMax-H3-Image-t2i-nvfp4-TE.json",
+        "Inpaint-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-nvfp4-TE.json",
+        "Sheet-MiniMax-H3-Image-Reference-nvfp4-TE.json",
+        # 30 steps on the MiniMax H3 video model: the MiniMax H3 Image
+        # reference sheet draws the same sheet at 6.
+        "Sheet-MiniMax-H3-Reference.json",
+    }
+)
+# Prefix on a retired built-in's origin row once it has been handled, so the
+# hide happens once and an owner who shows it again is not overruled.
+_RETIRED_PREFIX = "retired:"
 
 
 def _workflow_dirs() -> list[tuple[str, str]]:
@@ -771,6 +815,308 @@ def _builtin_path(name: str) -> str | None:
         if os.path.isfile(path):
             return path
     return None
+
+
+def store_builtin_workflow(hub, name: str, path: str) -> str:
+    """Store the built-in file at *path* as a manual workflow; return its id.
+
+    The file as stored, not its runnable reading: the conversion rides along
+    as the row's API document. Its origin row is written in the same
+    transaction, with the content hash, so the inbox dedupes against it too.
+    Callers hold ``workflow_inbox.INBOX_LOCK``.
+
+    Raises:
+        NotAWorkflowError: The file is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        ValueError: It will not read as JSON, or is past the size cap.
+    """
+    stored = _load_workflow_json(path)
+    workflow_id = store_manual_workflow(
+        hub,
+        _stem(name),
+        stored,
+        "builtin",
+        api_document=converted_graph(path, stored),
+        record=(
+            workflow_origin.BUILTIN_ORIGIN,
+            name,
+            None,
+            workflow_inbox.content_hash(stored),
+        ),
+    )
+    _keep_builtin_thumbnail(hub, path, workflow_id)
+    return workflow_id
+
+
+def _keep_builtin_thumbnail(hub, path: str, workflow_id: str) -> None:
+    """Make the ``.webp`` shipped beside built-in *path* its thumbnail, unpinned.
+
+    Unpinned, like a template's picture, so the workflow's own pictures take
+    over once there are any. A built-in shipped without one keeps the empty
+    cover.
+    """
+    picture = os.path.splitext(path)[0] + ".webp"
+    if not os.path.isfile(picture):
+        return
+    try:
+        with open(picture, "rb") as handle:
+            digest = store_icon(hub.path, handle.read())
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
+    except (IconRefused, OSError, sqlite3.Error) as exc:
+        logger.warning(
+            "Built-in workflow %s is listed without its thumbnail %s: %s",
+            workflow_id,
+            picture,
+            exc,
+        )
+
+
+def refresh_builtin_workflow(hub, name: str, path: str) -> Optional[int]:
+    """Store the shipped built-in at *path* over its stored copy, if untouched.
+
+    The origin row's hash is the file as last filed. A file that still hashes
+    so is the copy already stored: nothing is read beyond it. One a release
+    changed is stored as the workflow's next version (``release``), so the
+    graph it replaces stays restorable and name, defaults, pins, recipes and
+    pictures stay where they are, **only when the current version is still
+    the one filed**. A copy the owner saved over is theirs: it is left alone
+    and logged at every start until they take the new file (remove the
+    workflow and add the built-in back) or go back to the version filed. A
+    copy that already holds the new file just records it. Callers hold
+    ``workflow_inbox.INBOX_LOCK``.
+
+    Returns:
+        The version written, or ``None`` when none was.
+
+    Raises:
+        NotAWorkflowError: The file is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        ValueError: It will not read as JSON, or is past the size cap.
+    """
+    stored = workflow_origin.stored_with_hash(hub, workflow_origin.BUILTIN_ORIGIN, name)
+    if stored is None:
+        return None  # removed by the owner
+    workflow_id, filed = stored
+    shipped = _load_workflow_json(path)
+    shipped_hash = workflow_inbox.content_hash(shipped)
+    if shipped_hash == filed:
+        return None
+
+    def record(conn, _version=None):
+        workflow_origin.upsert(
+            conn,
+            workflow_origin.BUILTIN_ORIGIN,
+            name,
+            workflow_id,
+            None,
+            shipped_hash,
+        )
+
+    # The version first: a save between these reads fails the store's check.
+    version = workflow_versions.current_version(hub, workflow_id)
+    current = workflow_versions.current_content_hash(hub, workflow_id)
+    if current == shipped_hash:
+        with hub.transaction() as conn:
+            record(conn)
+        return None
+    if filed is None or current != filed:
+        logger.info(
+            "Built-in workflow %s changed in this release, but its copy %s was "
+            "edited since it was filed, so it keeps the owner's graph.",
+            name,
+            workflow_id,
+        )
+        return None
+    try:
+        written = store_over_workflow(
+            hub,
+            workflow_id,
+            shipped,
+            workflow_versions.FROM_RELEASE,
+            expected_version=version,
+            also=record,
+        )
+    except WorkflowChanged as exc:
+        logger.info("Built-in workflow %s is not updated: %s", name, exc)
+        return None
+    logger.info(
+        "Updated built-in workflow %s (%s) to the graph this release ships, "
+        "as version %d.",
+        name,
+        workflow_id,
+        written,
+    )
+    return written
+
+
+def _rename_builtin(hub, old: str, new: str) -> None:
+    """Move *old*'s origin row to *new*, and a live copy's name with it.
+
+    The copy's name changes only while it still says the old file's stem; a
+    name the owner chose stays. Callers hold ``workflow_inbox.INBOX_LOCK``.
+    """
+    if not workflow_origin.ever_stored(hub, workflow_origin.BUILTIN_ORIGIN, old):
+        return
+    if workflow_origin.ever_stored(hub, workflow_origin.BUILTIN_ORIGIN, new):
+        logger.warning(
+            "Built-in workflow %s was renamed to %s, but %s already has a record, "
+            "so the old record is left as it is.",
+            old,
+            new,
+            new,
+        )
+        return
+    stored = workflow_origin.stored_with_hash(hub, workflow_origin.BUILTIN_ORIGIN, old)
+    if stored is not None:
+        workflow_id, _filed = stored
+        row = hub.fetchone(
+            "SELECT name FROM workflow_group_attr WHERE workflow_id = ?",
+            (workflow_id,),
+        )
+        if row is not None and row["name"] == _stem(old):
+            set_group_attributes(hub, workflow_id, name=_stem(new))
+            logger.info(
+                "Renamed built-in workflow %s (%s) to %s.",
+                old,
+                workflow_id,
+                _stem(new),
+            )
+    with hub.transaction() as conn:
+        workflow_origin.move(conn, workflow_origin.BUILTIN_ORIGIN, old, new)
+    logger.info("Built-in workflow record %s is now %s.", old, new)
+
+
+def _retire_builtin(hub, name: str) -> None:
+    """Hide a retired built-in's live copy, unless the owner edited it.
+
+    The origin row is re-keyed afterwards so this runs once: a copy the owner
+    shows again stays shown at the next start. Callers hold
+    ``workflow_inbox.INBOX_LOCK``.
+    """
+    stored = workflow_origin.stored_with_hash(hub, workflow_origin.BUILTIN_ORIGIN, name)
+    if stored is None:
+        return  # never listed, or already removed by the owner
+    workflow_id, filed = stored
+    current = workflow_versions.current_content_hash(hub, workflow_id)
+    if filed is not None and current == filed:
+        library = LibraryRegistry(hub).active_library()
+        set_group_attributes(
+            hub,
+            workflow_id,
+            hidden=True,
+            library_uuid=library.uuid if library else None,
+        )
+        logger.info(
+            "Hid built-in workflow %s (%s): PixlStash no longer ships it.",
+            name,
+            workflow_id,
+        )
+    else:
+        logger.info(
+            "Built-in workflow %s (%s) was retired, but its copy was edited since "
+            "it was filed, so it is left on the Workflows page.",
+            name,
+            workflow_id,
+        )
+    with hub.transaction() as conn:
+        workflow_origin.move(
+            conn,
+            workflow_origin.BUILTIN_ORIGIN,
+            name,
+            f"{_RETIRED_PREFIX}{name}",
+        )
+
+
+def _migrate_builtin_names(hub) -> None:
+    """Carry the records of built-ins a release renamed or retired over.
+
+    Without this, a renamed built-in is filed a second time under its new name
+    and a retired one that was never removed is left on the page. Idempotent:
+    a renamed row is found under its new name, and a retired one is re-keyed.
+    Callers hold ``workflow_inbox.INBOX_LOCK``.
+    """
+    # Each is guarded on its own, as the store and the refresh are: a hub write
+    # that fails must not end the start-up pass for every built-in after it.
+    # Both are idempotent, so the next start tries again.
+    for old, new in BUILTIN_RENAMES.items():
+        try:
+            _rename_builtin(hub, old, new)
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Built-in workflow %s could not be renamed to %s; the next "
+                "start tries again: %s",
+                old,
+                new,
+                exc,
+            )
+    for name in sorted(BUILTIN_RETIRED):
+        try:
+            _retire_builtin(hub, name)
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Built-in workflow %s could not be retired; the next start "
+                "tries again: %s",
+                name,
+                exc,
+            )
+
+
+def list_builtin_workflows(hub) -> list[str]:
+    """Put every built-in never listed before on the Workflows page; return the ids.
+
+    A built-in is the owner's by default until they remove or hide it. One
+    with any ``builtin`` origin row was listed already: it is live, hidden, or
+    removed (deleting keeps the row, dismissed, as the record that the owner
+    took it off), and none of those is filed again. So this lists what a
+    release adds, once, and brings a live one a release changed up to date
+    (:func:`refresh_builtin_workflow`). Records of built-ins a release renamed
+    or retired are carried over first (:func:`_migrate_builtin_names`). A file
+    that will not store is logged and skipped.
+    """
+    filed = []
+    with workflow_inbox.INBOX_LOCK:
+        _migrate_builtin_names(hub)
+        if not os.path.isdir(WORKFLOW_BUILTIN_DIR):
+            return []
+        for entry in sorted(os.listdir(WORKFLOW_BUILTIN_DIR)):
+            path = _builtin_path(entry) if entry.lower().endswith(".json") else None
+            if path is None:
+                continue
+            if workflow_origin.ever_stored(hub, workflow_origin.BUILTIN_ORIGIN, entry):
+                try:
+                    refresh_builtin_workflow(hub, entry, path)
+                except (
+                    NotAWorkflowError,
+                    RecursionError,
+                    ValueError,
+                    OSError,
+                    sqlite3.Error,
+                ) as exc:
+                    logger.warning(
+                        "Built-in workflow %s will not read, so its stored "
+                        "copy is not updated: %s",
+                        entry,
+                        exc,
+                    )
+                continue
+            try:
+                filed.append(store_builtin_workflow(hub, entry, path))
+            except (
+                NotAWorkflowError,
+                RecursionError,
+                ValueError,
+                OSError,
+                sqlite3.Error,
+            ) as exc:
+                logger.warning(
+                    "Built-in workflow %s cannot be a manual workflow, so it "
+                    "is not listed on the Workflows page: %s",
+                    entry,
+                    exc,
+                )
+    if filed:
+        logger.info("Listed %d built-in workflow(s) on the Workflows page.", len(filed))
+    return filed
 
 
 # ponytail: one request submits its runs one after another, uploads included;
@@ -2306,7 +2652,13 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     # every other answer. Read by the Recipe tab, which prints them under its
     # refusal to run.
     conversion_problems: list[str] = []
+    # The owner's words: what a run's prompt assist added is in
+    # `prompt_assist` instead (backend §25).
     positive_prompt: Optional[str] = None
+    # The prompt assist stamp on the picture's prompt, `{v, family, context,
+    # preset_version, joiner, parts: [{category, id, text}]}`: what was added
+    # after `positive_prompt`, exactly as sent. Null where nothing was.
+    prompt_assist: Optional[dict] = None
     negative_prompt: Optional[str] = None
     seed: Optional[int] = None
     # The seed as text as well as a number: ComfyUI draws seeds up to 2**64-1
@@ -2924,9 +3276,9 @@ def create_router(server) -> APIRouter:
         summary="Make a built-in workflow a manual workflow",
         description=(
             "Stores a workflow PixlStash ships as a manual workflow "
-            "and returns its id so the Run popup can open on it. A built-in "
-            "becomes one only when something asks: Edit with ComfyUI asks for "
-            "the built-in image edit workflow. Idempotent: a file already made "
+            "and returns its id so the Run popup can open on it. Start-up "
+            "lists every built-in once by itself; this is the explicit way "
+            "back for one the owner removed. Idempotent: a file already made "
             "a workflow answers that workflow, while it lives. A user file "
             "is not a built-in (404): data step 7 already made it a workflow."
         ),
@@ -2953,26 +3305,8 @@ def create_router(server) -> APIRouter:
             )
             if workflow_id is None:
                 try:
-                    # The file as stored, not its runnable reading: the
-                    # conversion rides along as the row's API document.
-                    stored = _load_workflow_json(path)
-                    converted = converted_graph(path, stored)
-                    # Its origin row in the same transaction, with the content
-                    # hash, so the inbox dedupes against it too.
-                    workflow_id = store_manual_workflow(
-                        hub,
-                        _stem(name),
-                        stored,
-                        "builtin",
-                        api_document=converted,
-                        record=(
-                            workflow_origin.BUILTIN_ORIGIN,
-                            name,
-                            None,
-                            workflow_inbox.content_hash(stored),
-                        ),
-                    )
-                except (NotAWorkflowError, RecursionError, ValueError) as exc:
+                    workflow_id = store_builtin_workflow(hub, name, path)
+                except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
                     logger.warning(
                         "Stored workflow %s cannot be a manual workflow: %s",
                         name,
@@ -3743,6 +4077,7 @@ def create_router(server) -> APIRouter:
             ),
             "converted_from_editor_graph": from_editor_graph,
             "positive_prompt": gen_info["positive_prompt"],
+            "prompt_assist": gen_info.get("prompt_assist"),
             "negative_prompt": extras["negative_prompt"],
             "settings": extras["settings"],
             # The workflow this picture's variant is in, in a form the

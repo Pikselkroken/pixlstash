@@ -36,7 +36,7 @@
       <!-- What draws the sheets: chosen up here, above the form, while the
            Sheets step is on. -->
       <div
-        v-if="mode === 'generate' && sheetStep?.workflowOptions?.length"
+        v-if="mode === 'generate' && sheetStep"
         class="tsb-bar__wf"
       >
         <span class="tsb-bar__sub">Sheet workflow</span>
@@ -45,6 +45,8 @@
           label="Sheet workflow"
           hide-label
           compact
+          :placeholder="sheetStep.workflowsPending ? 'Checking workflows…' : 'No sheet workflow'"
+          :disabled="!sheetStep.workflowOptions.length"
           :options="sheetStep.workflowOptions"
         />
       </div>

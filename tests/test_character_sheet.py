@@ -5,6 +5,7 @@ import json
 import pathlib
 import tempfile
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +18,9 @@ from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.services import workflow_run_service
+from pixlstash.services.comfyui_recipe_service import plan_lora_insertion
+from pixlstash.services.prompt_assist import assemble
 from pixlstash.services.workflow_hash import reduce_api_graph
 from pixlstash.services.workflow_identity import (
     SHEET_LAYOUT_ENCODER,
@@ -24,8 +28,11 @@ from pixlstash.services.workflow_identity import (
     reference_input_count,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
+from pixlstash.services.workflow_parameters import BLANK_PICTURE_CLASSES
+from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
+    PHOTO_LOOK,
     SHEET_HEIGHT,
     SHEET_WIDTH,
     agreement,
@@ -79,7 +86,7 @@ def test_every_box_lands_inside_its_own_panel(framing, proportions):
     assert all("an adult woman" in i["caption"] for i in characters)
 
 
-@pytest.mark.parametrize("size", ["small", "medium", "4k"])
+@pytest.mark.parametrize("size", ["small", "medium", "4k", "5k", "6k"])
 def test_another_sheet_size_scales_the_layout_with_its_canvas(size):
     width, height = character_sheet.SIZES[size]
     assert width * 3 == height * 5 and width % 16 == 0 and height % 16 == 0
@@ -97,7 +104,7 @@ def test_waist_up_draws_the_head_bigger_than_mid_thigh():
     def head(framing):
         items = json.loads(sheet_prompt(description="x", framing=framing))["items"]
         y1, x1, y2, x2 = next(
-            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Her head")
+            i["bbox"] for i in items if i["caption"].startswith("Panel 5: Their head")
         )
         return (y2 - y1) * (x2 - x1)
 
@@ -179,11 +186,11 @@ def test_a_background_replaces_the_studio_and_none_keeps_it(layout):
         text = sheet_prompt(description="x", layout=layout, **kwargs)
         return text if layout == "prose" else json.loads(text)["summary"]["caption"]
 
-    studio = "same woman on a plain light-grey studio background, soft even "
+    studio = "same person on a plain light-grey studio background, soft even "
     assert studio in summary()
     assert studio in summary(background="  ")
     park = summary(background="A sunlit park with tall trees.")
-    assert "same woman with the background: a sunlit park with tall trees, ph" in park
+    assert "same person with the background: a sunlit park with tall trees, ph" in park
     assert "studio" not in park
 
 
@@ -213,7 +220,7 @@ def test_no_build_given_says_none_and_a_given_one_reaches_the_torso(framing):
     assert "body shape:" not in described
     assert "{" not in "".join(i["caption"] for i in json.loads(described)["items"])
     given = sheet_prompt(description="Adult woman", body="curvy", framing=framing)
-    assert "Her body shape: curvy." in given
+    assert "Their body shape: curvy." in given
     assert "adult woman, curvy" in given
 
 
@@ -229,23 +236,70 @@ def test_a_reference_prompt_names_the_picture_and_keeps_every_box():
     assert len(characters) == 6
     for item in characters:
         assert (
-            "the same woman as in the reference picture, auburn hair, slim"
+            "the same person as in the reference picture, auburn hair, slim"
             in item["caption"]
         )
     assert "reference picture" not in json.dumps(plain)
     # No description: the picture alone says who.
     bare = json.loads(sheet_prompt(description="", reference=True))
     assert (
-        "the same woman as in the reference picture, wearing"
+        "the same person as in the reference picture, wearing"
         in (bare["items"][0]["caption"])
     )
 
 
 def test_a_prose_prompt_is_the_summary_sentence_not_the_layout():
     layout = json.loads(sheet_prompt(description="x", reference=True))
-    prose = sheet_prompt(description="x", reference=True, layout="prose")
-    assert prose == layout["summary"]["caption"]
-    assert prose.startswith("Character reference sheet of one and the same woman")
+    prose = sheet_prompt(
+        description="x", reference=True, layout="prose", photo_look=False
+    )
+    # The same sentence, with the eye colour among what every photo shares.
+    assert prose == layout["summary"]["caption"].replace(
+        "Identical face, hair", "Identical face, eye colour, hair"
+    )
+    assert prose.startswith("Character reference sheet of one and the same person")
+
+
+def test_the_photo_look_is_the_prose_default_and_leaves_the_layouts_alone():
+    """Ordinary unedited photographs, not renders: on by default for prose,
+    and the probed MOSS and regions layouts never see it."""
+    look = sheet_prompt(description="x", layout="prose")
+    plain = sheet_prompt(description="x", layout="prose", photo_look=False)
+    assert look.endswith(f" {PHOTO_LOOK}")
+    assert "photorealistic" not in look
+    assert PHOTO_LOOK not in plain and "photorealistic photographs" in plain
+    for layout in ("moss", "regions"):
+        assert sheet_prompt(description="x", layout=layout) == sheet_prompt(
+            description="x", layout=layout, photo_look=False
+        )
+        text = sheet_prompt(description="x", layout=layout)
+        assert "digitals" not in text and "eye colour" not in text
+
+
+def test_the_sheet_look_the_run_adds_is_the_photo_look_prompt_byte_for_byte():
+    """`look_added_by_run` hands the look to the run's prompt assist; its sheet
+    default then sends the model exactly what #2776's photo look did."""
+    words = sheet_prompt(description="x", layout="prose", look_added_by_run=True)
+    assert "photorealistic" not in words and PHOTO_LOOK not in words
+    graph = json.loads(
+        (
+            pathlib.Path(character_sheet.__file__).parent.parent
+            / "data/comfyui-workflows/built-in/MiniMax H3 Image T2I (PixlStash).json"
+        ).read_text(encoding="utf-8")
+    )
+    stamp = assemble("minimax_h3_image", "sheet", {}, words)
+    workflow_run_service.apply_prompts(graph, words, None, None, stamp)
+    assert graph["6"]["inputs"]["prompt"] == sheet_prompt(
+        description="x", layout="prose"
+    )
+    # Whatever photo_look says, and the layouts never see it.
+    assert words == sheet_prompt(
+        description="x", layout="prose", photo_look=False, look_added_by_run=True
+    )
+    for layout in ("moss", "regions"):
+        assert sheet_prompt(
+            description="x", layout=layout, look_added_by_run=True
+        ) == sheet_prompt(description="x", layout=layout)
 
 
 def _edit_graph(latent: str) -> dict:
@@ -434,26 +488,114 @@ def test_a_klein_edit_sized_from_its_picture_sizes_its_scheduler_too():
 
 
 @pytest.mark.parametrize(
-    ("name", "references"),
+    ("name", "references", "size"),
     [
-        ("Sheet-Flux2-Klein-9B.json", 0),
-        ("Sheet-Flux2-Klein-9B-Reference.json", 1),
-        ("Sheet-MiniMax-H3-Reference.json", 1),
-        ("Sheet-Qwen-Image-2.1.json", 0),
-        ("Sheet-Qwen-Image-2.1-Reference.json", 1),
+        ("FLUX.2 Klein 9B Sheet.json", 0, "large"),
+        ("FLUX.2 Klein 9B Sheet from Reference.json", 1, "large"),
+        ("MiniMax H3 Image Sheet (PixlStash).json", 0, "4k"),
+        ("MiniMax H3 Image Sheet from Reference (PixlStash).json", 1, "4k"),
+        ("Qwen-Image 2.1 Sheet.json", 0, "large"),
+        ("Qwen-Image 2.1 Sheet from Reference.json", 1, "large"),
     ],
 )
-def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references):
+def test_the_shipped_sheet_workflows_draw_at_the_sheet_size(name, references, size):
     """The step lists a workflow from a reference only with a reference input,
-    and draws only one with a size to set: every size is the sheet's (#2700)."""
+    and draws only one with a size to set: every size is one of the sheet's
+    (#2700), and MiniMax H3 Image's is 4K, the least it draws faces well at."""
     graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
     assert reference_input_count(reduce_api_graph(graph)) == references
     sizes = {
         (node["inputs"]["width"], node["inputs"]["height"])
         for node in graph.values()
-        if "width" in node["inputs"]
+        if "width" in node["inputs"] and node["class_type"] not in BLANK_PICTURE_CLASSES
     }
-    assert sizes == {(SHEET_WIDTH, SHEET_HEIGHT)}
+    assert sizes == {character_sheet.SIZES[size]}
+
+
+# The outputs of every class the H3 Image sheets use, as ComfyUI declares them:
+# what the LoRA splice types its links by.
+_H3_IMAGE_OUTPUTS = {
+    "LoadImage": ["IMAGE", "MASK"],
+    "UNETLoader": ["MODEL"],
+    "PixlStashCLIPLoader": ["CLIP"],
+    "PixlStashVAELoader": ["VAE"],
+    "MiniMaxH3ImageConditioning": ["CONDITIONING", "LATENT"],
+    "ConditioningZeroOut": ["CONDITIONING"],
+    "EmptyLatentImage": ["LATENT"],
+    "EmptyImage": ["IMAGE"],
+    "PrimitiveStringMultiline": ["STRING"],
+    "ConditioningSetTimestepRange": ["CONDITIONING"],
+    "ConditioningCombine": ["CONDITIONING"],
+    "RandomNoise": ["NOISE"],
+    "CFGGuider": ["GUIDER"],
+    "SamplerLCM": ["SAMPLER"],
+    "BasicScheduler": ["SIGMAS"],
+    "SamplerCustomAdvanced": ["LATENT", "LATENT"],
+    "VAEDecode": ["IMAGE"],
+    "SaveImage": [],
+}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
+        "MiniMax H3 Image Sheet from Reference (PixlStash).json",
+    ],
+)
+def test_the_h3_image_sheets_and_t2i_draw_with_lcm_and_a_run_still_reaches_them(
+    name,
+):
+    """euler at 6 steps draws H3 Image faces crunchy; SamplerLCM with its
+    noise easing from 1.1 to 0.9 draws them clean, for a sheet and for a plain
+    text to image alike. A run must still find the seed (now RandomNoise's)
+    and splice a LoRA into both readers of the model."""
+    graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
+    by_class = {node["class_type"]: node["inputs"] for node in graph.values()}
+    assert by_class["SamplerLCM"] == {
+        "s_noise": 1.1,
+        "s_noise_end": 0.9,
+        "noise_clip_std": 0.0,
+    }
+    assert "KSampler" not in by_class
+    assert by_class["CFGGuider"]["cfg"] == 1.0
+    assert by_class["BasicScheduler"]["steps"] == 6
+    assert [(t["class_type"], t["field"]) for t in run_seed_targets(graph, None)] == [
+        ("RandomNoise", "noise_seed")
+    ]
+    info = {cls: {"output": out} for cls, out in _H3_IMAGE_OUTPUTS.items()}
+    rewired = {
+        (r["class_type"], r["field"])
+        for r in plan_lora_insertion(graph, info)["rewires"]
+    }
+    assert {("CFGGuider", "model"), ("BasicScheduler", "model")} <= rewired
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MiniMax H3 Image T2I (PixlStash).json",
+        "MiniMax H3 Image Sheet (PixlStash).json",
+    ],
+)
+def test_the_h3_image_text_workflows_condition_on_a_blank_picture_never_drawn_from(
+    name,
+):
+    """A blank picture in image_1 puts the ``<Picture 1>`` label and vision
+    tokens ahead of the prompt, which draws H3 Image cleaner from words. With
+    no VAE on the conditioning it is not a reference latent, and PixlStash
+    must still read the workflow as text to image with no picture to fill."""
+    graph = json.loads((pathlib.Path(WORKFLOW_BUILTIN_DIR) / name).read_text())
+    conditioning = graph["6"]["inputs"]
+    blank = graph[conditioning["images.image_1"][0]]
+    assert blank == {
+        "inputs": {"width": 32, "height": 32, "batch_size": 1, "color": 0},
+        "class_type": "EmptyImage",
+    }
+    assert "vae" not in conditioning
+    assert reference_input_count(reduce_api_graph(graph)) == 0
+    assert detect_workflow_io(graph).picture_inputs == ()
 
 
 @pytest.mark.parametrize(
@@ -588,7 +730,7 @@ def test_a_text_to_image_copy_saves_with_save_image():
                 class_type="ConditioningCombine",
                 inputs={"conditioning_1": ["2", 0], "conditioning_2": ["4", 0]},
             ),
-            "finds 2 prompts",
+            "does not find one prompt",
         ),
     ],
 )
@@ -630,8 +772,10 @@ def _sheet(lines=(), size=(SHEET_WIDTH, SHEET_HEIGHT)) -> Image.Image:
     return image
 
 
-def test_a_seamless_sheet_is_cut_on_the_grid():
-    """Background the photos share is theirs: cut on the grid, nothing trimmed."""
+def test_a_seamless_sheet_is_cut_on_the_grid_and_says_it_is_not_sure():
+    """Nothing on the sheet says where one photo ends: cut on the grid,
+    nothing trimmed, and not clean, since wherever two photos meet there is
+    a line, and background with none is one photo as likely as two."""
     assert sheet_cells(_sheet()) == (
         [
             (0, 0, 600, 768),
@@ -641,7 +785,7 @@ def test_a_seamless_sheet_is_cut_on_the_grid():
             (1200, 0, 1880, 1536),
             (1880, 0, 2560, 1536),
         ],
-        True,
+        False,
     )
 
 
@@ -664,6 +808,27 @@ def test_cuts_follow_dividers_drawn_off_the_grid():
     assert (cells[4][2], cells[5][0]) == (1900 - 2, 1904 + 2)
     assert clean
     # No panel keeps a sliver of a divider.
+    for left, top, right, bottom in cells:
+        assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
+
+
+def test_each_passport_row_is_cut_on_its_own_column_gutter():
+    """MiniMax H3 Image draws the two passport rows with their gutters apart
+    (measured: 1232 against 1197 on a 5280 wide sheet). One cut down the whole
+    height left a strip of the next photo on one row."""
+    image = _sheet(
+        [
+            ("x", 630, 0, 768),  # top row's gutter, 30 px right
+            ("x", 560, 772, 1536),  # bottom row's, 40 px left
+            ("y", 768, 0, 1200),  # passport row
+            ("x", 1200, 0, 1536),  # passport | body
+            ("x", 1880, 0, 1536),  # body | body
+        ]
+    )
+    cells, clean = sheet_cells(image)
+    assert (cells[0][2], cells[1][0]) == (630 - 2, 634 + 2)
+    assert (cells[2][2], cells[3][0]) == (560 - 2, 564 + 2)
+    assert clean
     for left, top, right, bottom in cells:
         assert np.asarray(image.crop((left, top, right, bottom))).min() > 100
 
@@ -757,12 +922,21 @@ def test_a_smaller_sheet_is_cut_in_proportion():
 def _photos(bands=(), seed=0) -> Image.Image:
     """A sheet of "photos": smooth seeded texture, where no line is the same
     all along, with flat *bands* over it: ("x", start, end, level) a column
-    band, ("y", start, end, level, left, right) a row band over left..right."""
+    band, ("y", start, end, level, left, right) a row band over left..right.
+
+    The texture is turned 7 degrees: smoothed on a square grid, every row
+    would change fastest on the same columns, a grain no photo has and the
+    seam search rightly reads as seams."""
     rng = np.random.default_rng(seed)
-    coarse = rng.integers(40, 220, (SHEET_HEIGHT // 24 + 1, SHEET_WIDTH // 24 + 1))
-    texture = Image.fromarray(coarse.astype(np.uint8)).resize(
-        (SHEET_WIDTH, SHEET_HEIGHT), Image.BICUBIC
+    side = 3200
+    coarse = rng.integers(40, 220, (side // 24, side // 24))
+    texture = (
+        Image.fromarray(coarse.astype(np.uint8))
+        .resize((side, side), Image.BICUBIC)
+        .rotate(7, resample=Image.BICUBIC)
     )
+    left, top = (side - SHEET_WIDTH) // 2, (side - SHEET_HEIGHT) // 2
+    texture = texture.crop((left, top, left + SHEET_WIDTH, top + SHEET_HEIGHT))
     pixels = np.asarray(texture.convert("RGB")).copy()
     for band in bands:
         if band[0] == "x":
@@ -842,11 +1016,41 @@ def _studio(people) -> Image.Image:
 
 def test_on_a_seamless_sheet_the_cut_lands_in_the_background_between_people():
     """No gutter at all, and the grid line 1880 grazes the second person: the
-    cut moves into the grey between them, and none of it is trimmed."""
+    cut moves into the grey between them, and none of it is trimmed. Grey
+    with no line in it is no evidence of two photos, so it is not clean."""
     cells, clean = sheet_cells(_studio([(1500, 200), (2100, 230)]))
     assert cells[4][2] == cells[5][0]
     assert 1700 < cells[4][2] < 2100 - 230
+    assert clean is False
+
+
+def test_photos_drawn_touching_are_cut_on_the_seam_not_through_an_arm():
+    """MiniMax H3 draws its photos edge to edge, each on its own backdrop lit
+    top to bottom, so no line between them is even all along; a lit arm as
+    grey as the backdrop is. The cut belongs on the step between backdrops."""
+    ramp = np.linspace(186, 150, SHEET_HEIGHT)[:, None]
+    pixels = np.full((SHEET_HEIGHT, SHEET_WIDTH), 200.0)
+    pixels[:, 1200:1840] = ramp  # the first body photo's backdrop
+    pixels[:, 1840:] = ramp - 20  # the second's, a step darker
+    pixels[230:, 1700:1725] = 170  # an arm, 155 px left of the seam
+    pixels[:, 598:602] = pixels[766:770, :1200] = 40  # the passports' dividers
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    # Cut down the seam's middle (it lies between 1839 and 1840), 2 px of it
+    # to each side.
+    assert (cells[4][2], cells[5][0]) == (1839 - 2, 1839 + 2)
     assert clean
+
+
+def test_a_white_gutter_wider_than_a_divider_is_cut_inside_not_on_its_edge():
+    """The edge where a photo meets white is the frame's, not a seam: the cut
+    stays inside the white, blurred edge and all, so the frame trim takes all
+    of it and no panel keeps a strip of frame."""
+    image = _photos([("x", 1150, 1230, 252), ("x", 1229, 1230, 244)])
+    cells, _clean = sheet_cells(image)
+    gray = np.asarray(image.convert("L"), dtype=np.int16)
+    for left, top, right, bottom in (cells[1], cells[4]):
+        for edge in (gray[top:bottom, left], gray[top:bottom, right - 1]):
+            assert _uneven(edge)
 
 
 def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
@@ -856,16 +1060,16 @@ def test_a_face_fences_the_cut_and_says_when_nothing_else_is_clear():
     assert sheet_cells(image)[0][4][0] == 1184 + 2
     face = [1080, 300, 1280, 500]
     cells, clean = sheet_cells(image, [face])
-    assert abs(cells[4][0] - 1180) > 0.2 * 200
+    assert abs(cells[4][0] - 1180) >= 0.2 * 200
     assert clean is False
 
 
 def test_faces_across_a_whole_window_keep_the_guess_off_them():
     """Two faces fence every line the passport | body cut may take: the guess
     is the line furthest from both, not the window's first, and is unsure."""
-    faces = [[1050 - 768, 0, 1050 + 768, 1536], [1400 - 768, 0, 1400 + 768, 1536]]
+    faces = [[x - 768, 200 - 768, x + 768, 200 + 768] for x in (900, 1400)]
     cells, clean = sheet_cells(_sheet(), faces)
-    assert cells[1][2] == cells[4][0] == 1225
+    assert cells[1][2] == cells[4][0] == 1150
     assert clean is False
 
 
@@ -878,7 +1082,10 @@ def test_a_row_cut_is_scaled_by_the_sheet_height():
 
 def test_two_faces_in_one_panel_is_not_a_clean_cut():
     """The positive control holds, and a third person in a body photo fails it."""
-    image = _studio([(1500, 200), (2100, 230)])
+    image = _sheet(
+        [("x", 600, 0, 1536), ("x", 1200, 0, 1536), ("x", 1880, 0, 1536)]
+        + [("y", 768, 0, 1200)]
+    )
     heads = [[1450, 200, 1550, 300], [2050, 200, 2150, 300]]
     assert sheet_cells(image, heads)[1] is True
     assert sheet_cells(image, heads + [[2250, 200, 2300, 260]])[1] is False
@@ -902,8 +1109,10 @@ def test_the_seam_between_a_photo_and_its_frame_is_not_a_gutter():
 
 
 def test_a_band_pressed_against_the_window_edge_is_not_a_sure_cut():
-    """A sheet drawn at another scale puts its gutter past the window; the
-    clear sliver inside the window's edge is a guess, and says so."""
+    """A sheet drawn at another scale puts its gutter past the window: the
+    cut finds the band's near edge, and the body photos it leaves are not
+    the layout's (one twice the other), so the sheet is cut by size and says
+    it is not clean."""
     bands = [
         ("x", 590, 610, 250),
         ("x", 1870, 1890, 250),
@@ -912,8 +1121,144 @@ def test_a_band_pressed_against_the_window_edge_is_not_a_sure_cut():
     _cells, clean = sheet_cells(_photos(bands + [("x", 1190, 1210, 250)]))
     assert clean
     cells, clean = sheet_cells(_photos(bands + [("x", 1530, 1560, 120)]))
-    assert 1530 <= cells[1][2] < 1540
+    assert 1520 <= cells[1][2] < 1540
     assert clean is False
+
+
+# The photos on a magenta sheet, 40 px gutters: four passports, two bodies.
+_ON_MAGENTA = [
+    (40, 40, 620, 748),
+    (660, 40, 1240, 748),
+    (40, 788, 620, 1496),
+    (660, 788, 1240, 1496),
+    (1280, 40, 1900, 1496),
+    (1940, 40, 2520, 1496),
+]
+
+
+def _magenta(photos=_ON_MAGENTA) -> np.ndarray:
+    """A magenta sheet drifting from plum to hot pink left to right, with a
+    textured photo in each of *photos*, each on its own grey."""
+    ramp = np.linspace(0.0, 1.0, SHEET_WIDTH)[None, :, None]
+    plum, pink = np.array([150, 0, 140]), np.array([255, 20, 150])
+    pixels = np.broadcast_to(
+        plum + (pink - plum) * ramp, (SHEET_HEIGHT, SHEET_WIDTH, 3)
+    ).copy()
+    texture = np.asarray(_photos(), dtype=np.float64)
+    for index, (left, top, right, bottom) in enumerate(photos):
+        grey = 0.5 * texture[top:bottom, left:right] + 60 + 12 * index
+        pixels[top:bottom, left:right] = grey
+    return pixels
+
+
+def _gutter_left_in(image: Image.Image, cells) -> int:
+    """How many gutter pixels the cut panels of *image* keep."""
+    gutter = character_sheet._gutter_mask(np.asarray(image))
+    return sum(int(gutter[y0:y1, x0:x1].sum()) for x0, y0, x1, y1 in cells)
+
+
+def test_magenta_gutters_are_cut_away_whatever_their_shade():
+    """Colour gutters drifting from plum to hot pink across the sheet: each
+    panel is its photo, past the gutter and its soft edge, and no more."""
+    image = Image.fromarray(_magenta().astype(np.uint8))
+    cells, clean = sheet_cells(image)
+    assert clean
+    assert _gutter_left_in(image, cells) == 0
+    for cell, photo in zip(cells, _ON_MAGENTA):
+        assert all(abs(a - b) <= 3 for a, b in zip(cell, photo)), (cell, photo)
+
+
+def test_a_white_frame_inside_a_magenta_gutter_is_trimmed_too():
+    """A photo framed in white on a magenta sheet: the panel is the photo, not
+    its frame, as the seam and size steps already cut it."""
+    pixels = _magenta()
+    frame = 24
+    for left, top, right, bottom in _ON_MAGENTA:
+        pixels[top : top + frame, left:right] = 250
+        pixels[bottom - frame : bottom, left:right] = 250
+        pixels[top:bottom, left : left + frame] = 250
+        pixels[top:bottom, right - frame : right] = 250
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    assert clean
+    for cell, (left, top, right, bottom) in zip(cells, _ON_MAGENTA):
+        assert cell[0] >= left + frame and cell[1] >= top + frame, (cell, left, top)
+        assert cell[2] <= right - frame and cell[3] <= bottom - frame, (
+            cell,
+            right,
+            bottom,
+        )
+
+
+def test_a_pink_garment_at_a_panel_edge_stays_in_its_panel():
+    """A sleeve in the gutter's own pink, reaching the photo's bottom edge:
+    it is the photo's, so the panel loses no more than the gutter's edge."""
+    pixels = _magenta()
+    pixels[1380:1496, 200:450] = (230, 10, 150)
+    cells, clean = sheet_cells(Image.fromarray(pixels.astype(np.uint8)))
+    assert clean
+    assert cells[2][3] >= 1496 - 3
+
+
+def test_bodies_drawn_touching_on_magenta_are_cut_on_their_seam():
+    """Qwen-Image draws magenta round groups of photos, not between them: the
+    two bodies touch, one region between the gutters, and the cut goes down
+    the seam between their backdrops."""
+    photos = list(_ON_MAGENTA)
+    photos[4], photos[5] = (1280, 40, 1920, 1496), (1920, 40, 2520, 1496)
+    image = Image.fromarray(_magenta(photos).astype(np.uint8))
+    cells, clean = sheet_cells(image)
+    assert clean
+    assert 1915 <= cells[4][2] < 1920 <= cells[5][0] <= 1925
+    assert _gutter_left_in(image, cells) == 0
+
+
+def test_one_body_photo_where_two_belong_is_split_by_size_and_not_clean():
+    """FLUX.2 Klein can draw both body views as one photo, two figures on one
+    backdrop (library picture 4046): no seam, so the body block is split in
+    two equal halves, and the cut says it is not sure."""
+    photos = list(_ON_MAGENTA)
+    photos[4:] = [(1280, 40, 2520, 1496)]
+    pixels = _magenta(photos)
+    pixels[40:1496, 1280:2520] = 120 + 0.3 * pixels[40:1496, 1280:2520] - 36
+    image = Image.fromarray(pixels.astype(np.uint8))
+    cells, clean = sheet_cells(image)
+    assert clean is False
+    assert abs(cells[4][2] - 1900) <= 4
+    assert _gutter_left_in(image, cells) == 0
+
+
+def test_a_sheet_that_is_not_the_layout_is_cut_by_size_and_not_clean():
+    """A sheet whose lines make no sense of the layout (the passport rows cut
+    a third of the way down, one twice the other) falls to the layout's own
+    cells, sized to what was found (the passport block's edge), and says the
+    cut is not clean."""
+    image = _sheet([("x", 1000, 0, 1536), ("y", 500, 0, 1000)])
+    cells, clean = sheet_cells(image)
+    assert clean is False
+    assert cells == [
+        (0, 0, 499, 768),
+        (499, 0, 998, 768),
+        (0, 768, 499, 1536),
+        (499, 768, 998, 1536),
+        (1006, 0, 1783, 1536),
+        (1783, 0, 2560, 1536),
+    ]
+
+
+def test_photos_drawn_touching_are_cut_where_texture_stops():
+    """MiniMax H3's passports meet in much the same grey: a knitted sweater
+    at the bottom of one photo runs into the plain backdrop at the top of
+    the next. Nothing steps in level, but the texture stops on one line."""
+    rng = np.random.default_rng(3)
+    pixels = np.full((SHEET_HEIGHT, SHEET_WIDTH), 200.0)
+    knit = 200 + rng.normal(0, 12, (90, 1200))
+    pixels[690:780, :1200] = knit  # each top passport's sweater, to the seam
+    pixels[:, 598:602] = 40  # the passports' column divider
+    pixels[:, 1198:1202] = pixels[:, 1878:1882] = 40  # the body dividers
+    cells, clean = sheet_cells(Image.fromarray(pixels.clip(0, 255).astype(np.uint8)))
+    assert clean
+    assert 776 <= cells[0][3] < 780 <= cells[2][1] <= 784
+    assert 776 <= cells[1][3] < 780 <= cells[3][1] <= 784
 
 
 def test_agreement_and_closeness():
@@ -1085,7 +1430,9 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
             raise OSError("disk full")
         return [], [], [10, 11]
 
-    monkeypatch.setattr(character_sheet, "_cut", lambda server, sheet, faces: [b""] * 2)
+    monkeypatch.setattr(
+        character_sheet, "_cut", lambda server, sheet, faces, boxes=None: [b""] * 2
+    )
     monkeypatch.setattr(character_sheet, "import_derived_outputs", import_panels)
     server = type("Server", (), {"vault": type("Vault", (), {"db": Db()})()})()
     with pytest.raises(OSError):
@@ -1155,24 +1502,40 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "size": "small"},
     ).json()
     assert (small["width"], small["height"]) == (1280, 768)
-    # MiniMax H3's size: the route takes it like any other.
-    four_k = client.post(
-        f"{API_PREFIX}/character-sheets/prompt",
-        json={"description": "x", "size": "4k", "layout": "prose"},
-    )
-    assert four_k.status_code == 200, four_k.text
-    assert (four_k.json()["width"], four_k.json()["height"]) == (5280, 3168)
+    # MiniMax H3's sizes: the route takes them like any other.
+    for size, canvas in (
+        ("4k", (3840, 2304)),
+        ("5k", (5280, 3168)),
+        ("6k", (6240, 3744)),
+    ):
+        drawn = client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"description": "x", "size": size, "layout": "prose"},
+        )
+        assert drawn.status_code == 200, drawn.text
+        assert (drawn.json()["width"], drawn.json()["height"]) == canvas
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},
     ).json()["prompt"]
-    assert "the same woman as in the reference picture, x" in prose
+    assert "the same person as in the reference picture, x" in prose
     assert not prose.startswith("{")
     little = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "little_person", "layout": "prose"},
     ).json()["prompt"]
     assert "a little person with dwarfism" in little
+    assert little.endswith(character_sheet.PHOTO_LOOK)
+    plain = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "layout": "prose", "photo_look": False},
+    ).json()["prompt"]
+    assert "digitals" not in plain
+    by_run = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"description": "x", "layout": "prose", "look_added_by_run": True},
+    ).json()["prompt"]
+    assert "digitals" not in by_run and "photorealistic" not in by_run
     giant = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "proportions": "giant"},
@@ -1226,6 +1589,146 @@ def test_using_a_sheet_refuses_unknown_ids(client, sheet_id):
         json={"picture_ids": [sheet_id, 999999]},
     )
     assert missing_picture.status_code == 404
+
+
+_HAND_BOXES = [
+    [0, 0, 0.25, 0.5],
+    [0.25, 0, 0.5, 0.5],
+    [0, 0.5, 0.25, 1],
+    [0.25, 0.5, 0.5, 1],
+    [0.5, 0, 0.8, 1],
+    [0.8, 0, 1, 1],
+]
+# The six photos a 2560x1536 sheet cut at _HAND_BOXES is, in pixels.
+_HAND_SIZES = [(640, 768)] * 4 + [(768, 1536), (512, 1536)]
+# The same sheet cut automatically: the 1900 divider trimmed, as the use test
+# above asserts for it.
+_AUTO_SIZES = [(600, 768)] * 4 + [(698, 1536), (654, 1536)]
+
+
+def _panel_sizes(client, panel_ids):
+    def read(session):
+        return {
+            p.id: p
+            for p in session.exec(select(Picture).where(Picture.id.in_(panel_ids)))
+        }
+
+    pictures = client.server.vault.db.run_task(read)
+    return [(pictures[i].width, pictures[i].height) for i in panel_ids]
+
+
+def test_a_sheet_is_cut_before_its_faces_are_read(tmp_path, monkeypatch):
+    """The cut needs no faces, so a sheet whose faces are unread already has
+    its six cells, the same as its cut once read."""
+    _sheet([("x", 1900, 0, 1536)]).save(tmp_path / "sheet.png", format="PNG")
+    picture = ("png", SHEET_WIDTH, SHEET_HEIGHT, "sheet.png")
+    monkeypatch.setattr(
+        character_sheet,
+        "sheet_faces_in_session",
+        lambda character_id, ids, refs=None: (
+            {pid: [] for pid in ids},
+            [],
+            {pid: picture for pid in ids},
+        ),
+    )
+    vault = SimpleNamespace(
+        image_root=str(tmp_path),
+        db=SimpleNamespace(run_immediate_read_task=lambda fn, *args: fn(*args)),
+    )
+    [unread], _ = character_sheet.rank_sheets(vault, 1, [5])
+    assert unread["faces_read"] is False
+    expected, _ = sheet_cells(_sheet([("x", 1900, 0, 1536)]))
+    assert len(unread["cells"]) == 6
+    for got, box in zip(unread["cells"], expected):
+        assert got == pytest.approx(
+            [
+                box[0] / SHEET_WIDTH,
+                box[1] / SHEET_HEIGHT,
+                box[2] / SHEET_WIDTH,
+                box[3] / SHEET_HEIGHT,
+            ]
+        )
+    assert unread["cuts_cleanly"] is False
+
+
+def test_a_sheet_cut_by_hand_is_cut_at_its_boxes_exactly(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet Hand")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(sheet): _HAND_BOXES}},
+    )
+    assert response.status_code == 200, response.text
+    assert _panel_sizes(client, response.json()["picture_ids"]) == _HAND_SIZES
+
+
+def test_a_sheet_without_boxes_is_still_cut_automatically(client, sheet_id):
+    # Identical uploads are one picture, so the hand-cut one differs in content.
+    edited = _upload_sheet(client, [("x", 1902, 0, 1536)])
+    automatic = sheet_id
+    character_id = _new_character(client, "Sheet Mixed")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={
+            "picture_ids": [edited, automatic],
+            "boxes": {str(edited): _HAND_BOXES},
+        },
+    )
+    assert response.status_code == 200, response.text
+    panel_ids = response.json()["picture_ids"]
+    assert len(panel_ids) == 12
+    assert _panel_sizes(client, panel_ids) == _HAND_SIZES + _AUTO_SIZES
+
+
+@pytest.mark.parametrize(
+    "boxes",
+    [
+        pytest.param(lambda b: b[:5], id="five-boxes"),
+        pytest.param(lambda b: [[0, 0, 1.2, 0.5]] + b[1:], id="past-the-sheet"),
+        pytest.param(lambda b: [[0.5, 0, 0.25, 0.5]] + b[1:], id="inverted"),
+        pytest.param(lambda b: [[0, 0, 0.005, 0.5]] + b[1:], id="under-32-px"),
+        pytest.param(lambda b: [[0, 0, 0.5]] + b[1:], id="three-numbers"),
+    ],
+)
+def test_hand_boxes_that_are_not_six_photos_on_the_sheet_are_refused(client, boxes):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet Refused")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(sheet): boxes(_HAND_BOXES)}},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_a_hand_box_that_is_not_a_number_is_refused(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    character_id = _new_character(client, "Sheet NaN")
+    # The test client cannot encode NaN, so the body is written out by hand.
+    rest = json.dumps(_HAND_BOXES[1:])[1:-1]
+    body = '{"picture_ids": [%d], "boxes": {"%d": [[0, 0, NaN, 0.5], %s]}}' % (
+        sheet,
+        sheet,
+        rest,
+    )
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_hand_boxes_for_a_picture_not_among_the_sheets_are_refused(client):
+    sheet = _upload_sheet(client, [("x", 1900, 0, 1536)])
+    other = _upload_sheet(client, [("x", 1904, 0, 1536)])
+    character_id = _new_character(client, "Sheet Foreign")
+    response = client.post(
+        f"{API_PREFIX}/characters/{character_id}/sheets/use",
+        json={"picture_ids": [sheet], "boxes": {str(other): _HAND_BOXES}},
+    )
+    assert response.status_code == 422, response.text
+    # Nothing was cut: the foreign key is refused before any panel is imported.
+    assert "not among" in response.json()["detail"]
 
 
 def _library_uuid(server):
@@ -1348,8 +1851,10 @@ def test_ranking_scores_a_sheet_by_its_own_faces(client, sheet_id):
         time.sleep(0.5)
     assert response.json()["sheets"][0]["faces_read"]
     # Read, the sheet shows the cut using it makes: the 1900 divider trimmed.
+    # Only that cut found a line; the rest is grey both sides share, which
+    # nothing says is two photos, so the sheet may not cut cleanly.
     read = response.json()["sheets"][0]
-    assert read["cuts_cleanly"] is True
+    assert read["cuts_cleanly"] is False
     expected = [
         (0, 0, 600, 768),
         (600, 0, 1200, 768),
