@@ -4,14 +4,27 @@ import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from '
 import { pathKey } from './urlPolicy';
 
 /** Compute accelerators a PixlStash runtime can target. */
-export type Accel = 'cpu' | 'cu128' | 'rocm' | 'metal';
+export type Accel = 'cpu' | 'cu130' | 'cu128' | 'rocm' | 'metal';
 
 /**
  * The accepted {@link Accel} values, as a runtime array (the union type is erased
  * at compile time). The single source of truth for validating any externally
  * supplied accelerator string - keep it in step with the `Accel` union above.
  */
-export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu128', 'rocm', 'metal'];
+export const ACCEL_VALUES: readonly Accel[] = ['cpu', 'cu130', 'cu128', 'rocm', 'metal'];
+
+/**
+ * Accelerators that are no longer offered or installed, each mapped to the one
+ * that replaced it. A retired overlay already on disk still launches, shows in
+ * Settings (Use / Remove) and is deleted once its replacement is installed and
+ * running; it is never installed afresh.
+ *
+ * cu128: PyTorch stopped publishing to the cu128 index at torch 2.11, so the
+ * overlay could no longer match the bundled torch (#2755).
+ */
+export const RETIRED_ACCELS: Partial<Record<Accel, Accel>> = {
+  cu128: 'cu130',
+};
 
 /** True only when `value` is one of the known {@link Accel} members. */
 export function isAccel(value: unknown): value is Accel {
@@ -254,7 +267,8 @@ export interface RuntimeInfo {
 
 export const ACCEL_LABELS: Record<Accel, string> = {
   cpu: 'CPU',
-  cu128: 'NVIDIA GPU (CUDA 12.8)',
+  cu130: 'NVIDIA GPU (CUDA 13)',
+  cu128: 'NVIDIA GPU (CUDA 12.8, replaced by CUDA 13)',
   rocm: 'AMD GPU (ROCm, experimental)',
   metal: 'Apple Silicon (Metal)',
 };
@@ -265,7 +279,8 @@ export const ACCEL_LABELS: Record<Accel, string> = {
  */
 export const TORCH_INDEX: Record<Accel, string | null> = {
   cpu: 'https://download.pytorch.org/whl/cpu',
-  cu128: 'https://download.pytorch.org/whl/cu128',
+  cu130: 'https://download.pytorch.org/whl/cu130',
+  cu128: 'https://download.pytorch.org/whl/cu128', // retired: never installed
   // ROCm is experimental and Linux-only. rocm7.1 is the index that publishes the
   // same torch version line as the bundled CPU build; older rocmX.Y indexes lag
   // several torch releases behind. Keep this in step with the bundled torch when
@@ -280,6 +295,7 @@ export const TORCH_INDEX: Record<Accel, string | null> = {
  */
 export const ONNX_PACKAGE: Record<Accel, string> = {
   cpu: 'onnxruntime',
+  cu130: 'onnxruntime-gpu',
   cu128: 'onnxruntime-gpu',
   rocm: 'onnxruntime', // onnxruntime-migraphx needs system MIGraphX - bundled CPU ORT.
   metal: 'onnxruntime',
@@ -289,21 +305,29 @@ export const ONNX_PACKAGE: Record<Accel, string> = {
  * Exact `onnxruntime-gpu` version per overlay accelerator. The bundle's ORT
  * version CANNOT be used here because onnxruntime-gpu has a hidden CUDA-flavor
  * axis the version number doesn't express: PyPI serves exactly one CUDA flavor
- * per release, and it moved generations - 1.27.0 is a CUDA 13 build linking
- * `libcudart.so.13`, while a cu128 overlay's whole nvidia stack is CUDA 12
- * (only `libcudart.so.12` on disk). Installing it makes `import onnxruntime`
- * throw ImportError at module load, and since insightface imports onnxruntime
- * inside pixlstash's startup import chain, the entire backend exits code 1
- * (live incident, 2026-07-20). So each overlay accel pins the last PyPI build
- * of its own CUDA generation: 1.26.0 is the last CUDA-12 release (verified
- * working through the cu128 overlay - CUDAExecutionProvider available). A
- * future cu13x accel gets its own entry here. Deliberately resolved from PyPI
- * with NO extra package index (the ORT azure cuda-12 feed was considered and
- * rejected: a new supply-chain trust surface for zero need while 1.26.0 works).
- * Every accel that maps to `onnxruntime-gpu` in {@link ONNX_PACKAGE} MUST have
- * an entry here - {@link buildOverlayPipArgs} throws if one is missing.
+ * per release, and it moved generations at 1.27.0 (CUDA 13, `libcudart.so.13`).
+ * The wrong generation leaves the CUDA provider unloadable, and 1.27.0 itself
+ * goes further: its Python module links `libcudart.so.13` directly, so
+ * importing it without those libraries on the path raises ImportError, and
+ * since insightface imports onnxruntime inside pixlstash's startup import chain
+ * the entire backend exits code 1 (live incident, 2026-07-20, on cu128).
+ *
+ * cu130: 1.32.0, verified over a cu130 overlay (torch 2.13.0+cu130) with
+ * insightface's detection and recognition models both on
+ * CUDAExecutionProvider. From 1.28 a missing CUDA library degrades to the CPU
+ * provider with a warning instead of failing the import; the CUDA libraries
+ * themselves come from torch's nvidia wheels, which torch loads before any
+ * session is created.
+ * cu128 (retired): 1.26.0, the last CUDA-12 release; kept for the record, as a
+ * retired accel is never installed.
+ *
+ * Deliberately resolved from PyPI with NO extra package index (a new
+ * supply-chain trust surface for zero need). Every accel that maps to
+ * `onnxruntime-gpu` in {@link ONNX_PACKAGE} MUST have an entry here -
+ * {@link buildOverlayPipArgs} throws if one is missing.
  */
 export const ORT_GPU_PIN: Partial<Record<Accel, string>> = {
+  cu130: '1.32.0',
   cu128: '1.26.0',
   // rocm: no entry - ONNX_PACKAGE.rocm is the bundled CPU 'onnxruntime'.
 };

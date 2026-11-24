@@ -15,7 +15,7 @@ starts:
   `cd electron && npm test` — they are **not** wired into any workflow yet.
 - **ROCm GPU overlay install** — `rocm-overlay-install.yml` (weekly) installs
   the ROCm torch overlay with the app's pip arguments and asserts a real HIP
-  build imports. The cu128 overlay has no CI equivalent — it is covered by the
+  build imports. The cu130 overlay has no CI equivalent — it is covered by the
   Desktop section below.
 
 **Automated-coverage map** (sections removed from previous editions of this
@@ -117,7 +117,7 @@ docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 \
 ### 1.3 Docker — GPU image (Ubuntu, NVIDIA)
 
 Requires NVIDIA Container Toolkit. Verify GPU access first:
-`docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
+`docker run --rm --gpus all nvidia/cuda:13.0.3-base-ubuntu24.04 nvidia-smi`
 
 ```bash
 docker run -d --runtime nvidia --user $(id -u):$(id -g) \
@@ -211,7 +211,7 @@ builds the tag's source, attaches to the tag's existing release, and skips
 what is already published. Each of those workflows also takes `release_tag`
 on its own, to rebuild just one part.
 
-Overlay expectations per OS: **Windows/Linux** offer the cu128 (CUDA) overlay
+Overlay expectations per OS: **Windows/Linux** offer the cu130 (CUDA 13, driver 580+) overlay
 from Settings (ROCm where applicable on Linux); **macOS has no overlay UI at
 all** — Metal is bundled in the runtime.
 
@@ -226,11 +226,12 @@ all** — Metal is bundled in the runtime.
 
 ### 3.2 GPU overlay install & activation (Windows/Linux)
 
-| Check | Windows (cu128) | Linux (cu128) |
+| Check | Windows (cu130) | Linux (cu130) |
 |-------|-----------------|---------------|
 | Settings → compute backends: install the GPU overlay — download/install completes and the backend activates | | |
 | After restart on the GPU backend, JoyCaption **nf4** produces a caption for a newly imported picture **on the GPU** (check logs: no CPU fallback) | | |
 | ONNX runtime loads on the overlay (no `libcudart`/DLL import errors in logs — regression: per-accel ORT pin) | | |
+| Upgrading from an app with a CUDA 12.8 overlay: it still starts on the GPU; Settings lists it as replaced, installing CUDA 13 removes it | | |
 
 ### 3.3 Broken-overlay resilience (Windows/Linux)
 

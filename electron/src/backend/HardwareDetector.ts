@@ -24,18 +24,37 @@ function currentArch(): Hardware['arch'] {
   return process.arch === 'arm64' ? 'arm64' : 'x64';
 }
 
-async function hasNvidiaGpu(): Promise<string | null> {
+/**
+ * The oldest driver branch that runs CUDA 13 (580, both Linux and Windows).
+ * Below it the cu130 torch wheels cannot initialise CUDA at all, so the overlay
+ * would be a multi-GB download that runs on the CPU.
+ */
+export const MIN_CUDA13_DRIVER = 580;
+
+/**
+ * True unless `driverVersion` ("615.71.09", "581.57") is a branch older than
+ * {@link MIN_CUDA13_DRIVER}. An unreadable version answers true: the install
+ * still works and the backend falls back to CPU on its own, so a parse miss
+ * must not hide the GPU.
+ */
+export function driverRunsCuda13(driverVersion: string | undefined): boolean {
+  const major = Number.parseInt(driverVersion ?? '', 10);
+  return Number.isNaN(major) || major >= MIN_CUDA13_DRIVER;
+}
+
+async function nvidiaGpu(): Promise<{ name: string; driver?: string } | null> {
   try {
-    const { stdout } = await execFileP('nvidia-smi', ['-L'], { timeout: 4000 });
+    const { stdout } = await execFileP(
+      'nvidia-smi',
+      ['--query-gpu=name,driver_version', '--format=csv,noheader'],
+      { timeout: 4000 },
+    );
     const line = stdout.split('\n').find((l) => l.trim().length > 0);
-    if (!line) return 'NVIDIA GPU';
-    // `nvidia-smi -L` → "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-…)". Keep just
-    // the model name; the device index and UUID mean nothing to the user.
-    const name = line
-      .replace(/^GPU\s+\d+:\s*/, '')
-      .replace(/\s*\(UUID:[^)]*\)\s*$/, '')
-      .trim();
-    return name || 'NVIDIA GPU';
+    if (!line) return { name: 'NVIDIA GPU' };
+    // "NVIDIA GeForce RTX 5090, 615.71.09": the first GPU's model and driver.
+    const comma = line.lastIndexOf(',');
+    if (comma < 0) return { name: line.trim() || 'NVIDIA GPU' };
+    return { name: line.slice(0, comma).trim() || 'NVIDIA GPU', driver: line.slice(comma + 1).trim() };
   } catch {
     return null;
   }
@@ -117,10 +136,19 @@ export async function detectHardware(forcedAccel: Accel | null = null): Promise<
     accelerators.push('metal');
   }
 
-  const nvidia = await hasNvidiaGpu();
+  const nvidia = await nvidiaGpu();
   if (nvidia && os !== 'mac') {
-    accelerators.push('cu128');
-    gpuName = nvidia;
+    if (driverRunsCuda13(nvidia.driver)) {
+      accelerators.push('cu130');
+      gpuName = nvidia.name;
+    } else {
+      // Not offered: torch cu130 would install and then never see the GPU.
+      // An existing CUDA 12.8 overlay keeps working (see RETIRED_ACCELS).
+      console.warn(
+        `[hardware] ${nvidia.name} has driver ${nvidia.driver}; GPU acceleration needs ` +
+          `driver ${MIN_CUDA13_DRIVER} or newer (CUDA 13), so it is not offered`,
+      );
+    }
   }
 
   const rocm = await hasAmdRocmGpu();
@@ -145,7 +173,7 @@ export async function detectHardware(forcedAccel: Accel | null = null): Promise<
 /**
  * GPU accelerators worth offering on top of the bundled env. The installer
  * already ships a working `bundledAccel` (cpu on Windows/Linux, metal on macOS);
- * this returns the detected discrete-GPU accelerators (cu128/rocm) that need an
+ * this returns the detected discrete-GPU accelerators (cu130/rocm) that need an
  * on-demand wheel overlay. Empty when the bundled env already covers the GPU
  * (e.g. Metal on Apple Silicon).
  */

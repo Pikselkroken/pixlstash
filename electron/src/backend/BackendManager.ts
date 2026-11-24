@@ -7,6 +7,7 @@ import {
   ACCEL_LABELS,
   ONNX_PACKAGE,
   ORT_GPU_PIN,
+  RETIRED_ACCELS,
   RuntimeInfo,
   TORCH_INDEX,
   activeAccelPath,
@@ -87,7 +88,7 @@ export interface DistInfo {
 }
 
 /** GPU accelerators that can be layered on top of the bundled CPU/Metal env. */
-export const OVERLAY_ACCELS: Accel[] = ['cu128', 'rocm'];
+export const OVERLAY_ACCELS: Accel[] = ['cu130', 'cu128', 'rocm'];
 
 /**
  * Build the `pip install` argument list for a GPU overlay. Pure (no I/O) so the
@@ -123,7 +124,7 @@ export function buildOverlayPipArgs(
   } else if (userIndexUrl) {
     args.push('--index-url', userIndexUrl);
   }
-  // Pin torch to the bundled *public* version, dropping the +cpu/+cu128 local
+  // Pin torch to the bundled *public* version, dropping the +cpu/+cu130 local
   // tag (the GPU index serves its own local build). If the GPU index lags the
   // bundled CPU build - its torch version isn't published there yet - fall back
   // to the index's newest and let pip choose the matching torchvision. The
@@ -139,12 +140,11 @@ export function buildOverlayPipArgs(
   }
   if (ONNX_PACKAGE[accel] === 'onnxruntime-gpu') {
     // NOT the bundle's ORT version: onnxruntime-gpu has a CUDA-flavor axis the
-    // version number doesn't express - PyPI serves one flavor per release, and
-    // 1.27.0 moved to CUDA 13 (links libcudart.so.13) while the cu128 overlay's
-    // nvidia stack only ships libcudart.so.12, so `import onnxruntime` ImportErrors
-    // and the whole backend dies at startup (insightface imports it in the
-    // pixlstash import chain; live incident 2026-07-20). Pin per accel to the last
-    // build of that accel's CUDA generation instead - see ORT_GPU_PIN in config.ts.
+    // version number doesn't express - PyPI serves one flavor per release, and a
+    // build of the wrong CUDA generation cannot load its CUDA provider (1.27.0
+    // over a CUDA 12 stack even ImportErrored and killed the backend at startup;
+    // live incident 2026-07-20). Pin per accel to a build of that accel's CUDA
+    // generation instead - see ORT_GPU_PIN in config.ts.
     const ortPin = ORT_GPU_PIN[accel];
     if (!ortPin) {
       // A new GPU accel was mapped to onnxruntime-gpu without recording which
@@ -408,6 +408,25 @@ export class BackendManager {
   }
 
   /**
+   * Delete the retired overlays `accel` replaces (a CUDA 12.8 overlay once the
+   * CUDA 13 one is running), which would otherwise hold gigabytes nothing uses.
+   * Call it only once the backend has left the old overlay: on Windows a running
+   * backend holds its DLLs open. Never throws: a leftover directory is not worth
+   * failing an install that worked, and Settings still offers Remove for it.
+   */
+  async removeReplaced(accel: Accel): Promise<void> {
+    for (const [old, by] of Object.entries(RETIRED_ACCELS) as [Accel, Accel][]) {
+      if (by !== accel || !(await this.isInstalled(old))) continue;
+      try {
+        await this.remove(old);
+        console.log(`[overlay] removed ${old}, replaced by ${accel}`);
+      } catch (e) {
+        console.warn(`[overlay] could not remove ${old} after installing ${accel}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  /**
    * Install the GPU wheels for `accel` into a PYTHONPATH overlay, pinned to the
    * bundled torch/onnxruntime versions so they stay ABI-compatible with the
    * bundled env. torch/torchvision come from the accelerator index; their shared
@@ -423,6 +442,12 @@ export class BackendManager {
   ): Promise<OverlayMeta> {
     if (!OVERLAY_ACCELS.includes(accel)) {
       throw new Error(`${accel} is provided by the bundled runtime, not an overlay`);
+    }
+    const replacement = RETIRED_ACCELS[accel];
+    if (replacement) {
+      throw new Error(
+        `${ACCEL_LABELS[accel]} is no longer installed; install ${ACCEL_LABELS[replacement]} instead`,
+      );
     }
     const dir = overlayDir(accel);
     await rm(dir, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildOverlayPipArgs } from '../src/backend/BackendManager';
-import { ORT_GPU_PIN, RuntimeInfo, TORCH_INDEX } from '../src/config';
+import { BackendManager, buildOverlayPipArgs } from '../src/backend/BackendManager';
+import { ACCEL_LABELS, ORT_GPU_PIN, RuntimeInfo, TORCH_INDEX } from '../src/config';
 
 /** A bundled runtime whose torch matches what the rocm7.1 index publishes. */
 const ROCM_RUNTIME: RuntimeInfo = {
@@ -63,26 +63,36 @@ describe('buildOverlayPipArgs — rocm overlay', () => {
     assert.ok(!args.includes('torchvision==0.25.0'), 'no exact torchvision pin in fallback');
   });
 
-  it('cu128 overlay pins onnxruntime-gpu to its CUDA generation, NOT the bundle version', () => {
+  it('cu130 overlay pins onnxruntime-gpu to its CUDA generation, NOT the bundle version', () => {
     const { args } = buildOverlayPipArgs(
-      'cu128',
-      { accel: 'cpu', torch: '2.10.0+cpu', torchvision: '0.25.0+cpu', onnxruntime: '1.20.0' },
+      'cu130',
+      { accel: 'cpu', torch: '2.13.0+cpu', torchvision: '0.28.0+cpu', onnxruntime: '1.24.3' },
       'c.txt',
       'd',
-      ['2.10.0'],
+      ['2.14.1', '2.13.0'],
       undefined,
     );
-    assert.equal(flagValue(args, '--index-url'), TORCH_INDEX.cu128);
+    assert.equal(flagValue(args, '--index-url'), 'https://download.pytorch.org/whl/cu130');
+    // The point of the cu130 move (#2755): the index publishes the bundled torch,
+    // so the overlay runs the torch CI tests instead of the index's fallback.
+    assert.ok(args.includes('torch==2.13.0') && args.includes('torchvision==0.28.0'));
     // Regression for the 2026-07-20 incident: inheriting the bundle's ORT version
-    // ignores the CUDA-flavor axis — PyPI's onnxruntime-gpu 1.27.0 is a CUDA 13
-    // build (libcudart.so.13), which ImportErrors on the cu12 overlay stack and
-    // kills the whole backend at startup. The cu128 overlay must pin the last
-    // CUDA-12 PyPI build from ORT_GPU_PIN instead.
-    assert.equal(ORT_GPU_PIN.cu128, '1.26.0', 'cu128 pin is the last CUDA-12 PyPI build');
-    assert.ok(args.includes(`onnxruntime-gpu==${ORT_GPU_PIN.cu128}`), 'uses the per-accel CUDA-generation pin');
+    // ignores the CUDA-flavor axis (PyPI serves one CUDA generation per release),
+    // and the wrong generation cannot load its CUDA provider. The pin must be a
+    // CUDA 13 build (1.27+), from ORT_GPU_PIN.
+    assert.equal(ORT_GPU_PIN.cu130, '1.32.0', 'cu130 pin is the verified CUDA-13 PyPI build');
+    assert.ok(args.includes(`onnxruntime-gpu==${ORT_GPU_PIN.cu130}`), 'uses the per-accel CUDA-generation pin');
     assert.ok(
-      !args.includes('onnxruntime-gpu==1.20.0'),
+      !args.includes('onnxruntime-gpu==1.24.3'),
       "the bundle's onnxruntime version must NOT leak into the gpu package pin",
+    );
+  });
+
+  it('refuses to install the retired cu128 overlay and names its replacement', async () => {
+    const info: RuntimeInfo = { accel: 'cpu', torch: '2.13.0+cpu', torchvision: '0.28.0+cpu', onnxruntime: '1.24.3' };
+    await assert.rejects(
+      new BackendManager().installOverlay('cu128', info, () => {}, '0.0.0'),
+      (e: Error) => e.message.endsWith(`is no longer installed; install ${ACCEL_LABELS.cu130} instead`),
     );
   });
 
