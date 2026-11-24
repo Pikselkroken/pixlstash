@@ -59,7 +59,12 @@ STORYBOARD_TILE_HEIGHT = 160
 #: root). Deleting and moving a picture handle every kind listed here.
 DERIVED_MEDIA_KINDS = {
     "storyboard": ("_storyboard.webp", THUMBNAIL_DIR_NAME),
+    "waveform": ("_waveform.json", THUMBNAIL_DIR_NAME),
 }
+#: A playable MP4 copy of a video the browser refuses (#2807). Not a derived
+#: kind: it is keyed by the picture's id, not its stored path, so a move keeps
+#: it and a purge removes it by id. One file per picture, in this folder.
+VIDEO_COPY_FOLDER = "proxies"
 
 
 class ImageUtils:
@@ -455,6 +460,43 @@ class ImageUtils:
             except OSError as exc:
                 logger.warning("Failed to delete thumbnail %s: %s", path, exc)
         return removed
+
+    @staticmethod
+    def video_copy_folder(image_root: Optional[str]) -> Optional[str]:
+        """The folder holding every playable copy of this library, or ``None``."""
+        if not image_root:
+            return None
+        return os.path.join(image_root, THUMBNAIL_DIR_NAME, VIDEO_COPY_FOLDER)
+
+    @staticmethod
+    def video_copy_path(image_root: Optional[str], picture_id: int) -> Optional[str]:
+        """Where picture *picture_id*'s playable copy is kept, or ``None``.
+
+        Named by the picture id, not its path: a move keeps the copy, and the
+        row in ``VideoCopy`` is keyed the same way.
+        """
+        folder = ImageUtils.video_copy_folder(image_root)
+        if not folder:
+            return None
+        return os.path.join(folder, f"{int(picture_id)}.mp4")
+
+    @staticmethod
+    def remove_video_copy(image_root: Optional[str], picture_id: int) -> int:
+        """Delete picture *picture_id*'s playable copy file; return bytes freed.
+
+        ``0`` when there is no file. A failure is logged, not raised: the
+        picture is already gone and an orphan file is swept at start-up.
+        """
+        path = ImageUtils.video_copy_path(image_root, picture_id)
+        if not path or not os.path.isfile(path):
+            return 0
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+            return size
+        except OSError as exc:
+            logger.warning("Failed to delete video copy %s: %s", path, exc)
+            return 0
 
     @staticmethod
     def write_thumbnail_bytes(

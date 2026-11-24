@@ -1586,6 +1586,9 @@ def remove_picture_files(
                 was_reference_protected,
             )
         ImageUtils.remove_thumbnail(image_root, rel_path)
+        # Keyed by id, so this needs no path. Its VideoCopy row goes by cascade.
+        if pic_id is not None:
+            ImageUtils.remove_video_copy(image_root, pic_id)
     return unconfirmed
 
 

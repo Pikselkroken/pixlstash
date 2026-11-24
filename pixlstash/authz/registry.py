@@ -1013,6 +1013,40 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/{id}/mask"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/storyboards/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
+    # Starts a CPU-bound transcode when the estimate is under 10 s: one at a
+    # time for the whole library, deduplicated per picture, and a second GET
+    # for the same picture only reports the job already running.
+    ("GET", "/api/v1/pictures/proxies/{id}/status"): RoutePolicy(
+        _PIC,
+        id_param="id",
+        justification=(
+            "Starts a CPU job (a playable copy, under 10 s estimate): one at a "
+            "time for the library, deduplicated per picture; otherwise only "
+            "reports state. READ tokens may watch a shared clip"
+        ),
+    ),
+    ("POST", "/api/v1/pictures/proxies/{id}/start"): RoutePolicy(
+        _PIC,
+        id_param="id",
+        justification=(
+            "Starts a CPU job whatever its estimate: one transcode at a time for "
+            "the library, deduplicated per picture. Non-GET, so READ tokens are "
+            "refused by the middleware"
+        ),
+    ),
+    ("GET", "/api/v1/pictures/proxies/{id}.mp4"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/waveforms/{id}.json"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/video-copies"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "How many playable copies this library keeps on disk and their size; "
+            "owner only. On READ_BLOCKED_GET_PATHS too"
+        ),
+    ),
+    ("DELETE", "/api/v1/video-copies"): RoutePolicy(
+        _OWNER,
+        justification="Deletes every playable copy of this library; owner only",
+    ),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
     ("DELETE", "/api/v1/pictures/{id}/face/{index}"): RoutePolicy(_PIC, id_param="id"),

@@ -277,9 +277,10 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 
 | Capability | Library |
 |------------|---------|
-| Image I/O | **Pillow** ≥ 12.1, **pillow-heif** |
+| Image I/O | **Pillow** ≥ 12.1, **pi-heif** (decode-only; no GPL encoder in-process) |
 | Computer vision | **opencv-python** ≥ 4.13 |
 | EXIF | **piexif** |
+| Playable copies, audio waveforms | **imageio-ffmpeg** (its bundled static ffmpeg, GPL build), **run as a separate process only**: never imported, never linked (no PyAV, no `ctypes` into `libav*`), in the core or a plugin. The binary is `imageio_ffmpeg.get_ffmpeg_exe()`'s lookup, in order: `IMAGEIO_FFMPEG_EXE`, the bundled binary, conda's, `ffmpeg` on PATH; PixlStash adds none of its own. See `pixlstash/utils/image_processing/ffmpeg_utils.py` |
 
 ### Math & System
 
@@ -768,6 +769,9 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/likeness-search                                              | pictures        | Search by image likeness                                      |
 | POST   | /api/v1/pictures/move-to-library                                              | pictures        | Move pictures to another library                              |
 | PATCH  | /api/v1/pictures/project                                                      | pictures        | Set project for pictures                                      |
+| GET    | /api/v1/pictures/proxies/{id}.mp4                                             | pictures        | Get a video's playable MP4 copy                               |
+| POST   | /api/v1/pictures/proxies/{id}/start                                           | pictures        | Start a video's playable copy                                 |
+| GET    | /api/v1/pictures/proxies/{id}/status                                          | pictures        | Get a video's playable-copy state                             |
 | POST   | /api/v1/pictures/rotate                                                       | pictures        | Rotate pictures in place                                      |
 | POST   | /api/v1/pictures/score_character_likeness                                     | pictures        | Score uploaded images by character likeness                   |
 | DELETE | /api/v1/pictures/scrapheap                                                    | pictures        | Permanently delete scrapheap pictures                         |
@@ -780,6 +784,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                              |
 | POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                                  |
 | GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                   |
+| GET    | /api/v1/pictures/waveforms/{id}.json                                          | pictures        | Get a video's audio waveform                                  |
 | PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                          |
 | DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                     |
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                     |
@@ -899,6 +904,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/training/presets/check                                                |                 | Check pixlstash.dev for newer training recipes                |
 | POST   | /api/v1/training/resolve                                                      |                 | Preview what a training run would use                         |
 | GET    | /api/v1/training/sample-prompts                                               |                 | Default sample prompts for a training run                     |
+| GET    | /api/v1/video-copies                                                          | pictures        | Count the playable copies kept for this library               |
+| DELETE | /api/v1/video-copies                                                          | pictures        | Delete every playable copy kept for this library              |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                                |
 | POST   | /api/v1/workflows/run/opening                                                 | workflows       | Hold a run for ComfyUI to open                                |
@@ -4974,6 +4981,8 @@ this record and needs its own independent adversarial sign-off.
 |-------|----------|-------|
 | Thumbnails | Disk, `<library root>/.pixlstash-thumbnails/`, named by a hash of the picture's stored path | Made by the thumbnail task, or on demand by `GET /pictures/thumbnails/{id}.webp` |
 | Video storyboards | Disk, beside the thumbnails (`DERIVED_MEDIA_KINDS` in `image_utils.py`) | Made on demand by `GET /pictures/storyboards/{id}.webp`; deleted and moved with the thumbnail (below) |
+| Video waveforms | Disk, beside the thumbnails (`DERIVED_MEDIA_KINDS`, `_waveform.json`) | Made on demand by `GET /pictures/waveforms/{id}.json`; a silent clip caches its nulls; deleted and moved with the thumbnail. 503 without an ffmpeg binary |
+| Playable copies | Disk, `<library root>/.pixlstash-thumbnails/proxies/<picture id>.mp4`, keyed by picture id, with a `VideoCopy` row (copy and original sizes, original mtime, build time) | Made one at a time on a dedicated worker, by the status route when its estimate is under 10 s or by `POST /pictures/proxies/{id}/start`; fresh only while the original's size and mtime match the row. Kept for the picture's lifetime: the scrapheap keeps it, a purge removes the file and the row (cascade). Left out of library backups; snapshots copy no thumbnails (they VACUUM the database only). Cleared by `DELETE /video-copies` (Settings › Libraries & imports). `# ponytail:` lifetime has no size cap |
 | Watermarks | In-memory rendered images | Seed-keyed |
 | Quality stats | In-memory (≈60 s TTL) | Used by aggregate endpoints |
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
@@ -5012,11 +5021,13 @@ heading, so it reads as a question rather than as one more line of start-up.
 
    - Once the vault's workers have started, `_start_edit_copies()` imports any edit saved while the server was down (`reconcile_all`), then sweeps Open-with edit sessions untouched for a day, and starts the `EditCopyWatcher` (`Server.DEFAULT_WATCH_EDIT_COPIES`, off in the test suite). `close()` stops it before the vault closes; `stop()` waits out an import in flight and no callback starts after it, so nothing writes into a closed database.
 4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
+   - `_sweep_video_copies()`: removes playable-copy temp files and copy files with no row, left by a killed run (#2807).
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
     - Logs server readiness and serves requests.
 5. `InferenceEngine` is created lazily (first task flow that needs it, e.g. via `Vault.get_worker_future(...)`, or explicitly via `Vault.ensure_ready()`).
 6. On shutdown:
+   - A playable-copy ffmpeg still running is killed (`ffmpeg_utils.terminate_running_processes()`, #2807), so its worker does not hold exit for the 30-minute timeout.
    - `Vault.close()` stops the planner and drains workers.
    - `VaultDatabase` flushes pending writes and closes connections.
    - WebSocket clients are disconnected.

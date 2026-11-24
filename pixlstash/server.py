@@ -189,6 +189,7 @@ from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.tasks import TaskType
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.image_processing import ffmpeg_utils
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -1105,6 +1106,9 @@ class Server(
         if watcher is not None:
             self._edit_copy_watcher = None
             watcher.stop()
+        # A playable-copy transcode still running would hold interpreter exit
+        # for its whole timeout; kill it first, its job then cleans up.
+        ffmpeg_utils.terminate_running_processes()
         if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
             self._close_active_vault()
@@ -1457,6 +1461,8 @@ class Server(
         was_set_by_us = self._ws_loop is None
         if was_set_by_us:
             self._ws_loop = loop
+        # Playable copies a killed run left behind (see _sweep_video_copies).
+        await loop.run_in_executor(None, self._sweep_video_copies)
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
         # Thumbnail generation is NOT run here anymore. It used to block startup

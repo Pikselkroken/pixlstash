@@ -9,9 +9,13 @@ not even the thumbnail, before this.
 
 import io
 import json
+import logging
 import os
 import struct
+import subprocess
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 
 import cv2
@@ -19,13 +23,16 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import delete, text
 from sqlmodel import Session
 
-from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.db_models import Picture, ReferenceFolder, VideoCopy
 from pixlstash.server import Server
+from pixlstash.routes.pictures import _thumbnails
 from pixlstash.services import layout_move_service
+from pixlstash.services.library_backup_service import _library_files
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
-from pixlstash.utils.image_processing import video_utils
+from pixlstash.utils.image_processing import ffmpeg_utils, video_utils
 from pixlstash.utils.image_processing.image_utils import (
     STORYBOARD_FRAMES,
     STORYBOARD_TILE_HEIGHT,
@@ -459,3 +466,499 @@ def test_repointing_a_picture_with_no_hash_drops_its_cached_files(
         assert not os.path.exists(
             ImageUtils.derived_media_path(root, path, "storyboard")
         )
+
+
+# ---------------------------------------------------------------------------
+# Playable copies and audio waveforms (#2807). ffmpeg runs as a separate
+# process; these tests drive the bundled binary through its command line.
+# ---------------------------------------------------------------------------
+
+PROXY_STATUS = API + "/pictures/proxies/{id}/status"
+PROXY_START = API + "/pictures/proxies/{id}/start"
+PROXY_MP4 = API + "/pictures/proxies/{id}.mp4"
+WAVEFORM = API + "/pictures/waveforms/{id}.json"
+VIDEO_COPIES = API + "/video-copies"
+
+
+def _sound_clip(path, seconds=2, audio="sine") -> str:
+    """An mp4 with a sine track, an all-zero track, or (None) no audio at all."""
+    ffmpeg = ffmpeg_utils.ffmpeg_executable()
+    if ffmpeg is None:
+        pytest.skip("no ffmpeg binary in this environment")
+    args = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc=d={seconds}:s=64x48:r=10",
+    ]
+    if audio == "sine":
+        args += ["-f", "lavfi", "-i", f"sine=d={seconds}", "-c:a", "aac"]
+    elif audio == "zero":
+        args += ["-f", "lavfi", "-i", f"anullsrc=d={seconds}", "-c:a", "aac"]
+    args += ["-c:v", "libx264", "-pix_fmt", "yuv420p", path]
+    subprocess.run(args, check=True)
+    return path
+
+
+def _library_file(server, path) -> int:
+    picture = ImageUtils.create_picture_from_bytes(
+        server.vault.image_root, open(path, "rb").read()
+    )
+    assert picture.is_video
+    return _insert(server, picture)
+
+
+def _row_exists(server, picture_id) -> bool:
+    return (
+        server.vault.db.run_immediate_read_task(lambda s: s.get(VideoCopy, picture_id))
+        is not None
+    )
+
+
+def _forget_copies(server) -> None:
+    """Start from no copies: no rows and no files in this library."""
+
+    def clear(session: Session):
+        session.execute(delete(VideoCopy))
+        session.commit()
+
+    server.vault.db.run_task(clear)
+    for path, _size in _thumbnails._list_copy_files(server.vault.image_root):
+        os.remove(path)
+
+
+def _settled(owner, path, timeout=60.0) -> dict:
+    """Poll a status route until it stops saying ``preparing``."""
+    deadline = time.monotonic() + timeout
+    while True:
+        body = owner.get(path).json()
+        if body["state"] != "preparing":
+            return body
+        assert time.monotonic() < deadline, f"still preparing after {timeout}s"
+        time.sleep(0.05)
+
+
+def _bearer(token) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ── The ffmpeg wrapper, without a server ─────────────────────────────────────
+
+
+def test_a_playable_copy_reads_back_as_h264(tmp_path):
+    clip = _write_clip(str(tmp_path / "src.mp4"), 12)
+    dest = str(tmp_path / "copy.mp4")
+    ffmpeg_utils.make_playable_copy(clip, dest)
+    cap = cv2.VideoCapture(dest)
+    code = int(cap.get(cv2.CAP_PROP_FOURCC))
+    cap.release()
+    assert struct.pack("<I", code & 0xFFFFFFFF) == b"h264"
+
+
+def test_a_failed_copy_leaves_no_temp_file(tmp_path, monkeypatch, caplog):
+    clip = _write_clip(str(tmp_path / "src.mp4"), 12)
+    dest = tmp_path / "copy.mp4"
+
+    def refuse_the_rename(src, dst):
+        # The encode has finished and the temp file exists; the rename fails.
+        assert os.path.exists(src)
+        raise OSError("forced rename failure")
+
+    monkeypatch.setattr(ffmpeg_utils.os, "replace", refuse_the_rename)
+    with pytest.raises(OSError, match="forced rename failure"):
+        ffmpeg_utils.make_playable_copy(clip, str(dest))
+    assert not dest.exists()
+    assert not [n for n in os.listdir(tmp_path) if n.startswith(".proxy-tmp-")]
+    assert "Playable copy failed" in caplog.text
+
+
+def test_audio_peaks_are_512_values_in_unit_range(tmp_path):
+    clip = _sound_clip(str(tmp_path / "sound.mp4"), seconds=2)
+    duration, peaks = ffmpeg_utils.audio_peaks(clip)
+    assert len(peaks) == 512
+    assert all(0.0 <= value <= 1.0 for value in peaks)
+    assert max(peaks) == 1.0
+    assert duration == pytest.approx(2.0, abs=0.1)
+
+
+def test_an_all_silent_track_gives_zero_peaks(tmp_path):
+    clip = _sound_clip(str(tmp_path / "zero.mp4"), audio="zero")
+    _duration, peaks = ffmpeg_utils.audio_peaks(clip)
+    assert peaks == [0.0] * 512
+
+
+def test_a_clip_without_audio_has_no_peaks_and_no_warning(tmp_path, caplog):
+    clip = _sound_clip(str(tmp_path / "mute.mp4"), audio=None)
+    with caplog.at_level(logging.WARNING):
+        assert ffmpeg_utils.audio_peaks(clip) is None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_file_ffmpeg_cannot_open_is_an_error_not_silence(tmp_path):
+    bad = tmp_path / "broken.mp4"
+    bad.write_bytes(b"not a video" * 100)
+    with pytest.raises(RuntimeError, match="could not open"):
+        ffmpeg_utils.audio_peaks(str(bad))
+
+
+def test_backup_walk_leaves_out_the_playable_copies(tmp_path):
+    root = str(tmp_path)
+    ImageUtils.write_thumbnail_bytes(root, "a/clip.mp4", b"thumb")
+    folder = ImageUtils.video_copy_folder(root)
+    os.makedirs(folder)
+    with open(os.path.join(folder, "7.mp4"), "wb") as handle:
+        handle.write(b"copy")
+    collected = [archive for _, archive in _library_files(root)]
+    assert any(name.endswith("_thumb.webp") for name in collected)
+    assert not [name for name in collected if "proxies" in name]
+
+
+# ── The routes, on the shared server ────────────────────────────────────────
+
+
+def test_a_short_copy_starts_at_once_and_then_serves_with_ranges(
+    server, owner, tmp_path
+):
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    assert_real_route(server.api, "GET", path, template=PROXY_STATUS)
+    first = owner.get(path).json()
+    assert first["state"] == "preparing"
+    assert first["estimate_seconds"] < 10
+    assert first["format"] == "MP4"
+    done = _settled(owner, path)
+    assert done["state"] == "ready"
+    # 30 frames at 10 fps.
+    assert done["duration_seconds"] == pytest.approx(3.0, abs=0.1)
+    r = owner.get(PROXY_MP4.format(id=pic), headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206, r.text
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.headers["accept-ranges"] == "bytes"
+    cap = cv2.VideoCapture(ImageUtils.video_copy_path(server.vault.image_root, pic))
+    code = int(cap.get(cv2.CAP_PROP_FOURCC))
+    cap.release()
+    assert struct.pack("<I", code & 0xFFFFFFFF) == b"h264"
+
+
+def test_a_long_copy_is_offered_until_started(server, owner, tmp_path, monkeypatch):
+    _forget_copies(server)
+    # No copy yet, so the rate falls back to the default; a 1 px-frame/s rate
+    # makes this clip's estimate far over the 10 s threshold.
+    monkeypatch.setattr(_thumbnails, "_DEFAULT_COPY_RATE", 1.0)
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    offered = owner.get(path).json()
+    assert offered["state"] == "offered"
+    assert offered["estimate_seconds"] >= 10
+    copy = ImageUtils.video_copy_path(server.vault.image_root, pic)
+    assert not os.path.exists(copy)
+    started = owner.post(PROXY_START.format(id=pic)).json()
+    assert started["state"] == "preparing"
+    assert _settled(owner, path)["state"] == "ready"
+
+
+def test_a_still_has_no_copy_to_make(server, owner):
+    pic = _still(server)
+    body = owner.get(PROXY_STATUS.format(id=pic)).json()
+    assert body["state"] == "unavailable"
+
+
+def test_a_failed_copy_is_reported_once_then_retried(
+    server, owner, tmp_path, monkeypatch
+):
+    _forget_copies(server)
+    release = threading.Event()
+    real_copy = ffmpeg_utils.make_playable_copy
+    calls = []
+
+    def flaky(source, dest, on_start=None):
+        calls.append(source)
+        on_start(None)
+        if len(calls) == 1:
+            raise RuntimeError("forced failure")
+        release.wait(30)
+        real_copy(source, dest)
+
+    monkeypatch.setattr(ffmpeg_utils, "make_playable_copy", flaky)
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    assert _settled(owner, path)["state"] == "failed"
+    # Dropped once reported, so the next call starts again instead of failing
+    # forever. The retry is held on the event, so this answer is deterministic.
+    assert owner.get(path).json()["state"] == "preparing"
+    release.set()
+    assert _settled(owner, path)["state"] == "ready"
+
+
+def test_a_library_switch_does_not_report_the_old_job(
+    server, owner, tmp_path, monkeypatch
+):
+    _forget_copies(server)
+    gate = threading.Event()
+    started = threading.Event()
+    real_copy = ffmpeg_utils.make_playable_copy
+
+    def gated(source, dest, on_start=None):
+        on_start(None)
+        started.set()
+        gate.wait(30)
+        real_copy(source, dest)
+
+    monkeypatch.setattr(ffmpeg_utils, "make_playable_copy", gated)
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    assert owner.get(path).json()["state"] == "preparing"
+    assert started.wait(10)
+    assert owner.get(path).json()["elapsed_seconds"] > 0
+
+    clear = server._clear_thumbnail_runtime_cache
+    cells = dict(
+        zip(clear.__code__.co_freevars, (c.cell_contents for c in clear.__closure__))
+    )
+    clear()
+    assert not cells["copy_jobs"]
+    # A fresh job, queued behind the old one: it has not started, so its
+    # elapsed time is zero. The old job would show a running clock.
+    after = owner.get(path).json()
+    assert after["state"] == "preparing"
+    assert after["elapsed_seconds"] == 0.0
+    gate.set()
+    assert _settled(owner, path)["state"] == "ready"
+
+
+def test_a_copy_goes_stale_when_the_original_changes(server, owner, tmp_path):
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    owner.get(path)
+    assert _settled(owner, path)["state"] == "ready"
+    rel = server.vault.db.run_immediate_read_task(
+        lambda s: s.get(Picture, pic).file_path
+    )
+    source = ImageUtils.resolve_picture_path(server.vault.image_root, rel)
+    later = time.time() + 60
+    os.utime(source, (later, later))
+    assert owner.get(PROXY_MP4.format(id=pic)).status_code == 404
+    # The stale status starts a rebuild at once rather than serving the old copy.
+    assert owner.get(path).json()["state"] == "preparing"
+    assert _settled(owner, path)["state"] == "ready"
+
+
+def test_purge_removes_the_copy_while_the_scrapheap_keeps_it(server, owner, tmp_path):
+    pic = _library_clip(server, tmp_path)
+    _settled(owner, PROXY_STATUS.format(id=pic))
+    copy = ImageUtils.video_copy_path(server.vault.image_root, pic)
+    assert os.path.isfile(copy) and _row_exists(server, pic)
+    # The foreign-key cascade must be live on this connection for the row to
+    # go with the picture, since the purge never deletes it by hand.
+    assert (
+        server.vault.db.run_immediate_read_task(
+            lambda s: s.execute(text("PRAGMA foreign_keys")).scalar()
+        )
+        == 1
+    )
+
+    assert owner.delete(f"{API}/pictures/{pic}").status_code == 200
+    assert os.path.isfile(copy) and _row_exists(server, pic)
+
+    token = owner.post(
+        f"{API}/pictures/scrapheap/delete-preview", json={"ids": [pic]}
+    ).json()["confirm_token"]
+    r = owner.request(
+        "DELETE",
+        f"{API}/pictures/scrapheap",
+        json={"ids": [pic], "confirm_token": token, "include_protected": True},
+    )
+    assert r.status_code == 200, r.text
+    assert not os.path.exists(copy)
+    assert not _row_exists(server, pic)
+
+
+def test_video_copies_counts_and_deletes_this_library_copies(server, owner, tmp_path):
+    _forget_copies(server)
+    ids = []
+    for index, frames in enumerate((30, 12)):
+        folder = tmp_path / f"c{index}"
+        folder.mkdir()
+        ids.append(_library_clip(server, folder, frames=frames))
+    for pic in ids:
+        assert _settled(owner, PROXY_STATUS.format(id=pic))["state"] == "ready"
+    root = server.vault.image_root
+    sizes = [os.path.getsize(ImageUtils.video_copy_path(root, pic)) for pic in ids]
+    assert owner.get(VIDEO_COPIES).json() == {"count": 2, "bytes": sum(sizes)}
+
+    assert owner.delete(VIDEO_COPIES).json() == {"removed": 2, "bytes": sum(sizes)}
+    assert owner.get(VIDEO_COPIES).json() == {"count": 0, "bytes": 0}
+    assert not any(_row_exists(server, pic) for pic in ids)
+
+
+def test_a_startup_sweep_removes_temps_and_copies_with_no_row(server, tmp_path):
+    _forget_copies(server)
+    root = server.vault.image_root
+    folder = ImageUtils.video_copy_folder(root)
+    os.makedirs(folder, exist_ok=True)
+    pic = _library_clip(server, tmp_path)
+    kept = ImageUtils.video_copy_path(root, pic)
+    temp = os.path.join(folder, ".proxy-tmp-deadbeef.mp4")
+    orphan = os.path.join(folder, "999999.mp4")
+    for path in (temp, orphan, kept):
+        with open(path, "wb") as handle:
+            handle.write(b"x")
+
+    def give_row(session: Session):
+        session.merge(
+            VideoCopy(
+                picture_id=pic,
+                copy_bytes=1,
+                source_bytes=1,
+                source_mtime=1.0,
+                pixel_frames=1,
+                build_seconds=1.0,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(give_row)
+    server._sweep_video_copies()
+    assert not os.path.exists(temp)
+    assert not os.path.exists(orphan)
+    assert os.path.exists(kept)
+    # The row above has a made-up rate; drop it so later tests estimate honestly.
+    _forget_copies(server)
+
+
+def test_waveform_gives_512_peaks_and_is_cached(server, owner, tmp_path, monkeypatch):
+    clip = _sound_clip(str(tmp_path / "sound.mp4"), seconds=2)
+    pic = _library_file(server, clip)
+    path = WAVEFORM.format(id=pic)
+    assert_real_route(server.api, "GET", path, template=WAVEFORM)
+    r = owner.get(path)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["duration"] == pytest.approx(2.0, abs=0.1)
+    assert len(body["peaks"]) == 512
+    assert all(0.0 <= value <= 1.0 for value in body["peaks"])
+
+    def no_decoding(*args, **kwargs):
+        raise AssertionError("the cached waveform was not used")
+
+    monkeypatch.setattr(ffmpeg_utils, "audio_peaks", no_decoding)
+    assert owner.get(path).json() == body
+
+
+def test_a_silent_clip_answers_nulls_and_caches_them_without_a_warning(
+    server, owner, tmp_path, caplog
+):
+    root = server.vault.image_root
+    for name, audio in (("mute.mp4", None), ("zero.mp4", "zero")):
+        clip = _sound_clip(str(tmp_path / name), audio=audio)
+        pic = _library_file(server, clip)
+        with caplog.at_level(logging.WARNING):
+            r = owner.get(WAVEFORM.format(id=pic))
+        assert r.status_code == 200, r.text
+        assert r.json() == {"duration": None, "peaks": None}
+        rel = server.vault.db.run_immediate_read_task(
+            lambda s, p=pic: s.get(Picture, p).file_path
+        )
+        assert os.path.isfile(ImageUtils.derived_media_path(root, rel, "waveform"))
+    assert not [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING and "aveform" in r.getMessage()
+    ]
+
+
+def test_no_ffmpeg_means_503_for_the_waveform_and_unavailable_for_the_copy(
+    server, owner, tmp_path, monkeypatch
+):
+    pic = _library_clip(server, tmp_path)
+    monkeypatch.setattr(ffmpeg_utils, "ffmpeg_executable", lambda: None)
+    assert owner.get(WAVEFORM.format(id=pic)).status_code == 503
+    assert owner.get(PROXY_STATUS.format(id=pic)).json()["state"] == "unavailable"
+
+
+def test_proxy_and_waveform_routes_are_picture_scoped_both_ways(
+    server, owner, tmp_path
+):
+    folder = tmp_path / "in"
+    folder.mkdir()
+    pic = _library_clip(server, folder)
+    other = _still(server)
+    assert _settled(owner, PROXY_STATUS.format(id=pic))["state"] == "ready"
+    anon = TestClient(server.api)
+    in_scope = _mint(owner, scope="READ", resource_type="picture", resource_id=pic)
+    out_of_scope = _mint(
+        owner, scope="READ", resource_type="picture", resource_id=other
+    )
+    comfy = _mint(owner, scope="COMFYUI")
+    for template in (PROXY_STATUS, PROXY_MP4, WAVEFORM):
+        path = template.format(id=pic)
+        assert_real_route(server.api, "GET", path, template=template)
+        assert anon.get(path, headers=_bearer(in_scope)).status_code == 200
+        assert anon.get(path, headers=_bearer(out_of_scope)).status_code == 403
+        assert anon.get(path, headers=_bearer(comfy)).status_code == 403
+
+    start = PROXY_START.format(id=pic)
+    assert_real_route(server.api, "POST", start, template=PROXY_START)
+    # Starting a job is a write: a READ token is refused by the middleware.
+    assert anon.post(start, headers=_bearer(in_scope)).status_code == 403
+    assert owner.post(start).status_code == 200
+
+
+def test_video_copies_routes_are_owner_only(server, owner, tmp_path):
+    pic = _library_clip(server, tmp_path)
+    anon = TestClient(server.api)
+    read = _mint(owner, scope="READ", resource_type="picture", resource_id=pic)
+    comfy = _mint(owner, scope="COMFYUI")
+    assert_real_route(server.api, "GET", VIDEO_COPIES)
+    assert owner.get(VIDEO_COPIES).status_code == 200
+    assert anon.get(VIDEO_COPIES, headers=_bearer(read)).status_code == 403
+    assert anon.get(VIDEO_COPIES, headers=_bearer(comfy)).status_code == 403
+    assert_real_route(server.api, "DELETE", VIDEO_COPIES)
+    assert anon.delete(VIDEO_COPIES, headers=_bearer(read)).status_code == 403
+    assert anon.delete(VIDEO_COPIES, headers=_bearer(comfy)).status_code == 403
+
+
+def test_a_row_whose_file_is_gone_counts_as_no_copy(server, owner, tmp_path):
+    pic = _library_clip(server, tmp_path)
+    path = PROXY_STATUS.format(id=pic)
+    assert _settled(owner, path)["state"] == "ready"
+    os.remove(ImageUtils.video_copy_path(server.vault.image_root, pic))
+    assert _row_exists(server, pic)
+    assert owner.get(PROXY_MP4.format(id=pic)).status_code == 404
+    assert owner.get(path).json()["state"] == "preparing"
+    assert _settled(owner, path)["state"] == "ready"
+
+
+def test_shutdown_kills_a_running_copy_and_its_job_fails_cleanly(tmp_path, monkeypatch):
+    # A stand-in for ffmpeg that just sleeps: `exec` so the process we kill is
+    # the one holding the stderr pipe, not a shell wrapped around it.
+    fake = tmp_path / "fake-ffmpeg"
+    fake.write_text("#!/bin/sh\nexec sleep 30\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(ffmpeg_utils, "ffmpeg_executable", lambda: str(fake))
+    started = threading.Event()
+    outcome = {}
+
+    def run():
+        try:
+            ffmpeg_utils.make_playable_copy(
+                str(tmp_path / "src.mov"),
+                str(tmp_path / "copy.mp4"),
+                on_start=lambda _proc: started.set(),
+            )
+        except RuntimeError as exc:
+            outcome["error"] = str(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert started.wait(10)
+    ffmpeg_utils.terminate_running_processes()
+    worker.join(10)
+    assert not worker.is_alive(), "the running copy was not killed"
+    assert "exited with status" in outcome["error"]
+    assert not [n for n in os.listdir(tmp_path) if n.startswith(".proxy-tmp-")]

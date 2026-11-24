@@ -222,6 +222,12 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/thumbnails` | scoped_list |  |  |
 | GET | `/api/v1/pictures/thumbnails/{id}.webp` | picture_scoped | id=id |  |
 | GET | `/api/v1/pictures/storyboards/{id}.webp` | picture_scoped | id=id | A video's frame strip; same scope as its thumbnail. Not a ComfyUI-pack route |
+| GET | `/api/v1/pictures/proxies/{id}/status` | picture_scoped | id=id | Starts a CPU job (a playable copy, under 10 s estimate): one at a time for the library, deduplicated per picture; otherwise only reports state. READ tokens may watch a shared clip. Not a ComfyUI-pack route |
+| POST | `/api/v1/pictures/proxies/{id}/start` | picture_scoped | id=id | Starts a CPU job whatever its estimate: one transcode at a time for the library, deduplicated per picture. Non-GET, so READ tokens are refused by the middleware. Not a ComfyUI-pack route |
+| GET | `/api/v1/pictures/proxies/{id}.mp4` | picture_scoped | id=id | The fresh playable copy of a video; same scope as its thumbnail. Not a ComfyUI-pack route |
+| GET | `/api/v1/pictures/waveforms/{id}.json` | picture_scoped | id=id | A clip's audio peaks; same scope as its thumbnail. Not a ComfyUI-pack route |
+| GET | `/api/v1/video-copies` | owner_only |  | How many playable copies this library keeps on disk and their size; owner only. On READ_BLOCKED_GET_PATHS too |
+| DELETE | `/api/v1/video-copies` | owner_only |  | Deletes every playable copy of this library; owner only |
 | PATCH | `/api/v1/pictures/{id}` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}` | picture_scoped | id=id |  |
 | GET | `/api/v1/pictures/{id}.{ext}` | picture_scoped | id=id |  |

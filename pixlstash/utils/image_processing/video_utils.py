@@ -198,6 +198,31 @@ class VideoUtils:
         return ext in VIDEO_EXTENSIONS
 
     @staticmethod
+    def video_header(file_path: str) -> Optional[tuple[int, str, Optional[float]]]:
+        """Return ``(pixel_frames, fourcc, duration_seconds)`` from a clip's header.
+
+        ``pixel_frames`` is frame count x width x height, the unit a playable
+        copy's build time scales with. ``fourcc`` is the codec tag as text
+        (``"apch"`` for ProRes, ``"h264"`` for H.264). ``duration_seconds`` is
+        frame count / fps, or ``None`` when either is unknown (0). Decodes
+        nothing.
+        """
+        cap = cv2.VideoCapture(file_path)
+        try:
+            if not cap.isOpened():
+                return None
+            frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            code = int(cap.get(cv2.CAP_PROP_FOURCC))
+        finally:
+            cap.release()
+        fourcc = struct.pack("<I", code & 0xFFFFFFFF).decode("ascii", errors="replace")
+        duration = frames / fps if frames > 0 and fps > 0 else None
+        return frames * width * height, fourcc, duration
+
+    @staticmethod
     def is_animated_gif(file_path: str) -> bool:
         """Return True for a .gif with more than one frame.
 

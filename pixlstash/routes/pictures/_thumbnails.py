@@ -1,10 +1,15 @@
 import ast
 import asyncio
+import json
 import os
 import re
+import subprocess
+import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import NamedTuple, Optional
 
 from PIL import Image
 from fastapi import (
@@ -15,6 +20,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import (
+    delete,
     func,
 )
 from sqlmodel import Session, select
@@ -24,11 +30,13 @@ from pixlstash.db_models import (
     Character,
     Picture,
     Tag,
+    VideoCopy,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
 )
+from pixlstash.utils.image_processing import ffmpeg_utils
 from pixlstash.utils.image_processing.image_utils import (
     STORYBOARD_FRAMES,
     ImageUtils,
@@ -63,14 +71,191 @@ _thumbnail_executor = ThreadPoolExecutor(
 )
 
 
+# One playable copy at a time: each is a CPU-heavy H.264 encode and a second
+# would only share the same cores. Its own pool, so a copy never queues behind
+# thumbnail builds.
+# ponytail: one transcode at a time; raise max_workers if users queue several
+_copy_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video-copy")
+#: A copy estimated to take at least this long is offered, not started.
+_COPY_START_THRESHOLD_S = 10.0
+# ponytail: a guessed rate until one copy has been built here; the newest real build replaces it
+_DEFAULT_COPY_RATE = 100e6
+#: Codec tags that browsers refuse and the UI calls ProRes.
+_PRORES_FOURCCS = frozenset({"apch", "apcn", "apcs", "apco", "ap4h", "ap4x"})
+
+
+class _CopyRecord(NamedTuple):
+    """The original's size and mtime as a copy's row recorded them."""
+
+    source_bytes: int
+    source_mtime: float
+
+
+@dataclass
+class _CopyJob:
+    """A playable-copy build queued or running for one picture."""
+
+    estimate: float
+    future: Optional[Future] = None
+    #: ``time.monotonic()`` when ffmpeg started; ``None`` while queued.
+    started: Optional[float] = None
+
+
+def _read_copy_facts(session: Session, picture_id: int):
+    """Return ``(file_path, record, rate)`` for a picture, or ``None`` if absent.
+
+    ``rate`` is pixel-frames per second of the newest copy built here, the
+    divisor for the build-time estimate.
+    """
+    pics = Picture.find(
+        session,
+        id=picture_id,
+        select_fields=["id", "file_path"],
+        include_deleted=True,
+        include_unimported=True,
+    )
+    if not pics or not pics[0].file_path:
+        return None
+    row = session.get(VideoCopy, picture_id)
+    record = _CopyRecord(row.source_bytes, row.source_mtime) if row else None
+    latest = session.exec(
+        select(VideoCopy).order_by(VideoCopy.created_at.desc()).limit(1)
+    ).first()
+    rate = _DEFAULT_COPY_RATE
+    if latest is not None and latest.build_seconds > 0:
+        rate = latest.pixel_frames / latest.build_seconds
+    return pics[0].file_path, record, rate
+
+
+def _copy_is_fresh(
+    image_root: Optional[str],
+    picture_id: int,
+    file_path: str,
+    record: Optional[_CopyRecord],
+) -> bool:
+    """A copy is fresh when its row, its file and the original all agree.
+
+    The original's size and mtime must equal the row's. A row whose file is
+    missing is no copy at all.
+    """
+    if record is None:
+        return False
+    dest = ImageUtils.video_copy_path(image_root, picture_id)
+    source = ImageUtils.resolve_picture_path(image_root, file_path)
+    if not dest or not source or not os.path.isfile(dest):
+        return False
+    try:
+        stat = os.stat(source)
+    except OSError as exc:
+        logger.debug("Video copy freshness: cannot stat %s: %s", source, exc)
+        return False
+    return stat.st_size == record.source_bytes and stat.st_mtime == record.source_mtime
+
+
+def _copy_format(file_path: str, fourcc: Optional[str]) -> Optional[str]:
+    """The name the UI gives the original's format: "ProRes", else its extension."""
+    if fourcc in _PRORES_FOURCCS:
+        return "ProRes"
+    return os.path.splitext(file_path)[1].lstrip(".").upper() or None
+
+
+def _proxy_payload(
+    state: str,
+    estimate: Optional[float] = None,
+    elapsed: Optional[float] = None,
+    fmt: Optional[str] = None,
+    duration: Optional[float] = None,
+) -> dict:
+    """The JSON the proxy status and start routes answer with."""
+    return {
+        "state": state,
+        "estimate_seconds": estimate,
+        "elapsed_seconds": elapsed,
+        "format": fmt,
+        "duration_seconds": duration,
+    }
+
+
+def _list_copy_files(image_root: Optional[str]) -> list[tuple[str, int]]:
+    """Every finished copy file in this library's folder, as ``(path, bytes)``."""
+    folder = ImageUtils.video_copy_folder(image_root)
+    if not folder or not os.path.isdir(folder):
+        return []
+    found = []
+    for name in os.listdir(folder):
+        if not name.endswith(".mp4") or name.startswith(".proxy-tmp-"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            found.append((path, os.path.getsize(path)))
+        except OSError as exc:
+            logger.warning("Video copy listing: cannot size %s: %s", path, exc)
+    return found
+
+
+def _build_video_copy(vault, picture_id: int, file_path: str, job: _CopyJob) -> None:
+    """Make picture's playable copy and record it. Runs on ``_copy_executor``."""
+    image_root = vault.image_root
+    source = ImageUtils.resolve_picture_path(image_root, file_path)
+    dest = ImageUtils.video_copy_path(image_root, picture_id)
+    try:
+        # Read the original BEFORE the encode: a rewrite during it then leaves
+        # the row describing the old bytes, so the copy reads as stale.
+        stat = os.stat(source)
+        header = VideoUtils.video_header(source)
+        if header is None:
+            raise RuntimeError(f"cannot read the video header of {source}")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+        def mark_started(_proc) -> None:
+            job.started = time.monotonic()
+
+        ffmpeg_utils.make_playable_copy(source, dest, on_start=mark_started)
+        build_seconds = time.monotonic() - job.started
+        row = VideoCopy(
+            picture_id=picture_id,
+            copy_bytes=os.path.getsize(dest),
+            source_bytes=stat.st_size,
+            source_mtime=stat.st_mtime,
+            pixel_frames=header[0],
+            build_seconds=build_seconds,
+        )
+
+        def write_row(session: Session) -> None:
+            session.merge(row)
+            session.commit()
+
+        vault.db.run_task(write_row)
+        logger.info(
+            "Playable copy made: picture id=%s build_seconds=%.1f copy_bytes=%s",
+            picture_id,
+            build_seconds,
+            row.copy_bytes,
+        )
+    except Exception:
+        logger.error(
+            "Playable copy of picture id=%s (%s) failed",
+            picture_id,
+            source,
+            exc_info=True,
+        )
+        raise
+
+
 def register_routes(router, server):
     thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
     storyboard_generation_locks: dict[int, asyncio.Lock] = {}
+    waveform_generation_locks: dict[int, asyncio.Lock] = {}
+    # Keyed by (library root, picture id): a library switch must not report
+    # another library's job for a reused id.
+    copy_jobs: dict[tuple[Optional[str], int], _CopyJob] = {}
 
     def clear_thumbnail_runtime_cache() -> None:
         # Keyed by picture id, and ids are reused across libraries.
         thumbnail_generation_locks.clear()
         storyboard_generation_locks.clear()
+        waveform_generation_locks.clear()
+        copy_jobs.clear()
 
     # The locks are route-local, so expose their one lifecycle operation to the
     # server's library switch coordinator without exposing the storage itself.
@@ -382,6 +567,236 @@ def register_routes(router, server):
         return Response(
             content=data, media_type="image/webp", headers=_THUMBNAIL_CACHE_HEADERS
         )
+
+    def proxy_answer(picture_id: int, force_start: bool) -> dict:
+        """The playable-copy state of a picture, starting a build when due.
+
+        A build starts at once when its estimate is under the threshold, or
+        when *force_start* (the POST route). Otherwise the answer is
+        ``offered`` and nothing starts.
+        """
+        vault = server.vault
+        image_root = vault.image_root
+        facts = vault.db.run_immediate_read_task(_read_copy_facts, picture_id)
+        if facts is None:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        file_path, record, rate = facts
+        source = ImageUtils.resolve_picture_path(image_root, file_path)
+        header = None
+        if VideoUtils.is_video_file(file_path) and source and os.path.isfile(source):
+            header = VideoUtils.video_header(source)
+        fmt = _copy_format(file_path, header[1] if header else None)
+        duration = header[2] if header else None
+
+        key = (image_root, picture_id)
+        job = copy_jobs.get(key)
+        if job is not None and not job.future.done():
+            elapsed = 0.0 if job.started is None else time.monotonic() - job.started
+            return _proxy_payload("preparing", job.estimate, elapsed, fmt, duration)
+        if job is not None:
+            # Done: report a failure once, then drop it so a later call retries.
+            del copy_jobs[key]
+            if job.future.exception() is not None:
+                return _proxy_payload("failed", fmt=fmt, duration=duration)
+        if _copy_is_fresh(image_root, picture_id, file_path, record):
+            return _proxy_payload("ready", fmt=fmt, duration=duration)
+        if header is None or ffmpeg_utils.ffmpeg_executable() is None:
+            return _proxy_payload("unavailable", fmt=fmt, duration=duration)
+
+        estimate = header[0] / rate
+        if not force_start and estimate >= _COPY_START_THRESHOLD_S:
+            return _proxy_payload(
+                "offered", estimate=estimate, fmt=fmt, duration=duration
+            )
+        job = _CopyJob(estimate=estimate)
+        job.future = _copy_executor.submit(
+            _build_video_copy, vault, picture_id, file_path, job
+        )
+        copy_jobs[key] = job
+        return _proxy_payload("preparing", estimate, 0.0, fmt, duration)
+
+    @router.get(
+        "/pictures/proxies/{id}/status",
+        summary="Get a video's playable-copy state",
+        description=(
+            "Says whether this picture has a playable MP4 copy ready, being made, "
+            "offered or failed. A copy whose estimate is under 10 s starts here; a "
+            "longer one is only offered, and POST /pictures/proxies/{id}/start "
+            "begins it. One copy is built at a time."
+        ),
+        response_model=dict,
+    )
+    async def get_proxy_status(request: Request, id: int):
+        return proxy_answer(id, force_start=False)
+
+    @router.post(
+        "/pictures/proxies/{id}/start",
+        summary="Start a video's playable copy",
+        description="Starts the copy whatever its estimate, unless one is ready or running. Answers the same as the status route.",
+        response_model=dict,
+    )
+    async def start_proxy(request: Request, id: int):
+        return proxy_answer(id, force_start=True)
+
+    @router.get(
+        "/pictures/proxies/{id}.mp4",
+        summary="Get a video's playable MP4 copy",
+        description="The fresh playable copy of a video, served with Range support so it seeks. 404 until one is ready.",
+        response_class=FileResponse,
+        responses={200: {"content": {"video/mp4": {}}}},
+    )
+    async def get_proxy_mp4(request: Request, id: int):
+        vault = server.vault
+        facts = vault.db.run_immediate_read_task(_read_copy_facts, id)
+        if facts is not None:
+            file_path, record, _rate = facts
+            if _copy_is_fresh(vault.image_root, id, file_path, record):
+                return FileResponse(
+                    ImageUtils.video_copy_path(vault.image_root, id),
+                    media_type="video/mp4",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
+        raise HTTPException(status_code=404, detail="Playable copy not found")
+
+    @router.get(
+        "/pictures/waveforms/{id}.json",
+        summary="Get a video's audio waveform",
+        description=(
+            "The loudness of a clip's first audio track: 512 peaks in 0..1 over "
+            "the audio's duration in seconds. A silent clip answers nulls, and "
+            "that answer is cached too. 503 when no ffmpeg is available."
+        ),
+        response_class=Response,
+        responses={200: {"content": {"application/json": {}}}},
+    )
+    async def get_waveform(request: Request, id: int):
+        vault = server.vault
+        generation = getattr(server, "library_generation", 0)
+
+        def fetch_file_path(session: Session, picture_id: int):
+            pics = Picture.find(
+                session,
+                id=picture_id,
+                select_fields=["id", "file_path"],
+                include_deleted=True,
+                include_unimported=True,
+            )
+            return pics[0].file_path if pics else None
+
+        file_path = vault.db.run_immediate_read_task(fetch_file_path, id)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        if not VideoUtils.is_video_file(file_path):
+            raise HTTPException(status_code=404, detail="Picture is not a video")
+        if ffmpeg_utils.ffmpeg_executable() is None:
+            raise HTTPException(status_code=503, detail="No ffmpeg binary is available")
+
+        cached = ImageUtils.derived_media_path(vault.image_root, file_path, "waveform")
+
+        def fresh_cache() -> bool:
+            return bool(
+                cached
+                and os.path.isfile(cached)
+                and not discard_stale_thumbnail(id, file_path, cached)
+            )
+
+        if fresh_cache():
+            return FileResponse(
+                cached, media_type="application/json", headers=_THUMBNAIL_CACHE_HEADERS
+            )
+
+        lock = waveform_generation_locks.setdefault(id, asyncio.Lock())
+        async with lock:
+            if fresh_cache():
+                return FileResponse(
+                    cached,
+                    media_type="application/json",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
+
+            def build_waveform_blocking() -> bytes | None:
+                source = ImageUtils.resolve_picture_path(vault.image_root, file_path)
+                if not source or not os.path.exists(source):
+                    logger.warning("Waveform: source file missing: %s", source)
+                    return None
+                try:
+                    peaks = ffmpeg_utils.audio_peaks(source)
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    logger.warning(
+                        "Waveform: could not read the audio of %s: %s", source, exc
+                    )
+                    return None
+                # No audio track, or an all-silent one: a real answer, cached.
+                payload = {"duration": None, "peaks": None}
+                if peaks is not None and any(peaks[1]):
+                    duration, values = peaks
+                    payload = {
+                        "duration": round(duration, 3),
+                        "peaks": [round(value, 4) for value in values],
+                    }
+                data = json.dumps(payload).encode()
+                ImageUtils.write_derived_media_bytes(
+                    vault.image_root, file_path, "waveform", data
+                )
+                return data
+
+            loop = asyncio.get_running_loop()
+            data = await loop.run_in_executor(
+                _thumbnail_executor, build_waveform_blocking
+            )
+            if generation != getattr(server, "library_generation", 0):
+                raise HTTPException(
+                    status_code=503,
+                    detail="The active library changed while the waveform was read.",
+                )
+        if data is None:
+            # Already logged why: a missing file or an unreadable audio track.
+            raise HTTPException(status_code=404, detail="Waveform not available")
+        return Response(
+            content=data,
+            media_type="application/json",
+            headers=_THUMBNAIL_CACHE_HEADERS,
+        )
+
+    @router.get(
+        "/video-copies",
+        summary="Count the playable copies kept for this library",
+        description="The number of playable MP4 copies on disk and their total size. Owner only.",
+        response_model=dict,
+    )
+    def get_video_copies(request: Request):
+        found = _list_copy_files(server.vault.image_root)
+        return {"count": len(found), "bytes": sum(size for _, size in found)}
+
+    @router.delete(
+        "/video-copies",
+        summary="Delete every playable copy kept for this library",
+        description=(
+            "Removes the copy rows and every copy file in this library. A copy "
+            "is made again when its clip is next opened. Owner only."
+        ),
+        response_model=dict,
+    )
+    def delete_video_copies(request: Request):
+        vault = server.vault
+
+        def clear_rows(session: Session) -> None:
+            session.execute(delete(VideoCopy))
+            session.commit()
+
+        vault.db.run_task(clear_rows)
+        removed = 0
+        freed = 0
+        for path, size in _list_copy_files(vault.image_root):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                logger.warning("Failed to delete video copy %s: %s", path, exc)
+                continue
+            removed += 1
+            freed += size
+        logger.info("Deleted %s playable copies (%s bytes)", removed, freed)
+        return {"removed": removed, "bytes": freed}
 
     @router.post(
         "/pictures/thumbnails",

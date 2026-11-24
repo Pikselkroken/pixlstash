@@ -82,3 +82,4 @@ from .snapshot import Snapshot  # noqa: F401
 from .picture_move import PictureMove  # noqa: F401
 from .external_move_review import ExternalMoveReview  # noqa: F401
 from .folder_mapping_commit import FolderMappingCommit  # noqa: F401
+from .video_copy import VideoCopy  # noqa: F401

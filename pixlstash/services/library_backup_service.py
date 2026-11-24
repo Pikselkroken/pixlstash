@@ -43,6 +43,10 @@ import zstandard
 from tqdm import tqdm
 
 from pixlstash.hub.registry import VAULT_FILENAME, Library
+from pixlstash.utils.image_processing.image_utils import (
+    THUMBNAIL_DIR_NAME,
+    VIDEO_COPY_FOLDER,
+)
 from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.system_utils import space_shortfall
@@ -83,6 +87,8 @@ BACKUP_FILE_MODE = 0o600
 ARCHIVE_SUFFIX = ".tar.zst"
 UNCOMPRESSED_SUFFIX = ".tar"
 
+# The playable-copy folder, relative to the library root (see _library_files).
+_VIDEO_COPY_DIR = os.path.join(THUMBNAIL_DIR_NAME, VIDEO_COPY_FOLDER)
 # Files that belong to the live database rather than to the library's contents.
 # The archived copies are made with VACUUM INTO, so the originals (and their WAL
 # sidecars, which are meaningless without the exact file they belong to) are
@@ -270,6 +276,14 @@ def _library_files(library_root: str) -> list[tuple[str, str]]:
         ):
             subdirs[:] = []
             continue
+        # Playable copies are regenerable from their originals and can be many
+        # gigabytes each, so a backup leaves that folder out. Thumbnails stay.
+        subdirs[:] = [
+            dirname
+            for dirname in subdirs
+            if os.path.normpath(os.path.join(relative_directory, dirname))
+            != _VIDEO_COPY_DIR
+        ]
         for dirname in subdirs:
             _validate_regular_directory(
                 os.path.join(directory, dirname), label="library payload directory"

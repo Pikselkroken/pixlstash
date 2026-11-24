@@ -2489,6 +2489,12 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 | `GET /api/v1/pictures/thumbnails/{id}.webp` | Cached WebP thumbnail, made on demand under a per-picture async lock and kept on disk in `<library root>/.pixlstash-thumbnails/`. |
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
 | `GET /api/v1/pictures/storyboards/{id}.webp` | A video's 11 evenly spaced frames, first to last, left to right in one WebP (#2147). Made on demand and cached beside the thumbnail; picture-scoped; the thumbnail's cache headers; 404 for a still or a clip whose frames cannot all be read. |
+| `GET /api/v1/pictures/proxies/{id}/status` | Playable-copy state of a video (#2807): `{"state": "ready" \| "preparing" \| "offered" \| "failed" \| "unavailable", "estimate_seconds": float \| null, "elapsed_seconds": float \| null, "format": str \| null, "duration_seconds": float \| null}`. Under a 10 s estimate the copy starts here and the answer is `preparing`; longer, it is `offered` and nothing starts. `failed` is reported once, then dropped. Picture-scoped; a READ token may watch. |
+| `POST /api/v1/pictures/proxies/{id}/start` | Same body as the status route. Starts the copy whatever its estimate; deduplicated per picture, one transcode at a time. Non-GET, so READ tokens get 403. |
+| `GET /api/v1/pictures/proxies/{id}.mp4` | The fresh playable MP4 copy, `video/mp4` with Range support; 404 until the copy is ready and fresh. Picture-scoped. |
+| `GET /api/v1/pictures/waveforms/{id}.json` | `{"duration": float, "peaks": [512 floats in 0..1]}` for a clip with sound, duration being the audio's length in seconds; `{"duration": null, "peaks": null}` for a silent clip (cached). 503 without an ffmpeg binary, 404 for a non-video. Picture-scoped. |
+| `GET /api/v1/video-copies` | `{"count": int, "bytes": int}`: the playable copies this library keeps. Owner only (on the READ-blocked belt). |
+| `DELETE /api/v1/video-copies` | Deletes every playable copy of this library: `{"removed": int, "bytes": int}`. Owner only. |
 | `GET /api/v1/pictures/{id}.{ext}` | Original file (optionally watermarked). |
 
 ### Generated thumbnails: the URL is stable, so the *response* carries the freshness contract

@@ -12,8 +12,9 @@ import os
 from PIL import Image
 from sqlmodel import select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, VideoCopy
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.image_processing.ffmpeg_utils import remove_stale_temp_files
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
@@ -157,3 +158,38 @@ class MaintenanceMixin:
             deleted_count,
             thumbnails_removed,
         )
+
+    def _sweep_video_copies(self) -> None:
+        """Remove what a killed run left in the playable-copy folder.
+
+        Two kinds: a ``.proxy-tmp-*`` file from a transcode that never finished,
+        and a copy file with no ``VideoCopy`` row (a build that died between the
+        rename and the row write, or a row a reference-folder removal dropped).
+        Runs at start-up, before any job, so nothing is mid-write.
+        """
+        folder = ImageUtils.video_copy_folder(self.vault.image_root)
+        if not folder or not os.path.isdir(folder):
+            return
+        temps = remove_stale_temp_files(folder)
+
+        def fetch_ids(session):
+            return set(session.exec(select(VideoCopy.picture_id)).all())
+
+        known = self.vault.db.run_immediate_read_task(fetch_ids)
+        orphans = 0
+        for name in os.listdir(folder):
+            stem, ext = os.path.splitext(name)
+            if ext != ".mp4" or not stem.isdigit() or int(stem) in known:
+                continue
+            path = os.path.join(folder, name)
+            try:
+                os.remove(path)
+                orphans += 1
+            except OSError as exc:
+                logger.warning("Could not remove orphan video copy %s: %s", path, exc)
+        if temps or orphans:
+            logger.info(
+                "Video copy sweep removed %s temp files and %s orphan copies.",
+                temps,
+                orphans,
+            )
