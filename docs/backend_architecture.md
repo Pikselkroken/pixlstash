@@ -73,6 +73,7 @@ pixlstash/
 │   ├── review.py                     # Tag review sessions + item decisions
 │   ├── detection.py                  # Florence-2 object detections
 │   ├── snapshot.py                   # Vault snapshots (GFS retention)
+│   ├── video_copy.py                 # Playable copies of refused videos (#2807)
 │   ├── picture_likeness.py           # Pairwise image similarity
 │   ├── picture_set.py                # Sets + membership
 │   ├── picture_stack.py              # Stacks (duplicates / variants)
@@ -175,7 +176,7 @@ pixlstash/
 │   ├── rate_limiter.py
 │   ├── comfyui_utilities.py
 │   ├── insightface_batched.py
-│   ├── image_processing/             # image_utils, face_utils, video_utils
+│   ├── image_processing/             # image_utils, face_utils, video_utils, ffmpeg_utils
 │   ├── likeness/                     # likeness_utils, likeness_parameter_utils
 │   ├── quality/                      # quality_utils, smart_score_utils
 │   ├── stack/                        # stack_utils
@@ -280,6 +281,25 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | Image I/O | **Pillow** ≥ 12.1, **pillow-heif** |
 | Computer vision | **opencv-python** ≥ 4.13 |
 | EXIF | **piexif** |
+| Video transcode, audio | **imageio-ffmpeg** ≥ 0.8.1: its bundled `ffmpeg` binary, run as a subprocess only |
+
+#### ffmpeg runs as a separate program, never in-process
+
+`utils/image_processing/ffmpeg_utils.py` runs ffmpeg for the playable video
+copies and the waveform (#2807). **ffmpeg is only ever a subprocess: never
+`import` or link it** (no PyAV, no `ctypes` into `libav*`), in the core or in a
+plugin. PixlStash's licence is its owner's to choose and ffmpeg's is not; a
+program driven over pipes and the command line stays a separate work. PyAV is
+ruled out on that ground, not only for its size: its wheels link GPL
+`libx264`/`libx265` into the process. The bundled build is GPL; its notice is in
+[licensing.md](licensing.md).
+
+`ffmpeg_executable()` (cached) is the only resolver, and it is
+`imageio_ffmpeg.get_ffmpeg_exe()`, whose order is: the `IMAGEIO_FFMPEG_EXE`
+environment variable, the binary bundled in the wheel, conda's, then `ffmpeg` on
+`PATH`. The wheel ships a binary for every platform PixlStash ships on, so the
+bundled one wins unless the user sets the variable. With none, it answers
+`None` (warned once): copies report `unavailable` and the waveform route 503.
 
 ### Math & System
 
@@ -658,6 +678,8 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/libraries/{library_uuid}                                              | libraries       | Rename a library                                              |
 | DELETE | /api/v1/libraries/{library_uuid}                                              | libraries       | Stop using a library                                          |
 | POST   | /api/v1/libraries/{library_uuid}/discard                                      | libraries       | Give a folder back: undo a first import                       |
+| GET    | /api/v1/library/video-copies                                                  | pictures        | Count the playable video copies                               |
+| DELETE | /api/v1/library/video-copies                                                  | pictures        | Delete every playable video copy                              |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                            |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                         |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                        |
@@ -780,6 +802,10 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/pictures/tags/bulk_fetch                                              | tags            | Fetch tags for multiple pictures                              |
 | POST   | /api/v1/pictures/thumbnails                                                   | pictures        | Get batch thumbnail metadata                                  |
 | GET    | /api/v1/pictures/thumbnails/{id}.webp                                         | pictures        | Get picture thumbnail image                                   |
+| POST   | /api/v1/pictures/video-copies/{id}                                            | pictures        | Make a playable copy of a video                               |
+| GET    | /api/v1/pictures/video-copies/{id}.mp4                                        | pictures        | Get the playable copy of a video                              |
+| GET    | /api/v1/pictures/video-copies/{id}/status                                     | pictures        | Get the playable copy status of a video                       |
+| GET    | /api/v1/pictures/waveforms/{id}.json                                          | pictures        | Get a video's audio waveform                                  |
 | PATCH  | /api/v1/pictures/{id}                                                         | pictures        | Patch picture fields                                          |
 | DELETE | /api/v1/pictures/{id}                                                         | pictures        | Move picture to scrapheap                                     |
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                     |
@@ -1262,6 +1288,10 @@ ReferenceFolder, ImportFolder, DeletedFileLog, Metadata
 Snapshot: id, kind, created_at, relative_path,
           manifest_relative_path, byte_size, picture_count,
           schema_version, label   (vault snapshots, GFS retention)
+
+VideoCopy (video_copy): picture_id (PK, FK picture ON DELETE CASCADE), bytes,
+          source_bytes, source_mtime, pixel_frames, seconds, made_at
+          (playable copies of refused videos; §13 Caches)
 ```
 
 **Vector storage**: image and text embeddings are stored as `BLOB` columns on `Picture` (no external vector DB). Face features are stored on `Face`.
@@ -2162,7 +2192,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/request_origin.py](../pixlstash/utils/request_origin.py) | `OriginClientMiddleware` — captures the per-tab `X-Client-Id` for the real-time event envelope (see §15) |
 | [utils/comfyui_utilities.py](../pixlstash/utils/comfyui_utilities.py) | ComfyUI workflow parsing |
 | [utils/insightface_batched.py](../pixlstash/utils/insightface_batched.py) | Batched InsightFace wrapper |
-| utils/image_processing/ | `image_utils`, `face_utils`, `video_utils` |
+| utils/image_processing/ | `image_utils`, `face_utils`, `video_utils`, `ffmpeg_utils` (ffmpeg as a subprocess, §3) |
 | utils/likeness/ | `likeness_utils`, `likeness_parameter_utils` |
 | utils/quality/ | `quality_utils`, `smart_score_utils` |
 | utils/stack/ | `stack_utils` |
@@ -4974,12 +5004,43 @@ this record and needs its own independent adversarial sign-off.
 |-------|----------|-------|
 | Thumbnails | Disk, `<library root>/.pixlstash-thumbnails/`, named by a hash of the picture's stored path | Made by the thumbnail task, or on demand by `GET /pictures/thumbnails/{id}.webp` |
 | Video storyboards | Disk, beside the thumbnails (`DERIVED_MEDIA_KINDS` in `image_utils.py`) | Made on demand by `GET /pictures/storyboards/{id}.webp`; deleted and moved with the thumbnail (below) |
+| Video waveforms | Disk, beside the thumbnails (`DERIVED_MEDIA_KINDS`, `_waveform.json`) | Made on demand by `GET /pictures/waveforms/{id}.json`; a silent clip's null answer is cached too |
+| Playable video copies | Disk, `<library root>/.pixlstash-thumbnails/video-copies/<picture id>.mp4`, plus a `video_copy` row | Made by `POST /pictures/video-copies/{id}` (below); kept for the picture's lifetime; not in backups |
 | Watermarks | In-memory rendered images | Seed-keyed |
 | Quality stats | In-memory (≈60 s TTL) | Used by aggregate endpoints |
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
 **Files derived from a picture follow its thumbnail.** Each kind in `DERIVED_MEDIA_KINDS` is named like the thumbnail, from the picture's STORED path, so `ImageUtils.remove_thumbnail` deletes every kind and `ImageUtils.carry_thumbnail` (which calls `carry_derived_media` first) renames every kind when a picture moves. Every move routes through `carry_thumbnail`: the layout engine and the reference-folder scan (their `_carry_thumbnail` delegate to it), and, after their rows commit, the reference-folder relocate, move-pictures and repoint (PATCH) routes, which until #2147 carried nothing and stranded thumbnails. A repoint whose new path holds a different file, none, or one the row has no hash to check against, removes the old cached files instead of carrying them. Nothing sweeps `.pixlstash-thumbnails` except by a row's current path, so a move that skips the carry strands the files for good.
+
+**Playable video copies are keyed by picture id, not path** (#2807). A video
+the browser refuses gets an H.264/AAC MP4 made by ffmpeg
+(`ffmpeg_utils.make_playable_copy`: temp file, then `os.replace`). It is named
+by the picture id, so a move needs no carry, and its `video_copy` row (FK
+`ON DELETE CASCADE`; the vault runs with `PRAGMA foreign_keys=ON`) holds the
+copy's size, the original's size and mtime when made, the original's
+pixel-frames and the seconds it took. A row whose file is gone, or whose
+original's size or mtime changed, counts as no copy and is removed with its file
+on the next read. The estimate offered before a copy is the original's
+pixel-frames (OpenCV) divided by the latest row's rate, `DEFAULT_COPY_RATE` when
+there is none; above `COPY_OFFER_SECONDS` (10 s) a copy is offered rather than
+started. Copies run one at a time on `_copy_executor` (`max_workers=1`) in
+`routes/pictures/_thumbnails.py`; the in-flight map is keyed by
+`(library root, picture id)` and cleared, with the running ffmpeg terminated,
+by `clear_thumbnail_runtime_cache` on a library switch; `_close_active_vault`
+terminates it on shutdown. A failed job is reported once as `failed`, then
+forgotten. Where the files go: the Scrapheap keeps a copy; the permanent purge
+(`scrapheap_service.remove_picture_files`) deletes the file where it deletes the
+thumbnail. Every other path that deletes a picture row (start-up missing-file
+cleanup, removing a reference folder, its scan, a full restore) drops the row
+by cascade and leaves the file, and the start-up
+`_sweep_video_copies` (`maintenance.py`) removes every file in the folder no row
+owns, unfinished `.copy-tmp-*` files included. Backups skip the folder
+(`library_backup_service._library_files`); snapshots copy only the database, so
+a restored row without its file is simply no copy. Settings counts and clears
+them through `GET`/`DELETE /library/video-copies`. Known limit: on Windows
+`os.replace` onto a copy that a response is still streaming fails, so that job
+fails and the next open retries.
 
 ### The library layout
 

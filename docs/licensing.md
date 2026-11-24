@@ -37,6 +37,25 @@ Basics:
 - Licensed under the MIT License.
 - However: PixlStash name and logo are property of the project’s copyright owner. You may not use the PixlStash name, logo, or branding in a way that suggests official endorsement or affiliation without explicit permission.
 
+### Third-party program: ffmpeg
+- PixlStash installs the Python package `imageio-ffmpeg` (BSD-2-Clause), whose
+  wheels carry a prebuilt `ffmpeg` executable. That executable is a GPL build of
+  FFmpeg (configured with `--enable-gpl`, including libx264 and libx265), so the
+  copy distributed in the desktop installer and the Docker images is licensed
+  under the GNU GPL.
+- PixlStash runs it only as a separate program, over the command line and pipes,
+  to make playable copies of videos and read audio waveforms. It is never
+  imported or linked into PixlStash.
+- The binaries are prebuilt upstream, not by PixlStash: Linux and Windows on Arm
+  from BtbN/FFmpeg-Builds (https://github.com/BtbN/FFmpeg-Builds), Windows x64
+  from gyan.dev (https://www.gyan.dev/ffmpeg/builds/), macOS from evermeet.cx
+  and osxexperts.net, as listed by imageio-ffmpeg's `tools/download_ffmpeg.py`
+  (https://github.com/imageio/imageio-ffmpeg). The version string `ffmpeg
+  -version` prints names the FFmpeg release each was built from; FFmpeg's
+  source for every release is at https://ffmpeg.org/download.html, and the
+  BtbN repository is itself the build scripts for its builds.
+- Set `IMAGEIO_FFMPEG_EXE` to the path of another ffmpeg to use that instead.
+
 To avoid ambiguity, this file does not assign license by "subject matter".
 Use the license files in each component path (for example `pixlstash/LICENSE`,
 `frontend/LICENSE`, `scripts/LICENSE`, and `tests/LICENSE`) to
