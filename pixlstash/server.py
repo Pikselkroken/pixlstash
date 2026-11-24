@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
-from pillow_heif import register_heif_opener
+from pi_heif import register_heif_opener
 
 
 from pixlstash.db_models import (

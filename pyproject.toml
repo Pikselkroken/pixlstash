@@ -65,7 +65,10 @@ dependencies = [
     "rapidfuzz>=3.14.3",
     "tqdm>=4.67.3",
     "sentence_transformers~=5.2",
-    "pillow-heif>=1.3.0",
+    # Decode-only build of pillow-heif: no GPL x265 encoder in-process.
+    "pi-heif>=1.4.0",
+    # A static ffmpeg binary, run only as a separate process (ffmpeg_utils.py).
+    "imageio-ffmpeg>=0.8.1",
     "sqlmodel>=0.0.45",  # UTCDateTime: every datetime column reads and writes aware UTC
     "alembic>=1.18.4",
     "cryptography>=50.0.0",

@@ -32,6 +32,15 @@ Basics:
 - See frontend/LICENSE for the full license text.
 - No CLA is required for frontend contributions.
 
+### PixlStash Desktop shell
+- Located in the "electron" directory
+- Licensed under the MIT License.
+- See electron/LICENSE for the full license text.
+- No CLA is required for desktop shell contributions.
+- The desktop installer *bundles* the GPL backend and a Python runtime, and the
+  shell starts the backend as a separate process. That is aggregation: neither
+  license reaches the other.
+
 ### Logos, Example Images and Utility Scripts
 - Located in the "pictures" and "scripts" directories. The project website is its own repository, pixlstash-website, under the same terms.
 - Licensed under the MIT License.
@@ -41,6 +50,10 @@ To avoid ambiguity, this file does not assign license by "subject matter".
 Use the license files in each component path (for example `pixlstash/LICENSE`,
 `frontend/LICENSE`, `scripts/LICENSE`, and `tests/LICENSE`) to
 determine the applicable license for files in that path.
+
+Third-party software shipped inside the desktop installer and the Docker
+images, and the source offers that come with it (the GPL build of ffmpeg among
+them), is listed in `THIRD_PARTY_NOTICES.md` at the repository root.
 
 This document is informational and does not replace the component license texts.
 

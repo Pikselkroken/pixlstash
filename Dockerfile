@@ -25,7 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libheif-dev \
     libde265-dev \
-    libx265-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,6 +59,7 @@ RUN groupadd -f -g 10001 pixlstash \
 
 # ── Copy application source ───────────────────────────────────────────────────
 COPY --chown=pixlstash:pixlstash pyproject.toml setup.py MANIFEST.in alembic.ini ./
+COPY --chown=pixlstash:pixlstash LICENSE THIRD_PARTY_NOTICES.md ./
 COPY --chown=pixlstash:pixlstash pixlstash/ pixlstash/
 # The ComfyUI-PixlStash nodes, read in place by the editable install below
 # (comfyui_pack_service checks /app/integrations first). Needs the submodule

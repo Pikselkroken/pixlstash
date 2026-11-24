@@ -10,13 +10,17 @@ For a repository-wide licensing map, see `docs/licensing.md`.
 
 ## Project Structure
 
-PixlStash consists of two main components:
+PixlStash consists of these components:
 
 - **Backend (`pixlstash/`)**  
   - License: GPL-3.0  
   - Contributions require agreeing to the CLA (see below)
 
 - **Frontend (`frontend/`)**  
+  - License: MIT  
+  - No CLA required
+
+- **Desktop shell (`electron/`)**  
   - License: MIT  
   - No CLA required
 

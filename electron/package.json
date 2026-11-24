@@ -9,7 +9,7 @@
     "email": "lindkvis@gmail.com"
   },
   "homepage": "https://pixlstash.dev",
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "main": "dist/main.js",
   "type": "commonjs",
   "scripts": {
@@ -58,6 +58,14 @@
       {
         "from": "resources/runtime.json",
         "to": "runtime.json"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "../THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
     "win": {

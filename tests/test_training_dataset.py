@@ -5,6 +5,7 @@ the dataset builder directly, since it is a trusted server-side helper with no
 HTTP route of its own.
 """
 
+import base64
 import gc
 import glob
 import hashlib
@@ -26,6 +27,19 @@ from pixlstash.utils.service.export_utils import ExportUtils
 from tests.utils import quiesce_background_work, upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
+# An 8x8 HEIC filled with (200, 10, 10). PixlStash decodes HEIC only (pi-heif),
+# so the bytes are embedded here rather than encoded at test time.
+RED_HEIC_8X8 = base64.b64decode(
+    "AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAXptZXRhAAAAAAAAACFoZGxyAAAAAAAA"
+    "AABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAABngABAAAAAAAAADQA"
+    "AAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAA5waXRtAAAAAAABAAAA+mlw"
+    "cnAAAADaaXBjbwAAAHVodmNDAQNwAAAAAAAAAAAAHvAA/P34+AAADwNgAAEAGEABDAH//wNw"
+    "AAADAJAAAAMAAAMAHroCQGEAAQApQgEBA3AAAAMAkAAAAwAAAwAeoCCBBZbqrprm4CGgwIAA"
+    "AAyAAAADAIRiAAEABkQBwXPBiQAAABNjb2xybmNseAABAA0ABoAAAAAUaXNwZQAAAAAAAABA"
+    "AAAAQAAAAChjbGFwAAAACAAAAAEAAAAIAAAAAf///8gAAAAC////yAAAAAIAAAAOcGl4aQAA"
+    "AAABCAAAABhpcG1hAAAAAAAAAAEAAQWBAgMFhAAAADxtZGF0AAAAMCgBrxMhZmNA+BD3Z//t"
+    "6eX/Zqk/8F+x6c7IR0DA0iCAm0BIk11QCxYQgId2pVbc+A=="
+)
 
 
 def _setup():
@@ -278,7 +292,7 @@ def test_build_training_dataset_converts_what_ai_toolkit_would_skip(env):
     transparent.paste((*red, 255), (0, 0, 4, 8))
     sources = {
         "photo.jpg": lambda path: Image.new("RGB", (8, 8), red).save(path),
-        "photo.heic": lambda path: Image.new("RGB", (8, 8), red).save(path),
+        "photo.heic": lambda path: _write_bytes(path, RED_HEIC_8X8),
         "photo.avif": lambda path: Image.new("RGB", (8, 8), red).save(path),
         "photo.bmp": lambda path: Image.new("RGB", (8, 8), red).save(path),
         "photo.tiff": lambda path: Image.new("RGB", (8, 8), red).save(path),
