@@ -12,9 +12,9 @@ import os
 from PIL import Image
 from sqlmodel import select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, VideoCopy
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.image_utils import VIDEO_COPY_DIR, ImageUtils
 
 logger = get_logger(__name__)
 
@@ -157,3 +157,30 @@ class MaintenanceMixin:
             deleted_count,
             thumbnails_removed,
         )
+
+    def _sweep_video_copies(self):
+        """Remove unfinished copies and copy files no ``video_copy`` row owns.
+
+        A copy interrupted by a crash leaves its temp file, and a picture
+        deleted by any path other than the purge (missing-file cleanup, a
+        reference folder removed or rescanned, a full restore) loses its row by
+        cascade but not its file.
+        """
+        folder = os.path.join(self.vault.image_root, VIDEO_COPY_DIR)
+        if not os.path.isdir(folder):
+            return
+        owned = {
+            f"{picture_id}.mp4"
+            for picture_id in self.vault.db.run_immediate_read_task(
+                lambda session: session.exec(select(VideoCopy.picture_id)).all()
+            )
+        }
+        for name in os.listdir(folder):
+            if name in owned:
+                continue
+            path = os.path.join(folder, name)
+            try:
+                os.remove(path)
+                logger.info("Removed a leftover video copy file %s", path)
+            except OSError as exc:
+                logger.warning("Could not remove leftover video copy %s: %s", path, exc)

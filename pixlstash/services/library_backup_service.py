@@ -96,6 +96,12 @@ _DATABASE_FILES = frozenset(
     }
 )
 
+# Playable video copies (#2807): made again on demand, and possibly larger than
+# the clips themselves. Spelled out rather than imported from ``image_utils``
+# (which pulls in OpenCV, and this module is on the CLI's path); a test asserts
+# it equals ``image_utils.VIDEO_COPY_DIR``.
+_VIDEO_COPY_DIR = os.path.join(".pixlstash-thumbnails", "video-copies")
+
 
 @dataclass
 class BackupResult:
@@ -268,6 +274,9 @@ def _library_files(library_root: str) -> list[tuple[str, str]]:
                 or any(part.startswith(".pixlstash_identity_scrub_") for part in parts)
             )
         ):
+            subdirs[:] = []
+            continue
+        if relative_directory == _VIDEO_COPY_DIR:
             subdirs[:] = []
             continue
         for dirname in subdirs:

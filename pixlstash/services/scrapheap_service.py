@@ -1586,6 +1586,9 @@ def remove_picture_files(
                 was_reference_protected,
             )
         ImageUtils.remove_thumbnail(image_root, rel_path)
+        if pic_id is not None:
+            # Its row went with the picture's (ON DELETE CASCADE).
+            ImageUtils.remove_video_copy(image_root, pic_id)
     return unconfirmed
 
 

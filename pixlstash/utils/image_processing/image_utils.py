@@ -59,7 +59,12 @@ STORYBOARD_TILE_HEIGHT = 160
 #: root). Deleting and moving a picture handle every kind listed here.
 DERIVED_MEDIA_KINDS = {
     "storyboard": ("_storyboard.webp", THUMBNAIL_DIR_NAME),
+    "waveform": ("_waveform.json", THUMBNAIL_DIR_NAME),
 }
+#: Playable copies of videos the browser refuses (#2807), one per picture and
+#: named by its id, so they are not a derived kind: a move needs no carry. Kept
+#: out of backups; their ``video_copy`` rows say which are still fresh.
+VIDEO_COPY_DIR = os.path.join(THUMBNAIL_DIR_NAME, "video-copies")
 
 
 class ImageUtils:
@@ -267,6 +272,29 @@ class ImageUtils:
         return os.path.join(
             image_root, folder, ImageUtils._hashed_name(file_path, suffix)
         )
+
+    @staticmethod
+    def video_copy_path(image_root: str, picture_id: int) -> str:
+        """Where picture *picture_id*'s playable copy lives (``VIDEO_COPY_DIR``)."""
+        return os.path.join(image_root, VIDEO_COPY_DIR, f"{picture_id}.mp4")
+
+    @staticmethod
+    def remove_video_copy(image_root: str, picture_id: int) -> int:
+        """Delete a picture's playable copy; its size in bytes, 0 if none.
+
+        A failure is logged, not raised: the copy is only a cache, and the
+        start-up sweep removes a copy file that has no row.
+        """
+        path = ImageUtils.video_copy_path(image_root, picture_id)
+        try:
+            size = os.path.getsize(path)
+            os.remove(path)
+            return size
+        except FileNotFoundError:
+            return 0
+        except OSError as exc:
+            logger.warning("Failed to delete the video copy %s: %s", path, exc)
+            return 0
 
     @staticmethod
     def carry_derived_media(

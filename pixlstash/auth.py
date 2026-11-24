@@ -324,6 +324,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/libraries",
         # The Folders tree (#2458): the owner's folder names and counts.
         "/api/v1/library/folders",
+        # Playable video copies of the open library (#2807): count and size.
+        "/api/v1/library/video-copies",
         "/api/v1/model-folders",
         "/api/v1/model-folders/comfyui-reads",
         "/api/v1/model-folders/devices",

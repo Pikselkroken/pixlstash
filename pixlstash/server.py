@@ -189,6 +189,7 @@ from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.tasks import TaskType
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
+from pixlstash.utils.image_processing.ffmpeg_utils import stop_running_copy
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -1073,6 +1074,8 @@ class Server(
         if vault is None:
             return
         image_root = vault.image_root
+        # A playable copy is ffmpeg in its own process; it would outlive us.
+        stop_running_copy()
         try:
             vault.close()
         finally:
@@ -1459,6 +1462,7 @@ class Server(
             self._ws_loop = loop
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
+        await loop.run_in_executor(None, self._sweep_video_copies)
         # Thumbnail generation is NOT run here anymore. It used to block startup
         # (awaited before vault.start()), which on a large library - or after the
         # v1.8.0 upgrade reset thumbnails to NULL - held the server unusable for

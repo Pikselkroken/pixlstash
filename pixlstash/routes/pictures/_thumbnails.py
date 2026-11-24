@@ -1,10 +1,15 @@
 import ast
 import asyncio
+import json
 import os
 import re
+import threading
+import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 from PIL import Image
 from fastapi import (
@@ -24,13 +29,17 @@ from pixlstash.db_models import (
     Character,
     Picture,
     Tag,
+    VideoCopy,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring import (
     get_smart_score_penalised_tags_from_request,
 )
+from pixlstash.utils.image_processing import ffmpeg_utils
+from pixlstash.utils.image_processing.ffmpeg_utils import ffmpeg_executable
 from pixlstash.utils.image_processing.image_utils import (
     STORYBOARD_FRAMES,
+    VIDEO_COPY_DIR,
     ImageUtils,
 )
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -63,18 +72,103 @@ _thumbnail_executor = ThreadPoolExecutor(
 )
 
 
+#: A playable copy estimated to take longer than this is offered, not started.
+COPY_OFFER_SECONDS = 10.0
+# ponytail: a guess for a machine that has made no copy yet (pixel-frames per
+# second, below the 2-thread rate measured on 1080p ProRes); the first copy's
+# own rate replaces it, so it is only ever wrong once.
+DEFAULT_COPY_RATE = 50_000_000
+
+# ponytail: one transcode at a time; raise max_workers if users queue several.
+# ponytail: copies are kept for the picture's lifetime; add an LRU cap if
+# libraries hold many large ProRes clips.
+_copy_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video-copy")
+
+
+@dataclass
+class _CopyJob:
+    """A playable copy queued or being made."""
+
+    info: dict
+    estimate: Optional[float]
+    future: Optional[Future] = None
+    #: ``time.monotonic()`` once ffmpeg runs; ``None`` while queued.
+    started: Optional[float] = None
+
+    def remaining(self) -> Optional[float]:
+        if self.estimate is None or self.started is None:
+            return self.estimate
+        # ponytail: estimate minus elapsed; read ffmpeg's -progress if long
+        # copies sit at 0 s left for a noticeable while.
+        return max(0.0, self.estimate - (time.monotonic() - self.started))
+
+
+def _copy_answer(
+    state: str,
+    info: Optional[dict] = None,
+    estimate: Optional[float] = None,
+    remaining: Optional[float] = None,
+    detail: Optional[str] = None,
+) -> dict:
+    """The status object every copy route answers with (#2807)."""
+    info = info or {}
+    return {
+        "state": state,
+        "format": info.get("format"),
+        "estimate_seconds": None if estimate is None else round(estimate, 1),
+        "remaining_seconds": None if remaining is None else round(remaining, 1),
+        "duration_seconds": info.get("duration"),
+        "detail": detail,
+    }
+
+
 def register_routes(router, server):
     thumbnail_generation_locks: dict[int, asyncio.Lock] = {}
     storyboard_generation_locks: dict[int, asyncio.Lock] = {}
+    waveform_generation_locks: dict[int, asyncio.Lock] = {}
+    # (library root, picture id) -> the copy queued or being made for it.
+    copy_jobs: dict[tuple[str, int], _CopyJob] = {}
+    # Makes "is one running? if not, start one" one step for concurrent POSTs.
+    copy_jobs_lock = threading.Lock()
 
     def clear_thumbnail_runtime_cache() -> None:
         # Keyed by picture id, and ids are reused across libraries.
         thumbnail_generation_locks.clear()
         storyboard_generation_locks.clear()
+        waveform_generation_locks.clear()
+        # The old library's copy job stops, and is never reported as this
+        # library's: its key names the old root, and the map forgets it.
+        copy_jobs.clear()
+        ffmpeg_utils.stop_running_copy()
 
     # The locks are route-local, so expose their one lifecycle operation to the
     # server's library switch coordinator without exposing the storage itself.
     server._clear_thumbnail_runtime_cache = clear_thumbnail_runtime_cache
+
+    def picture_file_path(picture_id: int) -> str:
+        """The picture's stored path, or 404."""
+
+        def fetch(session: Session):
+            pics = Picture.find(
+                session,
+                id=picture_id,
+                select_fields=["id", "file_path"],
+                include_deleted=True,
+                include_unimported=True,
+            )
+            return pics[0].file_path if pics else None
+
+        file_path = server.vault.db.run_immediate_read_task(fetch)
+        if not file_path:
+            raise HTTPException(status_code=404, detail="Picture not found")
+        return file_path
+
+    def video_file_path(picture_id: int) -> str:
+        """The picture's stored path, or 404 when it is not a video."""
+        file_path = picture_file_path(picture_id)
+        if not VideoUtils.is_video_file(file_path):
+            raise HTTPException(status_code=404, detail="Picture is not a video")
+        return file_path
 
     def get_thumbnail_lock(picture_id: int) -> asyncio.Lock:
         lock = thumbnail_generation_locks.get(picture_id)
@@ -313,23 +407,7 @@ def register_routes(router, server):
     async def get_storyboard(request: Request, id: int):
         vault = server.vault
         generation = getattr(server, "library_generation", 0)
-
-        def fetch_file_path(session: Session, picture_id: int):
-            pics = Picture.find(
-                session,
-                id=picture_id,
-                select_fields=["id", "file_path"],
-                include_deleted=True,
-                include_unimported=True,
-            )
-            return pics[0].file_path if pics else None
-
-        file_path = vault.db.run_immediate_read_task(fetch_file_path, id)
-        if not file_path:
-            raise HTTPException(status_code=404, detail="Picture not found")
-        if not VideoUtils.is_video_file(file_path):
-            raise HTTPException(status_code=404, detail="Picture is not a video")
-
+        file_path = video_file_path(id)
         cached = ImageUtils.derived_media_path(
             vault.image_root, file_path, "storyboard"
         )
@@ -382,6 +460,339 @@ def register_routes(router, server):
         return Response(
             content=data, media_type="image/webp", headers=_THUMBNAIL_CACHE_HEADERS
         )
+
+    @router.get(
+        "/pictures/waveforms/{id}.json",
+        summary="Get a video's audio waveform",
+        description=(
+            "The peaks of a video's first audio track: "
+            '`{"duration": seconds, "peaks": [512 values in 0..1]}`, or both '
+            "null for a clip with no sound. Read from the original file, so a "
+            "clip the browser cannot play still has one. Cached on demand; 404 "
+            "for a picture that is not a video, 503 with no ffmpeg."
+        ),
+    )
+    async def get_waveform(id: int):
+        if not ffmpeg_executable():
+            raise HTTPException(
+                status_code=503, detail="No ffmpeg on this install, so no waveform."
+            )
+        vault = server.vault
+        generation = getattr(server, "library_generation", 0)
+        file_path = video_file_path(id)
+        cached = ImageUtils.derived_media_path(vault.image_root, file_path, "waveform")
+
+        def read_cached() -> Optional[dict]:
+            if not cached or not os.path.isfile(cached):
+                return None
+            if discard_stale_thumbnail(id, file_path, cached):
+                return None
+            with open(cached, encoding="utf-8") as handle:
+                return json.load(handle)
+
+        body = read_cached()
+        if body is not None:
+            return body
+        lock = waveform_generation_locks.setdefault(id, asyncio.Lock())
+        async with lock:
+            body = read_cached()
+            if body is not None:
+                return body
+
+            def build_waveform_blocking() -> Optional[dict]:
+                source = ImageUtils.resolve_picture_path(vault.image_root, file_path)
+                if not source or not os.path.exists(source):
+                    logger.warning("Waveform: source file missing: %s", source)
+                    return None
+                try:
+                    peaks = ffmpeg_utils.audio_peaks(source)
+                except Exception as exc:
+                    logger.warning(
+                        "Waveform: could not read the audio of %s (%s: %s)",
+                        source,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    return None
+                # A silent clip's answer is cached too, so it is probed once.
+                built = {
+                    "duration": peaks[0] if peaks else None,
+                    "peaks": peaks[1] if peaks else None,
+                }
+                ImageUtils.write_derived_media_bytes(
+                    vault.image_root,
+                    file_path,
+                    "waveform",
+                    json.dumps(built).encode("utf-8"),
+                )
+                return built
+
+            loop = asyncio.get_running_loop()
+            body = await loop.run_in_executor(
+                _thumbnail_executor, build_waveform_blocking
+            )
+            if generation != getattr(server, "library_generation", 0):
+                raise HTTPException(
+                    status_code=503,
+                    detail="The active library changed while the waveform was read.",
+                )
+        if body is None:
+            raise HTTPException(status_code=404, detail="Waveform not available")
+        return body
+
+    # -- Playable copies of videos the browser refuses (#2807) ---------------
+
+    def fresh_copy(vault, picture_id: int, source: Optional[str]) -> Optional[str]:
+        """The copy's path if it is still a copy of *source*, else ``None``.
+
+        A row whose file is gone, or whose original changed size or modified
+        time since, is removed with its file: it counts as no copy.
+        """
+        row = vault.db.run_immediate_read_task(
+            lambda session: session.get(VideoCopy, picture_id)
+        )
+        if row is None:
+            return None
+        path = ImageUtils.video_copy_path(vault.image_root, picture_id)
+        try:
+            stat = os.stat(source) if source else None
+        except OSError:
+            stat = None
+        if (
+            stat is not None
+            and os.path.isfile(path)
+            and (stat.st_size, stat.st_mtime) == (row.source_bytes, row.source_mtime)
+        ):
+            return path
+        logger.info("Video copy of picture %s is stale; removing it", picture_id)
+        delete_copy_rows(vault, [picture_id])
+        ImageUtils.remove_video_copy(vault.image_root, picture_id)
+        return None
+
+    def delete_copy_rows(vault, picture_ids: Optional[list[int]]) -> None:
+        """Delete these pictures' ``video_copy`` rows; every row for ``None``."""
+
+        def delete_rows(session: Session):
+            query = select(VideoCopy)
+            if picture_ids is not None:
+                query = query.where(VideoCopy.picture_id.in_(picture_ids))
+            for row in session.exec(query).all():
+                session.delete(row)
+            session.commit()
+
+        vault.db.run_task(delete_rows)
+
+    def copy_rate(vault) -> float:
+        """Pixel-frames per second this machine made its latest copy at."""
+
+        def latest(session: Session):
+            return session.exec(
+                select(VideoCopy).order_by(VideoCopy.made_at.desc()).limit(1)
+            ).first()
+
+        row = vault.db.run_immediate_read_task(latest)
+        if row is None:
+            return DEFAULT_COPY_RATE
+        return row.pixel_frames / max(row.seconds, 0.01)
+
+    def make_copy(vault, generation, picture_id, source, job: _CopyJob) -> None:
+        """Run on ``_copy_executor``: make the copy, then record its row."""
+        if generation != getattr(server, "library_generation", 0):
+            raise RuntimeError("The library changed before the copy started.")
+        dest = ImageUtils.video_copy_path(vault.image_root, picture_id)
+        try:
+            # Read before the copy, so a change made during it reads as stale.
+            stat = os.stat(source)
+            began = time.monotonic()
+
+            def on_start():
+                job.started = time.monotonic()
+
+            ffmpeg_utils.make_playable_copy(source, dest, on_start=on_start)
+            row = VideoCopy(
+                picture_id=picture_id,
+                bytes=os.path.getsize(dest),
+                source_bytes=stat.st_size,
+                source_mtime=stat.st_mtime,
+                pixel_frames=job.info.get("pixel_frames") or 0,
+                seconds=time.monotonic() - began,
+                made_at=datetime.now(timezone.utc),
+            )
+
+            def record(session: Session):
+                session.merge(row)
+                session.commit()
+
+            vault.db.run_task(record)
+        except Exception as exc:
+            logger.warning(
+                "Playable copy of picture %s (%s -> %s) failed: %s: %s",
+                picture_id,
+                source,
+                dest,
+                type(exc).__name__,
+                exc,
+            )
+            raise
+        logger.info(
+            "Made a playable copy of picture %s in %.1f s (%s)",
+            picture_id,
+            row.seconds,
+            dest,
+        )
+
+    def copy_status(picture_id: int) -> tuple[dict, Optional[str], dict]:
+        """The copy status, plus the original's path and OpenCV facts for "none".
+
+        Call with ``copy_jobs_lock`` held: a finished job is read and
+        forgotten here, so a failure is reported exactly once.
+        """
+        vault = server.vault
+        file_path = picture_file_path(picture_id)
+        if not ffmpeg_executable() or not VideoUtils.is_video_file(file_path):
+            return _copy_answer("unavailable"), None, {}
+        job = copy_jobs.get((vault.image_root, picture_id))
+        if job is not None:
+            if not job.future.done():
+                return (
+                    _copy_answer("preparing", job.info, job.estimate, job.remaining()),
+                    None,
+                    {},
+                )
+            del copy_jobs[(vault.image_root, picture_id)]
+            if job.future.exception() is not None:
+                return (
+                    _copy_answer(
+                        "failed",
+                        job.info,
+                        detail="PixlStash could not make a playable copy of this video.",
+                    ),
+                    None,
+                    {},
+                )
+        source = ImageUtils.resolve_picture_path(vault.image_root, file_path)
+        if fresh_copy(vault, picture_id, source):
+            return _copy_answer("ready"), None, {}
+        if not source or not os.path.isfile(source):
+            return (
+                _copy_answer("unavailable", detail="The original file is missing."),
+                None,
+                {},
+            )
+        info = VideoUtils.describe(source) or {}
+        pixel_frames = info.get("pixel_frames")
+        estimate = pixel_frames / copy_rate(vault) if pixel_frames else None
+        return _copy_answer("none", info, estimate), source, info
+
+    @router.get(
+        "/pictures/video-copies/{id}/status",
+        summary="Get the playable copy status of a video",
+        description=(
+            "Whether a browser-playable MP4 copy of this video exists, is being "
+            "made, or could be made, with an estimate. Never starts one."
+        ),
+    )
+    def get_video_copy_status(id: int):
+        with copy_jobs_lock:
+            return copy_status(id)[0]
+
+    @router.post(
+        "/pictures/video-copies/{id}",
+        summary="Make a playable copy of a video",
+        description=(
+            "Starts an H.264/AAC MP4 copy of a video the browser refuses. With "
+            "`confirm: false` a copy estimated over "
+            f"{COPY_OFFER_SECONDS:g} s is only offered (`offered`); "
+            "`confirm: true` starts it regardless. One copy runs at a time; a "
+            "copy already made or being made is answered, not restarted."
+        ),
+    )
+    def start_video_copy(id: int, confirm: bool = Body(False, embed=True)):
+        vault = server.vault
+        generation = getattr(server, "library_generation", 0)
+        with copy_jobs_lock:
+            status, source, info = copy_status(id)
+            if status["state"] != "none":
+                return status
+            estimate = status["estimate_seconds"]
+            if not confirm and estimate is not None and estimate > COPY_OFFER_SECONDS:
+                return {**status, "state": "offered"}
+            job = _CopyJob(info=info, estimate=estimate)
+            job.future = _copy_executor.submit(
+                make_copy, vault, generation, id, source, job
+            )
+            copy_jobs[(vault.image_root, id)] = job
+            return _copy_answer("preparing", info, estimate, job.remaining())
+
+    @router.get(
+        "/pictures/video-copies/{id}.mp4",
+        summary="Get the playable copy of a video",
+        description="The MP4 copy made by `POST /pictures/video-copies/{id}`; 404 when there is none.",
+        response_class=FileResponse,
+        responses={200: {"content": {"video/mp4": {}}}},
+    )
+    def get_video_copy(id: int):
+        vault = server.vault
+        source = ImageUtils.resolve_picture_path(vault.image_root, video_file_path(id))
+        with copy_jobs_lock:
+            job = copy_jobs.get((vault.image_root, id))
+            preparing = job is not None and not job.future.done()
+            path = None if preparing else fresh_copy(vault, id, source)
+        if not path:
+            raise HTTPException(status_code=404, detail="No playable copy")
+        return FileResponse(
+            path, media_type="video/mp4", headers=_THUMBNAIL_CACHE_HEADERS
+        )
+
+    def copy_files(vault) -> list[str]:
+        """Every finished copy file of the open library (temp files are not)."""
+        folder = os.path.join(vault.image_root, VIDEO_COPY_DIR)
+        if not os.path.isdir(folder):
+            return []
+        return [
+            os.path.join(folder, name)
+            for name in os.listdir(folder)
+            if name.endswith(".mp4")
+            and not name.startswith(ffmpeg_utils.COPY_TMP_PREFIX)
+        ]
+
+    @router.get(
+        "/library/video-copies",
+        summary="Count the playable video copies",
+        description="How many playable video copies the open library keeps, and their size.",
+    )
+    def get_video_copies():
+        files = copy_files(server.vault)
+        return {
+            "count": len(files),
+            "bytes": sum(os.path.getsize(path) for path in files),
+        }
+
+    @router.delete(
+        "/library/video-copies",
+        summary="Delete every playable video copy",
+        description=(
+            "Removes every finished playable copy of the open library, file "
+            "and row. A deleted copy is made again when its clip is next opened."
+        ),
+    )
+    def delete_video_copies():
+        vault = server.vault
+        deleted = 0
+        freed = 0
+        with copy_jobs_lock:
+            delete_copy_rows(vault, None)
+            for path in copy_files(vault):
+                try:
+                    size = os.path.getsize(path)
+                    os.remove(path)
+                except OSError as exc:
+                    logger.warning("Could not delete video copy %s: %s", path, exc)
+                    continue
+                deleted += 1
+                freed += size
+        logger.info("Deleted %s video copies (%s bytes)", deleted, freed)
+        return {"deleted": deleted, "bytes": freed}
 
     @router.post(
         "/pictures/thumbnails",
