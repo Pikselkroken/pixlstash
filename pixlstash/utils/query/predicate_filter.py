@@ -42,6 +42,7 @@ from sqlmodel import select
 from pixlstash.db_models.dedup import DedupGroup, DedupGroupMember
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import TAG_SENTINEL_LIKE_PATTERN, TAG_SENTINEL_ESCAPE_CHAR
+from pixlstash.utils.image_processing.colour_shares import SWATCH_NAMES, swatch_index
 from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX
 from pixlstash.utils.service.person_tags import (
     FACE_REQUIRING_TAGS,
@@ -203,6 +204,37 @@ _NO_REAL_FACE_SQL = (
 )
 
 
+def parse_colour_entry(entry: str) -> tuple[int, float]:
+    """Read one ``colour=<swatch>:<min_percent>`` entry into (swatch index, bound).
+
+    A malformed entry, an unknown swatch or a percent outside 0-100 is a client
+    error: 422 with the reason, never a server fault.
+    """
+    name, sep, raw_percent = entry.partition(":")
+    index = swatch_index(name.strip().lower()) if sep else None
+    if index is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid colour {entry!r}: expected <swatch>:<percent> with swatch one "
+                f"of {', '.join(SWATCH_NAMES)}"
+            ),
+        )
+    try:
+        bound = float(raw_percent)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid colour {entry!r}: percent must be a number from 0 to 100",
+        ) from exc
+    if not 0.0 <= bound <= 100.0:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid colour {entry!r}: percent must be a number from 0 to 100",
+        )
+    return index, bound
+
+
 def is_truthy_flag(raw) -> bool:
     """Return ``True`` for the boolean query-param spellings the frontend sends.
 
@@ -359,6 +391,11 @@ class PredicateFilter(BaseModel):
     unscored: bool = False
     # "Favourites only": the owner's hearted pictures (``picture.favourite``).
     favourite_only: bool = False
+    # "Pictures whose colour summary has at least N% of a swatch": repeatable
+    # ``<swatch>:<min_percent>`` entries, ANDed. Read from ``picture.colour_shares``
+    # (see :mod:`pixlstash.utils.image_processing.colour_shares`). NULL and "[]"
+    # never match, because ``json_extract`` of them is NULL.
+    colour_filter: Optional[List[str]] = None
     smart_score_bucket: Optional[str] = None
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
@@ -497,6 +534,18 @@ class PredicateFilter(BaseModel):
         """
         return [Picture.favourite.is_(True)] if self.favourite_only else []
 
+    def colour_predicates(self) -> list[ColumnElement]:
+        """One clause per ``colour`` entry, each a bound comparison on a JSON index."""
+        preds: list[ColumnElement] = []
+        for i, entry in enumerate(self.colour_filter or []):
+            index, bound = parse_colour_entry(entry)
+            preds.append(
+                text(
+                    f"json_extract(picture.colour_shares, '$[{index}]') >= :colour_min_{i}"
+                ).bindparams(**{f"colour_min_{i}": bound})
+            )
+        return preds
+
     def predicates(self) -> list[ColumnElement]:
         """Compile this filter to a list of SQLAlchemy WHERE clauses.
 
@@ -541,6 +590,7 @@ class PredicateFilter(BaseModel):
             preds.extend(score_range)
 
         preds.extend(self.favourite_predicates())
+        preds.extend(self.colour_predicates())
 
         preds.extend(self._smart_score_bucket_predicates())
         preds.extend(self._resolution_bucket_predicates())
@@ -770,12 +820,19 @@ class PredicateFilter(BaseModel):
                     detail=f"Invalid {name}: must be an integer",
                 ) from exc
 
+        colour_filter = qp.getlist("colour") or None
+        for entry in colour_filter or []:
+            # Validated here, at the request boundary, so a bad entry is a 422
+            # and not a fault raised later inside a worker's query.
+            parse_colour_entry(entry)
+
         return cls(
             format=qp.getlist("format") or None,
             min_score=_int_or_none("min_score"),
             max_score=_int_or_none("max_score"),
             unscored=is_truthy_flag(qp.get("unscored")),
             favourite_only=is_truthy_flag(qp.get("favourite")),
+            colour_filter=colour_filter,
             smart_score_bucket=qp.get("smart_score_bucket") or None,
             resolution_bucket=qp.get("resolution_bucket") or None,
             comfyui_models_filter=qp.getlist("comfyui_model") or None,

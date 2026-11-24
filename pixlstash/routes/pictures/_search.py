@@ -81,6 +81,7 @@ def register_routes(router, server):
         min_score_raw = None
         unscored = False
         favourite_only = False
+        colour_filter = []
         comfyui_models = []
         comfyui_loras = []
         tags_filter = []
@@ -112,6 +113,7 @@ def register_routes(router, server):
             min_score_raw = query_params.pop("min_score", None)
             unscored = _predicate_filter.unscored
             favourite_only = _predicate_filter.favourite_only
+            colour_filter = _predicate_filter.colour_filter or []
             comfyui_models = _predicate_filter.comfyui_models_filter or []
             comfyui_loras = _predicate_filter.comfyui_loras_filter or []
             tags_filter = _predicate_filter.tags_filter or []
@@ -449,6 +451,7 @@ def register_routes(router, server):
                 min_score=min_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter or None,
                 comfyui_models_filter=comfyui_models or None,
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,
@@ -484,6 +487,7 @@ def register_routes(router, server):
                 min_score=min_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter or None,
                 comfyui_models_filter=comfyui_models or None,
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,

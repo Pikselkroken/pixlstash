@@ -194,6 +194,56 @@
       />
     </slot>
 
+    <!-- Colours (#2151): one bar, each swatch as wide as its share, and a
+         legend of the shares worth naming. A segment adds that swatch to
+         the filters at the slider's amount, never at this picture's share,
+         so the bar and the search list cannot disagree on what a colour
+         filter means. Absent until the picture has been counted. -->
+    <section
+      v-if="colourSegments.length"
+      class="rail-picture__section"
+      aria-label="Colours"
+    >
+      <SectionHeader
+        v-model:collapsed="coloursCollapsed"
+        label="Colours"
+        on-dark
+      />
+      <template v-if="!coloursCollapsed">
+        <div class="rail-picture__colours" role="group" aria-label="Colours">
+          <button
+            v-for="seg in colourSegments"
+            :key="seg.id"
+            type="button"
+            class="rail-picture__colour"
+            :style="{ width: `${seg.share}%`, '--swatch': seg.fill }"
+            :tabindex="seg.legend ? undefined : -1"
+            :aria-label="`${seg.label} ${Math.round(seg.share)}%: show pictures with ${seg.label} at least ${filters.colourAmountFilter}%`"
+            @click="filterByColour(seg.id)"
+          >
+            <Tooltip
+              :text="`Show pictures with ${seg.label} ≥ ${filters.colourAmountFilter}%`"
+              activator="parent"
+              :describe="false"
+            />
+          </button>
+        </div>
+        <ul class="rail-picture__legend">
+          <li
+            v-for="seg in colourSegments.filter((s) => s.legend)"
+            :key="seg.id"
+          >
+            <span
+              class="colour-mark"
+              :style="{ '--swatch': seg.fill }"
+              aria-hidden="true"
+            ></span
+            >{{ seg.label }} <b>{{ Math.round(seg.share) }}%</b>
+          </li>
+        </ul>
+      </template>
+    </section>
+
     <section class="rail-picture__section" aria-label="Properties">
       <SectionHeader
         v-model:collapsed="propertiesCollapsed"
@@ -242,6 +292,8 @@ import { formatModelSize } from "../../utils/modelShelf.js";
 import { errorDetail } from "../../utils/apiError";
 import { useSectionCollapse } from "../../composables/useSectionCollapse";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { colourShareSegments } from "../../utils/colourSwatches";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -305,6 +357,7 @@ const emit = defineEmits([
   "create-person",
   "hover-tag",
   "pick-title",
+  "colour-filter",
 ]);
 
 const titleHovered = ref(false);
@@ -324,6 +377,20 @@ const userPrefsStore = useUserPrefsStore();
 const propertiesCollapsed = useSectionCollapse("properties", {
   defaultCollapsed: true,
 });
+const coloursCollapsed = useSectionCollapse("colours");
+
+const filters = useFilterStore();
+const colourSegments = computed(() =>
+  colourShareSegments(props.image?.colour_shares),
+);
+
+/** Add one swatch to the colour filter, at the shared amount. */
+function filterByColour(id) {
+  if (!filters.colourFilter.includes(id)) {
+    filters.colourFilter = [...filters.colourFilter, id];
+  }
+  emit("colour-filter", id);
+}
 
 const locked = computed(() => lockedSetsStore.isLocked(props.pictureId));
 const lockNote = computed(() => lockedSetsStore.lockReason(props.pictureId));
@@ -952,6 +1019,47 @@ button.rail-face-edit:hover,
   flex-direction: column;
 }
 
+.rail-picture__colours {
+  display: flex;
+  height: var(--space-5);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-surface), 0.12);
+}
+.rail-picture__colour {
+  flex: none;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  background: var(--swatch);
+  border: 0;
+  cursor: pointer;
+}
+.rail-picture__colour:hover,
+.rail-picture__colour:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-on-surface));
+  outline-offset: -2px;
+}
+.rail-picture__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+.rail-picture__legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rail-picture__legend b {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
 .rail-picture__props {
   display: grid;
   grid-template-columns: minmax(0, 96px) minmax(0, 1fr);

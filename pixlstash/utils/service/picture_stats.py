@@ -70,6 +70,7 @@ class PictureStatsParams:
     penalised_cooc_both: bool
     scoped_picture_ids: list[int] | None = None
     favourite_only: bool = False
+    colour_filter: list[str] | None = None
     imported_since: datetime | None = None
 
 
@@ -216,6 +217,7 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         max_score=params.max_score,
         unscored=params.unscored,
         favourite_only=params.favourite_only,
+        colour_filter=params.colour_filter or None,
         smart_score_bucket=params.smart_score_bucket,
         resolution_bucket=params.resolution_bucket,
         file_path_prefix=params.file_path_prefix or None,

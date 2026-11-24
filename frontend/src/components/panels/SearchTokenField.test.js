@@ -425,4 +425,27 @@ describe("SearchTokenField", () => {
     expect(wrapper.find("input.stf-input").exists()).toBe(true);
     expect(wrapper.find("button.stf-clear").exists()).toBe(false);
   });
+
+  it("picks a colour from the swatch row, as a token at the shared amount", async () => {
+    await mountField();
+    const filters = useFilterStore();
+    const blue = () => wrapper.find('[data-swatch="blue"]');
+    await blue().trigger("click");
+    expect(filters.colourFilter).toEqual(["blue"]);
+    expect(blue().attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find(".stf-token").text()).toContain("blue ≥10%");
+
+    const slider = wrapper.find('.csp input[type="range"]');
+    slider.element.value = "25";
+    await slider.trigger("input");
+    // The thumb moving is a draft; the grid's filter lands on release.
+    expect(filters.colourAmountFilter).toBe(10);
+    await slider.trigger("change");
+    expect(filters.colourAmountFilter).toBe(25);
+    expect(wrapper.find(".stf-token").text()).toContain("blue ≥25%");
+
+    await blue().trigger("click");
+    expect(filters.colourFilter).toEqual([]);
+    expect(wrapper.find(".stf-token").exists()).toBe(false);
+  });
 });
