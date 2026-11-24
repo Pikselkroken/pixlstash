@@ -120,9 +120,8 @@ Requires NVIDIA Container Toolkit. Verify GPU access first:
 `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
 
 ```bash
-docker run -d --runtime nvidia --user $(id -u):$(id -g) \
-  -e HOME=/home/pixlstash -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e PIXLSTASH_HOST=0.0.0.0 \
+docker run -d --gpus all --user $(id -u):$(id -g) \
+  -e HOME=/home/pixlstash -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 -v ~/Pictures/pixlstash:/home/pixlstash \
   --name pixlstash ghcr.io/pikselkroken/pixlstash:latest-gpu
 ```

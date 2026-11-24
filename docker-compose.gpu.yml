@@ -1,0 +1,16 @@
+# NVIDIA GPU variant. Use it on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Needs the NVIDIA Container Toolkit on the host (the compose form of
+# `docker run --gpus all`); no runtime registration.
+services:
+  pixlstash:
+    build:
+      dockerfile: Dockerfile.gpu
+    image: pixlstash:gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
