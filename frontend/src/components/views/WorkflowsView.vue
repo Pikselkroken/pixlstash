@@ -231,17 +231,6 @@
         <WorkflowFilterMenu v-else :open="filterMenuOpen" />
       </v-menu>
 
-      <!-- The active filters, one chip each with its own ×, in the bar rather
-           than on a row under it. Templates keep their own chips in the
-           templates store. -->
-      <FilterStrip
-        inline
-        class="wfv-strip"
-        :chips="onTemplates ? templates.filterChips : store.filterChips"
-        :of-label="onTemplates ? templates.filterOfLabel : store.filterOfLabel"
-        :on-clear-all="onTemplates ? templates.clearFilters : store.clearFilters"
-      />
-
       <span class="wfv-spacer"></span>
 
       <!-- The name filter, bound to the same text as the Filters menu's own
@@ -280,6 +269,18 @@
         />
       </span>
     </div>
+
+    <!-- The active filters, one chip each with its own ×, on their own row
+         under the bar as on the picture grid: in the bar they crowded out
+         Search. Only there while a filter is on. Templates keep their own
+         chips in the templates store. -->
+    <FilterStrip
+      inline
+      class="wfv-strip"
+      :chips="onTemplates ? templates.filterChips : store.filterChips"
+      :of-label="onTemplates ? templates.filterOfLabel : store.filterOfLabel"
+      :on-clear-all="onTemplates ? templates.clearFilters : store.clearFilters"
+    />
 
     <WorkflowTemplatesPanel
       v-if="onTemplates"
@@ -2247,16 +2248,12 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
-/* The chips in the bar: the strip's own row chrome dropped, so each chip sits
-   on the 36px band. The strip shrinks (its chips scroll) rather than pushing
-   the Search field off the right edge. */
-.wfv-toolbar .wfv-strip {
-  flex: 0 1 auto;
-  min-width: 0;
-  height: auto;
-  padding: 0;
-  background: none;
-  border-bottom: 0;
+/* The chips' row under the bar: the strip's own 36px row chrome, never
+   squeezed by the column, and inset like the bar so the first chip lines up
+   under Sort. */
+.wfv .wfv-strip {
+  flex: none;
+  padding-left: var(--space-5);
 }
 
 /* The Search field: 260px, and it gives room to the toolbar's other controls
@@ -2298,10 +2295,9 @@ onBeforeUnmount(() => {
 
 /* ── The ladder (#2629) ─────────────────────────────────────────────────────
 
-   Every member of this bar is `nowrap`, and with a filter or two on it ran
-   out of room well before the window got small: the chips scrolled inside a
-   sliver and the tail was pushed at the edge. So it gives in steps, cheapest
-   first, and never touches the app-wide tail (undo, the rail toggle).
+   Every member of this bar is `nowrap`, so it gives in steps, cheapest
+   first, and never touches the app-wide tail (undo, the rail toggle). The
+   active filters are not in it: they have their own row under the bar.
 
    The queries are 24px under the bar's outer width: `container-type:
    inline-size` queries the CONTENT box, and the inset is `0 --space-3 0
@@ -2312,16 +2308,7 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-/* Rung 1. The active filters leave the bar and are left to the Filter menu,
-   which carries the same "N of M" and Clear all in its header; the button
-   keeps its badge and its lit state, so a filter in force is still said. */
-@container wfvbar (max-width: 960px) {
-  .wfv-toolbar .wfv-strip {
-    display: none;
-  }
-}
-
-/* Rung 2. Sort folds into the ⋯, which takes its place at the left edge:
+/* Rung 1. Sort folds into the ⋯, which takes its place at the left edge:
    the biggest single bite on the bar. 700 leaves room for the longest
    sort label ("Recently changed") beside a lit Filter and the tail. */
 @container wfvbar (max-width: 700px) {
@@ -2333,7 +2320,7 @@ onBeforeUnmount(() => {
   }
 }
 
-/* Rung 3. Filter keeps its funnel and badge and drops its word; its name
+/* Rung 2. Filter keeps its funnel and badge and drops its word; its name
    stays in its `aria-label`. */
 @container wfvbar (max-width: 480px) {
   .wfv-filter-label {
