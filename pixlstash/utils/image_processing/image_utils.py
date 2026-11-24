@@ -6,6 +6,7 @@ import hashlib
 import os
 import piexif
 import piexif.helper
+import re
 import tempfile
 import uuid
 
@@ -65,6 +66,9 @@ DERIVED_MEDIA_KINDS = {
 #: named by its id, so they are not a derived kind: a move needs no carry. Kept
 #: out of backups; their ``video_copy`` rows say which are still fresh.
 VIDEO_COPY_DIR = os.path.join(THUMBNAIL_DIR_NAME, "video-copies")
+#: A finished copy's file name. Nothing else in the folder is ever deleted as
+#: a copy, so a stray file the owner put there is left alone.
+VIDEO_COPY_NAME = re.compile(r"^\d+\.mp4$")
 
 
 class ImageUtils:

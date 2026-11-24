@@ -111,6 +111,19 @@ class StorageDevice:
     kind: Optional[str] = None
 
 
+def child_process_env() -> dict[str, str]:
+    """``os.environ`` without any ``PIXLSTASH_*`` variable, for a program we run.
+
+    Those carry the backend's own state (the loopback port, the desktop session
+    token), and no program PixlStash launches may inherit them.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("PIXLSTASH_")
+    }
+
+
 def mount_point_of(path: str) -> str:
     """The mount point *path* sits under.
 

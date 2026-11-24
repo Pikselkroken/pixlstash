@@ -189,7 +189,6 @@ from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
 from pixlstash.tasks import TaskType
 from pixlstash.utils.accelerator import VALID_DEVICE_SETTINGS
 from pixlstash.utils.atomic_write import write_json_atomic
-from pixlstash.utils.image_processing.ffmpeg_utils import stop_running_copy
 from pixlstash.utils.path_mapper import PathMapper
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
 from pixlstash.utils.request_origin import OriginClientMiddleware
@@ -1074,8 +1073,11 @@ class Server(
         if vault is None:
             return
         image_root = vault.image_root
-        # A playable copy is ffmpeg in its own process; it would outlive us.
-        stop_running_copy()
+        # Cancels queued playable copies and stops the running ffmpeg, which is
+        # its own process and would outlive us.
+        clear_route_caches = getattr(self, "_clear_thumbnail_runtime_cache", None)
+        if clear_route_caches is not None:
+            clear_route_caches()
         try:
             vault.close()
         finally:

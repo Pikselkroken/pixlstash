@@ -30,6 +30,7 @@ from sqlmodel import Session
 
 from pixlstash.db_models import Picture, ReferenceFolder, VideoCopy
 from pixlstash.routes.pictures import _thumbnails
+from pixlstash import auth, maintenance
 from pixlstash.server import Server
 from pixlstash.services import layout_move_service, library_backup_service
 from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
@@ -41,7 +42,7 @@ from pixlstash.utils.image_processing.image_utils import (
     VIDEO_COPY_DIR,
     ImageUtils,
 )
-from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS, VideoUtils
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.utils import reset_owner_auth
 
@@ -483,7 +484,14 @@ def test_repointing_a_picture_with_no_hash_drops_its_cached_files(
 def _ffmpeg_clip(path, sound=True) -> str:
     """A 1 s 64x32 MPEG-4 clip made by the bundled ffmpeg, with a tone or not."""
     exe = ffmpeg_utils.ffmpeg_executable()
-    assert exe, "imageio-ffmpeg is a declared dependency"
+    assert exe, (
+        "No ffmpeg found: these tests need one with an H.264 encoder. Put ffmpeg "
+        "on PATH or set PIXLSTASH_FFMPEG to its absolute path."
+    )
+    assert ffmpeg_utils.h264_encoder(), (
+        f"{exe} has none of {', '.join(ffmpeg_utils.H264_ENCODERS)}; these "
+        "tests need an ffmpeg with an H.264 encoder."
+    )
     cmd = [exe, "-y", "-loglevel", "error", "-f", "lavfi"]
     cmd += ["-i", "testsrc=d=1:s=64x32:r=10"]
     if sound:
@@ -529,7 +537,7 @@ def test_describe_names_the_codec_or_the_container(tmp_path):
     mkv = str(tmp_path / "b.mkv")
     subprocess.run(
         [exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=d=1"]
-        + ["-c:v", "libx264", mkv],
+        + ["-c:v", ffmpeg_utils.h264_encoder(), mkv],
         check=True,
     )
     assert VideoUtils.describe(mkv)["format"] == "MKV"
@@ -717,8 +725,14 @@ def test_settings_count_and_delete_the_copies(copier, server, tmp_path):
     assert copier.get(COPIES).json() == {"count": 0, "bytes": 0}
     pic = _sound_clip(server, tmp_path)
     size = os.path.getsize(_make_copy(copier, pic))
-    assert copier.get(COPIES).json() == {"count": 1, "bytes": size}
-    assert copier.delete(COPIES).json() == {"deleted": 1, "bytes": size}
+    stranger = os.path.join(server.vault.image_root, VIDEO_COPY_DIR, "abc.mp4")
+    open(stranger, "wb").write(b"not ours")
+    try:
+        assert copier.get(COPIES).json() == {"count": 1, "bytes": size}
+        assert copier.delete(COPIES).json() == {"deleted": 1, "bytes": size}
+        assert os.path.isfile(stranger)
+    finally:
+        os.remove(stranger)
     assert _row(server, pic) is None
     assert _status(copier, pic)["state"] == "none"
 
@@ -731,11 +745,30 @@ def test_startup_sweeps_temp_and_orphaned_copy_files(copier, server, tmp_path):
         os.path.join(folder, ffmpeg_utils.COPY_TMP_PREFIX + "abc.mp4"),
         os.path.join(folder, "987654.mp4"),
     ]
-    for path in leftovers:
+    strangers = [os.path.join(folder, name) for name in ("notes.txt", "mine.mp4")]
+    for path in leftovers + strangers:
         open(path, "wb").write(b"x")
     server._sweep_video_copies()
     assert os.path.isfile(kept)
     assert not any(os.path.exists(path) for path in leftovers)
+    # Only a copy's or a temp file's name shape is ever removed.
+    assert all(os.path.isfile(path) for path in strangers)
+    for path in strangers:
+        os.remove(path)
+
+
+def test_an_unreadable_copies_folder_does_not_stop_startup(
+    copier, server, tmp_path, monkeypatch, caplog
+):
+    _make_copy(copier, _sound_clip(server, tmp_path))
+
+    def unreadable(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr(maintenance.os, "listdir", unreadable)
+    with caplog.at_level(logging.WARNING):
+        server._sweep_video_copies()
+    assert "Could not sweep the video copies" in caplog.text
 
 
 def test_no_ffmpeg_means_unavailable_and_503(copier, server, tmp_path, monkeypatch):
@@ -838,3 +871,264 @@ def test_a_finished_copy_serves_before_its_status_is_read(copier, server, tmp_pa
     _thumbnails._copy_executor.submit(lambda: None).result(timeout=60)
     r = copier.get(COPY_FILE.format(id=pic))
     assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
+
+
+def _closure(fn) -> dict:
+    return dict(zip(fn.__code__.co_freevars, (c.cell_contents for c in fn.__closure__)))
+
+
+def test_a_queued_copy_never_starts_after_a_clear(
+    copier, server, tmp_path, monkeypatch
+):
+    first = _sound_clip(server, tmp_path, name="a.mp4")
+    second = _sound_clip(server, tmp_path, name="b.mp4")
+    release = threading.Event()
+    started = []
+
+    def hang(source, dest, on_start=None):
+        started.append(dest)
+        release.wait(30)
+        raise RuntimeError("stopped")
+
+    monkeypatch.setattr(ffmpeg_utils, "make_playable_copy", hang)
+    try:
+        for pic in (first, second):
+            assert copier.post(COPY.format(id=pic), json={}).json()["state"] == (
+                "preparing"
+            )
+        deadline = time.monotonic() + 10
+        while not started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        server._clear_thumbnail_runtime_cache()
+    finally:
+        release.set()
+    _thumbnails._copy_executor.submit(lambda: None).result(timeout=30)
+    root = server.vault.image_root
+    assert started == [ImageUtils.video_copy_path(root, first)]
+
+
+def test_shutdown_cancels_queued_copies_too(server, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        server, "_clear_thumbnail_runtime_cache", lambda: called.append(True)
+    )
+    # Leave the shared server as it was: no close, no generation clean-up.
+    monkeypatch.setattr(server.vault, "close", lambda: None)
+    monkeypatch.setattr(server, "library_switch", None)
+    server._close_active_vault()
+    assert called == [True]
+
+
+def test_the_status_reads_disk_and_db_outside_the_jobs_lock(
+    copier, server, tmp_path, monkeypatch
+):
+    pic = _sound_clip(server, tmp_path)
+    lock = _closure(server._clear_thumbnail_runtime_cache)["copy_jobs_lock"]
+    held = []
+    real = VideoUtils.describe
+
+    def describe(path):
+        held.append(lock.locked())
+        return real(path)
+
+    monkeypatch.setattr(VideoUtils, "describe", describe)
+    _status(copier, pic)
+    copier.post(COPY.format(id=pic), json={"confirm": False})
+    _until_settled(copier, pic)
+    assert held and not any(held)
+
+
+def _clip_for(ext, path):
+    exe = ffmpeg_utils.ffmpeg_executable()
+    codecs = ["-c:v", "libvpx-vp9", "-c:a", "libopus"] if ext == ".webm" else []
+    subprocess.run(
+        [exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i"]
+        + ["testsrc=d=1:s=64x32:r=10", "-f", "lavfi", "-i", "sine=d=1"]
+        + (codecs or ["-c:v", "mpeg4", "-c:a", "aac"])
+        + ["-shortest", path],
+        check=True,
+    )
+    return path
+
+
+@pytest.mark.parametrize("ext", VIDEO_EXTENSIONS)
+def test_every_accepted_container_passes_the_input_whitelist(tmp_path, ext):
+    source = _clip_for(ext, str(tmp_path / f"clip{ext}"))
+    dest = str(tmp_path / "copy.mp4")
+    ffmpeg_utils.make_playable_copy(source, dest)
+    assert _fourcc(dest) in ("h264", "avc1")
+    duration, peaks = ffmpeg_utils.audio_peaks(source)
+    assert len(peaks) == 512 and duration > 0.9
+
+
+def test_ffmpeg_follows_no_playlist_and_no_url(tmp_path):
+    _ffmpeg_clip(str(tmp_path / "real.mp4"))
+    # A concat playlist named like a clip would make ffmpeg read another file.
+    playlist = tmp_path / "playlist.mp4"
+    playlist.write_text("ffconcat version 1.0\nfile 'real.mp4'\n")
+    assert ffmpeg_utils.audio_peaks(str(playlist)) is None
+    with pytest.raises(RuntimeError):
+        ffmpeg_utils.make_playable_copy(str(playlist), str(tmp_path / "c.mp4"))
+    probe = subprocess.run(
+        [ffmpeg_utils.ffmpeg_executable(), "-nostdin"]
+        + ffmpeg_utils._input("tcp://127.0.0.1:9"),
+        capture_output=True,
+        text=True,
+    )
+    assert "not on whitelist" in probe.stderr
+
+
+def test_a_failed_waveform_is_cached_until_the_original_changes(
+    copier, server, tmp_path, monkeypatch
+):
+    pic = _sound_clip(server, tmp_path)
+    calls = []
+
+    def broken(source):
+        calls.append(source)
+        raise RuntimeError("forced")
+
+    monkeypatch.setattr(ffmpeg_utils, "audio_peaks", broken)
+    for _ in range(2):
+        r = copier.get(WAVEFORM.format(id=pic))
+        assert r.status_code == 200
+        assert r.json() == {"duration": None, "peaks": None}
+    assert len(calls) == 1
+    source = ImageUtils.resolve_picture_path(
+        server.vault.image_root, _file_path(server, pic)
+    )
+    os.utime(source, (time.time() + 60, time.time() + 60))
+    copier.get(WAVEFORM.format(id=pic))
+    assert len(calls) == 2
+
+
+def test_a_corrupt_waveform_cache_is_read_again(copier, server, tmp_path):
+    pic = _sound_clip(server, tmp_path)
+    cached = ImageUtils.derived_media_path(
+        server.vault.image_root, _file_path(server, pic), "waveform"
+    )
+    os.makedirs(os.path.dirname(cached), exist_ok=True)
+    open(cached, "w").write('{"duration": 1.0, "pea')
+    r = copier.get(WAVEFORM.format(id=pic))
+    assert r.status_code == 200 and len(r.json()["peaks"]) == 512
+
+
+def test_the_owner_only_copies_routes_hold_at_the_gate(
+    copier, server, tmp_path, monkeypatch
+):
+    """Same negatives with the READ-token belts emptied: the gate alone refuses."""
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    pic = _sound_clip(server, tmp_path)
+    anon = TestClient(server.api)
+    scoped = _mint(copier, scope="READ", resource_type="picture", resource_id=pic)
+    for token in (scoped, _mint(copier, scope="READ"), _mint(copier, scope="COMFYUI")):
+        r = anon.get(COPIES, headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 403, r.text
+    # The positive control on the same emptied belts.
+    assert copier.get(COPIES).status_code == 200
+
+
+def test_the_waveform_decodes_at_most_the_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(ffmpeg_utils, "_PEAK_MAX_SECONDS", 0.5)
+    duration, _ = ffmpeg_utils.audio_peaks(_ffmpeg_clip(str(tmp_path / "s.mp4")))
+    assert abs(duration - 0.5) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# Which ffmpeg, and which H.264 encoder (no GPL ffmpeg is shipped)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fresh_resolver():
+    """Forget the cached ffmpeg and encoder, before and after."""
+    for fn in (ffmpeg_utils.ffmpeg_executable, ffmpeg_utils.h264_encoder):
+        fn.cache_clear()
+    yield
+    for fn in (ffmpeg_utils.ffmpeg_executable, ffmpeg_utils.h264_encoder):
+        fn.cache_clear()
+
+
+def test_the_env_var_wins_over_path(fresh_resolver, tmp_path, monkeypatch):
+    own = tmp_path / "ffmpeg"
+    own.write_bytes(b"")
+    monkeypatch.setenv(ffmpeg_utils.FFMPEG_ENV, str(own))
+    monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    assert ffmpeg_utils.ffmpeg_executable() == str(own)
+
+
+def test_a_missing_env_path_warns_and_falls_back_to_path(
+    fresh_resolver, tmp_path, monkeypatch, caplog
+):
+    gone = str(tmp_path / "nowhere" / "ffmpeg")
+    monkeypatch.setenv(ffmpeg_utils.FFMPEG_ENV, gone)
+    monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    with caplog.at_level(logging.WARNING):
+        assert ffmpeg_utils.ffmpeg_executable() == "/usr/bin/ffmpeg"
+    assert gone in caplog.text
+
+
+def test_no_env_and_nothing_on_path_is_none(fresh_resolver, monkeypatch):
+    monkeypatch.delenv(ffmpeg_utils.FFMPEG_ENV, raising=False)
+    monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: None)
+    assert ffmpeg_utils.ffmpeg_executable() is None
+    assert ffmpeg_utils.h264_encoder() is None
+
+
+def _encoders(*names) -> str:
+    rows = "".join(f" V....D {name:<20} some encoder\n" for name in names)
+    return "Encoders:\n V..... = Video\n ------\n" + rows + " A....D aac  AAC\n"
+
+
+@pytest.mark.parametrize(
+    "names, chosen",
+    [
+        (("libx264", "libopenh264"), "libopenh264"),
+        (("h264_videotoolbox", "libx264", "libopenh264"), "libopenh264"),
+        (("libx264", "h264_videotoolbox"), "h264_videotoolbox"),
+        (("h264_videotoolbox",), "h264_videotoolbox"),
+        (("libx264",), "libx264"),
+        (("mpeg4", "libvpx-vp9"), None),
+    ],
+)
+def test_the_h264_encoder_preference(names, chosen):
+    assert ffmpeg_utils.pick_h264_encoder(_encoders(*names)) == chosen
+
+
+def test_no_h264_encoder_means_no_copy_but_a_waveform(
+    copier, server, tmp_path, monkeypatch
+):
+    pic = _sound_clip(server, tmp_path)
+    monkeypatch.setattr(ffmpeg_utils, "h264_encoder", lambda: None)
+    status = _status(copier, pic)
+    assert status["state"] == "unavailable" and "H.264" in status["detail"]
+    assert (
+        copier.post(COPY.format(id=pic), json={"confirm": True}).json()["state"]
+        == "unavailable"
+    )
+    assert len(copier.get(WAVEFORM.format(id=pic)).json()["peaks"]) == 512
+
+
+def test_ffmpeg_never_inherits_pixlstash_variables(
+    fresh_resolver, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PIXLSTASH_DESKTOP_SESSION", "example-session-token")
+    envs = []
+    real_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        envs.append(kwargs.get("env"))
+        return real_popen(*args, **kwargs)
+
+    source = _ffmpeg_clip(str(tmp_path / "s.mp4"))
+    # subprocess.run starts its process through Popen too.
+    monkeypatch.setattr(ffmpeg_utils.subprocess, "Popen", popen)
+    ffmpeg_utils.h264_encoder.cache_clear()
+    ffmpeg_utils.make_playable_copy(source, str(tmp_path / "c" / "1.mp4"))
+    ffmpeg_utils.audio_peaks(source)
+    # -encoders, the copy, the probe and the decode.
+    assert len(envs) == 4
+    for env in envs:
+        assert env is not None and "PATH" in env
+        assert not [key for key in env if key.startswith("PIXLSTASH_")]

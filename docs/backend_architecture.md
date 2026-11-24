@@ -281,7 +281,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | Image I/O | **Pillow** ≥ 12.1, **pillow-heif** |
 | Computer vision | **opencv-python** ≥ 4.13 |
 | EXIF | **piexif** |
-| Video transcode, audio | **imageio-ffmpeg** ≥ 0.8.1: its bundled `ffmpeg` binary, run as a subprocess only |
+| Video transcode, audio | **ffmpeg**, an external program found at run time (below); never a Python dependency |
 
 #### ffmpeg runs as a separate program, never in-process
 
@@ -290,16 +290,26 @@ copies and the waveform (#2807). **ffmpeg is only ever a subprocess: never
 `import` or link it** (no PyAV, no `ctypes` into `libav*`), in the core or in a
 plugin. PixlStash's licence is its owner's to choose and ffmpeg's is not; a
 program driven over pipes and the command line stays a separate work. PyAV is
-ruled out on that ground, not only for its size: its wheels link GPL
-`libx264`/`libx265` into the process. The bundled build is GPL; its notice is in
-[licensing.md](licensing.md).
+ruled out on that ground: its wheels link GPL `libx264`/`libx265` into the
+process. **PixlStash ships only an LGPL ffmpeg build with openh264 (BSD) for
+H.264, never a GPL build.**
 
-`ffmpeg_executable()` (cached) is the only resolver, and it is
-`imageio_ffmpeg.get_ffmpeg_exe()`, whose order is: the `IMAGEIO_FFMPEG_EXE`
-environment variable, the binary bundled in the wheel, conda's, then `ffmpeg` on
-`PATH`. The wheel ships a binary for every platform PixlStash ships on, so the
-bundled one wins unless the user sets the variable. With none, it answers
-`None` (warned once): copies report `unavailable` and the waveform route 503.
+`ffmpeg_executable()` (cached) is the only resolver. Its order: the
+`PIXLSTASH_FFMPEG` environment variable, an absolute path (the desktop app sets
+it to its bundled binary; a path that does not exist is warned about once and
+skipped), then `ffmpeg` on `PATH` (`/usr/local/bin/ffmpeg` in Docker, or the
+user's own). With none it answers `None` (warned once): copies report
+`unavailable` and the waveform route 503.
+
+`h264_encoder()` (cached) reads `ffmpeg -hide_banner -encoders` once and takes
+the first of `libopenh264`, `h264_videotoolbox`, `libx264` (`H264_ENCODERS`,
+with each one's quality arguments: a bitrate for the first two, `-crf 23` for
+x264). Running a user's own GPL ffmpeg with x264 is fine; PixlStash never ships
+one. With none of them, copies report `unavailable` with a `detail` that says
+so, and the waveform still works: it encodes nothing. Audio is ffmpeg's native
+`aac`. Every input is opened behind `-protocol_whitelist file` and a
+`-format_whitelist` derived from `VIDEO_EXTENSIONS`, so a crafted file cannot
+make ffmpeg fetch a URL or follow a playlist to other files.
 
 ### Math & System
 
@@ -5026,16 +5036,19 @@ pixel-frames (OpenCV) divided by the latest row's rate, `DEFAULT_COPY_RATE` when
 there is none; above `COPY_OFFER_SECONDS` (10 s) a copy is offered rather than
 started. Copies run one at a time on `_copy_executor` (`max_workers=1`) in
 `routes/pictures/_thumbnails.py`; the in-flight map is keyed by
-`(library root, picture id)` and cleared, with the running ffmpeg terminated,
-by `clear_thumbnail_runtime_cache` on a library switch; `_close_active_vault`
-terminates it on shutdown. A failed job is reported once as `failed`, then
+`(library root, picture id)`. `clear_thumbnail_runtime_cache` cancels every
+queued job, terminates the running ffmpeg and forgets them all, on a library
+switch and, through `_close_active_vault`, on shutdown (Python's executor exit
+hook would otherwise still run queued jobs). A failed job is reported once as `failed`, then
 forgotten. Where the files go: the Scrapheap keeps a copy; the permanent purge
 (`scrapheap_service.remove_picture_files`) deletes the file where it deletes the
 thumbnail. Every other path that deletes a picture row (start-up missing-file
 cleanup, removing a reference folder, its scan, a full restore) drops the row
 by cascade and leaves the file, and the start-up
-`_sweep_video_copies` (`maintenance.py`) removes every file in the folder no row
-owns, unfinished `.copy-tmp-*` files included. Backups skip the folder
+`_sweep_video_copies` (`maintenance.py`) removes every `<id>.mp4` no row owns
+and every unfinished `.copy-tmp-*` file, and nothing else (`VIDEO_COPY_NAME`;
+`DELETE /library/video-copies` uses the same rule). A sweep that fails is
+logged; start-up carries on. Backups skip the folder
 (`library_backup_service._library_files`); snapshots copy only the database, so
 a restored row without its file is simply no copy. Settings counts and clears
 them through `GET`/`DELETE /library/video-copies`. Known limit: on Windows

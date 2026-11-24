@@ -40,6 +40,7 @@ from pixlstash.utils.image_processing.ffmpeg_utils import ffmpeg_executable
 from pixlstash.utils.image_processing.image_utils import (
     STORYBOARD_FRAMES,
     VIDEO_COPY_DIR,
+    VIDEO_COPY_NAME,
     ImageUtils,
 )
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -136,9 +137,13 @@ def register_routes(router, server):
         thumbnail_generation_locks.clear()
         storyboard_generation_locks.clear()
         waveform_generation_locks.clear()
-        # The old library's copy job stops, and is never reported as this
-        # library's: its key names the old root, and the map forgets it.
-        copy_jobs.clear()
+        # The old library's copy jobs stop, and are never reported as this
+        # library's: queued ones are cancelled before they start, the running
+        # ffmpeg is terminated, and the map forgets them all.
+        with copy_jobs_lock:
+            for job in copy_jobs.values():
+                job.future.cancel()
+            copy_jobs.clear()
         ffmpeg_utils.stop_running_copy()
 
     # The locks are route-local, so expose their one lifecycle operation to the
@@ -487,8 +492,16 @@ def register_routes(router, server):
                 return None
             if discard_stale_thumbnail(id, file_path, cached):
                 return None
-            with open(cached, encoding="utf-8") as handle:
-                return json.load(handle)
+            try:
+                with open(cached, encoding="utf-8") as handle:
+                    return json.load(handle)
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "Waveform cache %s unreadable (%s); reading the audio again",
+                    cached,
+                    exc,
+                )
+                return None
 
         body = read_cached()
         if body is not None:
@@ -507,13 +520,17 @@ def register_routes(router, server):
                 try:
                     peaks = ffmpeg_utils.audio_peaks(source)
                 except Exception as exc:
+                    # Cached as no lane, like silence, so a clip ffmpeg cannot
+                    # read is not decoded again on every open. A changed
+                    # original is newer than the cache and is read again.
                     logger.warning(
-                        "Waveform: could not read the audio of %s (%s: %s)",
+                        "Waveform: could not read the audio of %s (%s: %s); "
+                        "caching it as no waveform",
                         source,
                         type(exc).__name__,
                         exc,
                     )
-                    return None
+                    peaks = None
                 # A silent clip's answer is cached too, so it is probed once.
                 built = {
                     "duration": peaks[0] if peaks else None,
@@ -641,35 +658,44 @@ def register_routes(router, server):
             dest,
         )
 
-    def copy_status(picture_id: int) -> tuple[dict, Optional[str], dict]:
-        """The copy status, plus the original's path and OpenCV facts for "none".
+    def job_answer(key: tuple[str, int]) -> Optional[dict]:
+        """What the copy job for *key* says, or ``None`` when it says nothing.
 
-        Call with ``copy_jobs_lock`` held: a finished job is read and
-        forgotten here, so a failure is reported exactly once.
+        A finished job is forgotten here, under the lock, so a failure is
+        reported exactly once. Only the map is touched under the lock.
         """
+        with copy_jobs_lock:
+            job = copy_jobs.get(key)
+            if job is None:
+                return None
+            if not job.future.done():
+                return _copy_answer(
+                    "preparing", job.info, job.estimate, job.remaining()
+                )
+            del copy_jobs[key]
+        if job.future.exception() is not None:
+            return _copy_answer(
+                "failed",
+                job.info,
+                detail="PixlStash could not make a playable copy of this video.",
+            )
+        return None
+
+    def copy_status(picture_id: int) -> tuple[dict, Optional[str], dict]:
+        """The copy status, plus the original's path and OpenCV facts for "none"."""
         vault = server.vault
         file_path = picture_file_path(picture_id)
-        if not ffmpeg_executable() or not VideoUtils.is_video_file(file_path):
+        if not VideoUtils.is_video_file(file_path):
             return _copy_answer("unavailable"), None, {}
-        job = copy_jobs.get((vault.image_root, picture_id))
-        if job is not None:
-            if not job.future.done():
-                return (
-                    _copy_answer("preparing", job.info, job.estimate, job.remaining()),
-                    None,
-                    {},
-                )
-            del copy_jobs[(vault.image_root, picture_id)]
-            if job.future.exception() is not None:
-                return (
-                    _copy_answer(
-                        "failed",
-                        job.info,
-                        detail="PixlStash could not make a playable copy of this video.",
-                    ),
-                    None,
-                    {},
-                )
+        if not ffmpeg_executable():
+            detail = "PixlStash found no ffmpeg on this computer to make the copy with."
+            return _copy_answer("unavailable", detail=detail), None, {}
+        if not ffmpeg_utils.h264_encoder():
+            detail = "This computer's ffmpeg cannot write H.264 video, so no copy can be made."
+            return _copy_answer("unavailable", detail=detail), None, {}
+        answer = job_answer((vault.image_root, picture_id))
+        if answer is not None:
+            return answer, None, {}
         source = ImageUtils.resolve_picture_path(vault.image_root, file_path)
         if fresh_copy(vault, picture_id, source):
             return _copy_answer("ready"), None, {}
@@ -693,8 +719,7 @@ def register_routes(router, server):
         ),
     )
     def get_video_copy_status(id: int):
-        with copy_jobs_lock:
-            return copy_status(id)[0]
+        return copy_status(id)[0]
 
     @router.post(
         "/pictures/video-copies/{id}",
@@ -710,19 +735,25 @@ def register_routes(router, server):
     def start_video_copy(id: int, confirm: bool = Body(False, embed=True)):
         vault = server.vault
         generation = getattr(server, "library_generation", 0)
+        status, source, info = copy_status(id)
+        if status["state"] != "none":
+            return status
+        estimate = status["estimate_seconds"]
+        if not confirm and estimate is not None and estimate > COPY_OFFER_SECONDS:
+            return {**status, "state": "offered"}
+        key = (vault.image_root, id)
         with copy_jobs_lock:
-            status, source, info = copy_status(id)
-            if status["state"] != "none":
-                return status
-            estimate = status["estimate_seconds"]
-            if not confirm and estimate is not None and estimate > COPY_OFFER_SECONDS:
-                return {**status, "state": "offered"}
-            job = _CopyJob(info=info, estimate=estimate)
-            job.future = _copy_executor.submit(
-                make_copy, vault, generation, id, source, job
-            )
-            copy_jobs[(vault.image_root, id)] = job
-            return _copy_answer("preparing", info, estimate, job.remaining())
+            # Another request may have started one since the status was read.
+            running = copy_jobs.get(key)
+            if running is not None and not running.future.done():
+                job = running
+            else:
+                job = _CopyJob(info=info, estimate=estimate)
+                job.future = _copy_executor.submit(
+                    make_copy, vault, generation, id, source, job
+                )
+                copy_jobs[key] = job
+        return _copy_answer("preparing", job.info, job.estimate, job.remaining())
 
     @router.get(
         "/pictures/video-copies/{id}.mp4",
@@ -737,7 +768,7 @@ def register_routes(router, server):
         with copy_jobs_lock:
             job = copy_jobs.get((vault.image_root, id))
             preparing = job is not None and not job.future.done()
-            path = None if preparing else fresh_copy(vault, id, source)
+        path = None if preparing else fresh_copy(vault, id, source)
         if not path:
             raise HTTPException(status_code=404, detail="No playable copy")
         return FileResponse(
@@ -745,15 +776,14 @@ def register_routes(router, server):
         )
 
     def copy_files(vault) -> list[str]:
-        """Every finished copy file of the open library (temp files are not)."""
+        """Every finished copy file of the open library (``VIDEO_COPY_NAME``)."""
         folder = os.path.join(vault.image_root, VIDEO_COPY_DIR)
         if not os.path.isdir(folder):
             return []
         return [
             os.path.join(folder, name)
             for name in os.listdir(folder)
-            if name.endswith(".mp4")
-            and not name.startswith(ffmpeg_utils.COPY_TMP_PREFIX)
+            if VIDEO_COPY_NAME.match(name)
         ]
 
     @router.get(
@@ -780,17 +810,16 @@ def register_routes(router, server):
         vault = server.vault
         deleted = 0
         freed = 0
-        with copy_jobs_lock:
-            delete_copy_rows(vault, None)
-            for path in copy_files(vault):
-                try:
-                    size = os.path.getsize(path)
-                    os.remove(path)
-                except OSError as exc:
-                    logger.warning("Could not delete video copy %s: %s", path, exc)
-                    continue
-                deleted += 1
-                freed += size
+        delete_copy_rows(vault, None)
+        for path in copy_files(vault):
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+            except OSError as exc:
+                logger.warning("Could not delete video copy %s: %s", path, exc)
+                continue
+            deleted += 1
+            freed += size
         logger.info("Deleted %s video copies (%s bytes)", deleted, freed)
         return {"deleted": deleted, "bytes": freed}
 

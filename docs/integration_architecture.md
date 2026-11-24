@@ -2158,7 +2158,7 @@ owner-only. Backend: §25.29 of the backend document.
 
 A video the browser refuses (`<video>` error `MEDIA_ERR_SRC_NOT_SUPPORTED`
 while showing the original) can be played from an H.264/AAC MP4 copy made by
-the bundled ffmpeg. Every copy route except the `.mp4` answers one status
+an ffmpeg found at run time (backend §3). Every copy route except the `.mp4` answers one status
 object:
 
 ```json
@@ -2180,8 +2180,9 @@ object:
 `preparing` carries `estimate_seconds` and `remaining_seconds` (the estimate
 minus the time ffmpeg has run). `failed` is answered once and then forgotten,
 so the next POST retries; `detail` says why in user words. `unavailable` means
-no ffmpeg on this install, a picture that is not a video, or an original that
-is missing (`detail` says which). `format` names the original's codec when it
+no ffmpeg on this install, an ffmpeg with no H.264 encoder, a picture that is
+not a video, or an original that is missing (`detail` says which, except for a
+picture that is not a video). `format` names the original's codec when it
 is one browsers rarely play (ProRes, HEVC, MPEG-4, ...), else its container
 (MOV, MKV, AVI), else null. The picture routes are picture-scoped; **a READ
 share token is refused the POST** by the read-only middleware (POST is not in

@@ -44,9 +44,6 @@ dependencies = [
     "numpy>=2.4.3",
     "pillow>=13.0.0",
     "opencv-python>=4.13.0.92",
-    # Its wheels carry a static ffmpeg binary, run only as a subprocess for the
-    # playable video copies and the waveform (utils/image_processing/ffmpeg_utils.py).
-    "imageio-ffmpeg>=0.8.1",
     "scipy>=1.17.1",
     "platformdirs>=4.9.4",
     # The OS trash, for the shelf's delete verb. Pure Python, no dependencies of
