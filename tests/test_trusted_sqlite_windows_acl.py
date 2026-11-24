@@ -684,7 +684,9 @@ class TestTheCreationPathsAreWellFormed:
 
         assert resolved == str(real / "leaf")
         with pytest.raises(FileExistsError):
-            trusted_sqlite.create_private_file(str(via / "leaf"))
+            descriptor = trusted_sqlite.create_private_file(str(via / "leaf"))
+            # Only reached if the refusal regressed; do not leak the file.
+            os.close(descriptor)
         assert not (tmp_path / "elsewhere").exists()
 
 
@@ -1472,8 +1474,7 @@ class TestRealWindowsAcls:
         directory.mkdir()
         _icacls(str(directory), "/grant", "*S-1-1-0:(OI)(CI)W")
 
-        hub = hub_db.HubDatabase(str(directory / "hub.db"))
-        try:
+        with hub_db.HubDatabase(str(directory / "hub.db")):
             assert _warned(caplog, "Everyone")
             trusted = {trusted_sqlite._windows_user_sid(), SYSTEM, ADMINISTRATORS}
             found = trusted_sqlite._read_windows_security(
@@ -1493,8 +1494,6 @@ class TestRealWindowsAcls:
                 locked = trusted_sqlite._read_windows_security(sidecar)
                 assert locked.dacl_protected, sidecar
                 assert {ace.sid for ace in locked.dacl} <= trusted, sidecar
-        finally:
-            hub.close()
 
     def test_a_folder_pixlstash_creates_is_protected_and_inheritable(self, tmp_path):
         target = tmp_path / "made" / "here"
