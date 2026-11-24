@@ -225,4 +225,15 @@ describe("a playable copy of a refused video", () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(3);
   });
+
+  it("says nothing about time when the server has no estimate", async () => {
+    proxy.fetchProxyStatus.mockResolvedValue(
+      statusOf("preparing", { estimate_seconds: null }),
+    );
+    const w = await openOn(9);
+    await refuseVideo(w);
+    const text = w.find(".lightbox-video-error").text();
+    expect(text).toContain("This browser can't play ProRes");
+    expect(text).not.toContain("About");
+  });
 });

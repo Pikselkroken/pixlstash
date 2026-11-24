@@ -4492,12 +4492,18 @@ const proxyOfferText = computed(() => {
 });
 const proxyWaitText = computed(() => {
   const status = proxyStatus.value || {};
+  // No estimate when the clip's header gives no frame count: say nothing
+  // about time rather than a made-up figure.
+  const known = Number.isFinite(status.estimate_seconds);
   if (proxyRequested.value) {
-    const remaining =
-      (status.estimate_seconds ?? 0) - (status.elapsed_seconds ?? 0);
-    return `About ${clockLength(Math.max(3, remaining))} left. It carries on if you move to another picture; the clip plays here when it is done.`;
+    const remaining = status.estimate_seconds - (status.elapsed_seconds ?? 0);
+    const left = known
+      ? `About ${clockLength(Math.max(3, remaining))} left. `
+      : "";
+    return `${left}It carries on if you move to another picture; the clip plays here when it is done.`;
   }
-  return `About ${roughly(status.estimate_seconds)}. This browser can't play ${proxyFormat.value}, so PixlStash makes an MP4 copy once and keeps it.`;
+  const about = known ? `About ${roughly(status.estimate_seconds)}. ` : "";
+  return `${about}This browser can't play ${proxyFormat.value}, so PixlStash makes an MP4 copy once and keeps it.`;
 });
 
 function stopProxyPoll() {
