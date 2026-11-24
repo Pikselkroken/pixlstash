@@ -182,7 +182,7 @@ docker run -d --runtime nvidia --user $(id -u):$(id -g) \
   -e HOME=/home/pixlstash -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 -v ~/Pictures/pixlstash:/home/pixlstash \
-  -e PIXLSTASH_TELEMETRY_DEV=1 -e PIXLSTASH_INITIAL_USERNAME=owner -e PIXLSTASH_INITIAL_PASSWORD="$PW" \
+  -e PIXLSTASH_TELEMETRY_DEV=1 -e PIXLSTASH_INITIAL_USERNAME=${PW:+owner} -e PIXLSTASH_INITIAL_PASSWORD="$PW" \
   --name pixlstash ghcr.io/pikselkroken/pixlstash:latest-dev-gpu
 ```
 
