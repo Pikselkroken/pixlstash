@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix as pathPosix, resolve, win32 as pathWin32 } from 'node:path';
 import { pathKey } from './urlPolicy';
 
@@ -324,6 +324,20 @@ export function bundledInterpreter(): string {
   const dir = bundledRuntimeDir();
   if (process.platform === 'win32') return join(dir, 'python.exe');
   return join(dir, 'bin', 'python3');
+}
+
+/**
+ * The LGPL ffmpeg shipped in the installer (extraResources `ffmpeg/`, fetched by
+ * packaging/ffmpeg/fetch_ffmpeg.py), handed to the backend as PIXLSTASH_FFMPEG.
+ * Null when absent (a dev checkout that never fetched it): the backend then
+ * falls back to `ffmpeg` on PATH.
+ */
+export function bundledFfmpeg(): string | null {
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, 'ffmpeg')
+    : join(__dirname, '..', 'resources', 'ffmpeg');
+  const exe = join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  return existsSync(exe) ? exe : null;
 }
 
 /** runtime.json sits next to the bundled python/ directory. */

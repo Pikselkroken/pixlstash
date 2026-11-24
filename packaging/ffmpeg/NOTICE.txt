@@ -1,0 +1,31 @@
+FFmpeg, bundled with PixlStash
+==============================
+
+PixlStash ships an unmodified build of FFmpeg and runs it as a separate
+program (command line and pipes), to make playable copies of videos and to
+draw audio waveforms. It is never linked into PixlStash.
+
+Licence
+  The FFmpeg in this build is licensed under the GNU Lesser General Public
+  License, version 3 or later (macOS build: 2.1 or later; configured without
+  --enable-gpl and --enable-nonfree). The licence texts are in
+  COPYING.LGPLv3 and COPYING.GPLv3 next to this file.
+
+  H.264 is encoded with Cisco's OpenH264 (libopenh264, BSD-2-Clause) on
+  Windows and Linux, and with Apple's VideoToolbox on macOS. No GPL encoder
+  (libx264, libx265) is included.
+
+Corresponding source
+  The FFmpeg source, the OpenH264 source and the build scripts used for the
+  exact binary shipped here are attached to the GitHub release named in the
+  build pin (packaging/ffmpeg/ffmpeg_pin.json, field "release") of
+  https://github.com/Pikselkroken/pixlstash/releases, as ffmpeg-source-*.tar.gz
+  together with SOURCES.txt, which names each commit.
+  The upstream projects are https://ffmpeg.org/, https://github.com/cisco/openh264
+  and https://github.com/BtbN/FFmpeg-Builds.
+
+  You may replace this binary: set PIXLSTASH_FFMPEG to the path of another
+  ffmpeg and PixlStash uses that one instead.
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
+This product is not endorsed by the FFmpeg project.

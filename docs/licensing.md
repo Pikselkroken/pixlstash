@@ -38,23 +38,32 @@ Basics:
 - However: PixlStash name and logo are property of the project’s copyright owner. You may not use the PixlStash name, logo, or branding in a way that suggests official endorsement or affiliation without explicit permission.
 
 ### Third-party program: ffmpeg
-- PixlStash installs the Python package `imageio-ffmpeg` (BSD-2-Clause), whose
-  wheels carry a prebuilt `ffmpeg` executable. That executable is a GPL build of
-  FFmpeg (configured with `--enable-gpl`, including libx264 and libx265), so the
-  copy distributed in the desktop installer and the Docker images is licensed
-  under the GNU GPL.
+- The desktop installer and the Docker images carry an unmodified build of
+  FFmpeg, licensed under the GNU Lesser General Public License, version 3 or
+  later (macOS: version 2.1 or later). It is an LGPL build: no `--enable-gpl`, no
+  `--enable-nonfree`, no libx264 or libx265. H.264 is encoded with Cisco's
+  OpenH264 (BSD-2-Clause) on Windows and Linux, and with Apple's VideoToolbox on
+  macOS.
 - PixlStash runs it only as a separate program, over the command line and pipes,
   to make playable copies of videos and read audio waveforms. It is never
   imported or linked into PixlStash.
-- The binaries are prebuilt upstream, not by PixlStash: Linux and Windows on Arm
-  from BtbN/FFmpeg-Builds (https://github.com/BtbN/FFmpeg-Builds), Windows x64
-  from gyan.dev (https://www.gyan.dev/ffmpeg/builds/), macOS from evermeet.cx
-  and osxexperts.net, as listed by imageio-ffmpeg's `tools/download_ffmpeg.py`
-  (https://github.com/imageio/imageio-ffmpeg). The version string `ffmpeg
-  -version` prints names the FFmpeg release each was built from; FFmpeg's
-  source for every release is at https://ffmpeg.org/download.html, and the
-  BtbN repository is itself the build scripts for its builds.
-- Set `IMAGEIO_FFMPEG_EXE` to the path of another ffmpeg to use that instead.
+- The binaries are mirrored from BtbN/FFmpeg-Builds (Windows, Linux; its `lgpl`
+  variant) or built from FFmpeg source (macOS) by
+  `.github/workflows/ffmpeg-mirror.yml` into a release of this repository named
+  `ffmpeg-lgpl-<version>`. That release also holds the corresponding source: the
+  FFmpeg source at the exact commit, the OpenH264 source and BtbN's build scripts
+  (which pin every other library linked), with `SOURCES.txt` naming each commit.
+  `packaging/ffmpeg/ffmpeg_pin.json` pins the release and each binary's SHA256;
+  `packaging/ffmpeg/fetch_ffmpeg.py` is what the desktop build and the
+  Dockerfiles use to fetch and verify it.
+- The installer (`resources/ffmpeg/`) and the images (`/usr/share/doc/ffmpeg-lgpl/`)
+  include `NOTICE.txt` and the licence texts (`COPYING.LGPLv3`, `COPYING.GPLv3`)
+  from `packaging/ffmpeg/`.
+- The backend uses the binary named by `PIXLSTASH_FFMPEG` (the desktop app sets
+  it; the Docker images have it at `/usr/local/bin/ffmpeg`), otherwise `ffmpeg` on
+  `PATH`. Set it to another ffmpeg to use that instead.
+- The pip package and the Windows server installer carry no ffmpeg; they use one
+  on `PATH`.
 
 To avoid ambiguity, this file does not assign license by "subject matter".
 Use the license files in each component path (for example `pixlstash/LICENSE`,

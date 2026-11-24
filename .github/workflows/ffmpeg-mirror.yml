@@ -1,0 +1,174 @@
+name: Mirror LGPL ffmpeg
+
+# Publishes the ffmpeg that PixlStash bundles (desktop installer, Docker images)
+# as a release of this repo, with its corresponding source. PixlStash ships only
+# an LGPL build with an H.264 encoder that is not GPL: libopenh264 on Windows and
+# Linux (BtbN/FFmpeg-Builds' lgpl variant), VideoToolbox on macOS (built here).
+#
+# BtbN's autobuild releases are deleted after a while, so the build is mirrored
+# here and pinned by tag + SHA256 in packaging/ffmpeg/ffmpeg_pin.json. After a
+# run, paste the new release tag and the SHA256SUMS into that file.
+on:
+  workflow_dispatch:
+    inputs:
+      btbn_tag:
+        description: "BtbN/FFmpeg-Builds release tag, e.g. autobuild-2026-11-24-12-41"
+        required: true
+        type: string
+      series:
+        description: "FFmpeg release series BtbN built, e.g. 9.0"
+        required: true
+        default: "9.0"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  BTBN_TAG: ${{ inputs.btbn_tag }}
+  SERIES: ${{ inputs.series }}
+
+jobs:
+  btbn:
+    runs-on: ubuntu-latest
+    outputs:
+      ffmpeg_commit: ${{ steps.fetch.outputs.ffmpeg_commit }}
+      version: ${{ steps.fetch.outputs.version }}
+    steps:
+      - name: Download, verify and compress the BtbN builds
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$BTBN_TAG" =~ ^autobuild-[0-9-]+$ ]] || { echo "::error::bad btbn_tag"; exit 1; }
+          [[ "$SERIES" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::bad series"; exit 1; }
+          mkdir -p dl out
+          # <our platform>:<BtbN platform>
+          for pair in linux-x64:linux64 linux-arm64:linuxarm64 win-x64:win64; do
+            ours="${pair%%:*}"; theirs="${pair##*:}"
+            # The trailing -$SERIES. excludes the -shared variants.
+            gh release download "$BTBN_TAG" -R BtbN/FFmpeg-Builds -D dl -p "*-${theirs}-lgpl-${SERIES}.*"
+            archive=$(ls dl/*-"${theirs}"-lgpl-"${SERIES}".*)
+            mkdir "dl/$ours"
+            case "$archive" in
+              *.zip) unzip -q "$archive" -d "dl/$ours"; exe=ffmpeg.exe ;;
+              *) tar -xf "$archive" -C "dl/$ours"; exe=ffmpeg ;;
+            esac
+            bin=$(ls dl/"$ours"/*/bin/"$exe")
+            # The configure line is embedded in the binary, so this works for
+            # the platforms this runner cannot execute.
+            conf=$(grep -a -o -m1 -e '--prefix=/ffbuild/prefix[ -~]*' "$bin" | head -n1)
+            [[ "$conf" == *--enable-libopenh264* ]] || { echo "::error::$ours: no libopenh264"; exit 1; }
+            for bad in --enable-gpl --enable-nonfree; do
+              [[ "$conf" != *"$bad "* && "$conf" != *"$bad" ]] || { echo "::error::$ours: configured with $bad"; exit 1; }
+            done
+            if [ "$ours" = linux-x64 ]; then
+              lic=$("$bin" -L); echo "$lic"
+              grep -q "Lesser General Public" <<<"$lic" || { echo "::error::ffmpeg -L is not LGPL"; exit 1; }
+              if grep -q -w "GNU General Public" <<<"$lic"; then echo "::error::ffmpeg -L says GPL"; exit 1; fi
+              "$bin" -hide_banner -encoders | grep -q libopenh264 || { echo "::error::no libopenh264 encoder"; exit 1; }
+              "$bin" -hide_banner -f lavfi -i testsrc=d=1 -c:v libopenh264 -f null -
+            fi
+            xz -T0 -9e -c "$bin" > "out/ffmpeg-${ours}.xz"
+            # dl/<ours>/ffmpeg-n9.0.2-963-g4d831360c9-linux64-lgpl-9.0 -> n9.0.2-963-g4d831360c9
+            dirname=$(basename "$(dirname "$(dirname "$bin")")")
+            ver=${dirname#ffmpeg-}; ver=${ver%%-"${theirs}"-lgpl*}
+            echo "$ver" >> versions.txt
+          done
+          [ "$(sort -u versions.txt | wc -l)" = 1 ] || { echo "::error::platforms built from different FFmpeg commits"; sort -u versions.txt; exit 1; }
+          ver=$(head -n1 versions.txt)
+          [[ "$ver" =~ -g([0-9a-f]{7,40})$ ]] || { echo "::error::no commit in version $ver"; exit 1; }
+          commit=${BASH_REMATCH[1]}
+          echo "ffmpeg_commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+          # Corresponding source: FFmpeg at that commit, OpenH264 and BtbN's
+          # scripts at the commits the build used.
+          published=$(gh api "repos/BtbN/FFmpeg-Builds/releases/tags/$BTBN_TAG" --jq .published_at)
+          git clone -q https://github.com/BtbN/FFmpeg-Builds.git btbn-src
+          # An autobuild is built from master as it was when the release was made.
+          btbn_commit=$(git -C btbn-src rev-list -1 --before="$published" origin/master)
+          git -C btbn-src archive --format=tar.gz --prefix=FFmpeg-Builds/ -o "$PWD/out/ffmpeg-source-btbn-build-scripts.tar.gz" "$btbn_commit"
+          h264_commit=$(git -C btbn-src show "$btbn_commit:scripts.d/50-openh264.sh" | sed -n 's/^SCRIPT_COMMIT="\(.*\)"/\1/p')
+          [[ "$h264_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no openh264 commit found"; exit 1; }
+          git clone -q --filter=blob:none https://github.com/cisco/openh264.git h264-src
+          git -C h264-src archive --format=tar.gz --prefix=openh264/ -o "$PWD/out/ffmpeg-source-openh264.tar.gz" "$h264_commit"
+          git clone -q --filter=blob:none https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          full=$(git -C ffmpeg-src rev-parse "$commit^{commit}")
+          git -C ffmpeg-src archive --format=tar.gz --prefix=FFmpeg/ -o "$PWD/out/ffmpeg-source-ffmpeg.tar.gz" "$full"
+          cat > out/SOURCES.txt <<SRC
+          Corresponding source for the ffmpeg binaries in this release.
+          ffmpeg-linux-*, ffmpeg-win-* : BtbN/FFmpeg-Builds autobuild $BTBN_TAG (lgpl variant, $SERIES)
+          ffmpeg-mac-arm64             : built from the FFmpeg source below by the workflow that made this release
+          FFmpeg    $full  (version $ver)   ffmpeg-source-ffmpeg.tar.gz
+          OpenH264  $h264_commit   ffmpeg-source-openh264.tar.gz
+          BtbN/FFmpeg-Builds  $btbn_commit   ffmpeg-source-btbn-build-scripts.tar.gz
+            (the commit of master at the release's publication time; its scripts.d pins every other library the build links and its patches/ holds the patches applied to FFmpeg)
+          SRC
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: btbn
+          path: out/*
+          if-no-files-found: error
+
+  mac:
+    needs: btbn
+    runs-on: macos-15 # Apple Silicon, the only mac arch electron.yml builds
+    steps:
+      - name: Build FFmpeg without GPL or nonfree code (VideoToolbox H.264)
+        env:
+          FFMPEG_COMMIT: ${{ needs.btbn.outputs.ffmpeg_commit }}
+        run: |
+          set -euo pipefail
+          git clone -q --filter=blob:none https://github.com/FFmpeg/FFmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          git checkout -q "$FFMPEG_COMMIT"
+          # Default configure is LGPL v2.1+. --disable-autodetect keeps stray
+          # Homebrew libraries (possibly GPL) out; zlib and the Apple
+          # frameworks are system libraries and stay dynamic.
+          ./configure --disable-autodetect --disable-doc --disable-ffplay --disable-ffprobe \
+            --enable-zlib --enable-videotoolbox --enable-audiotoolbox \
+            --extra-cflags=-mmacosx-version-min=12.0 --extra-ldflags=-mmacosx-version-min=12.0
+          make -j"$(sysctl -n hw.ncpu)" ffmpeg
+          otool -L ./ffmpeg
+          lic=$(./ffmpeg -L); echo "$lic"
+          grep -q "Lesser General Public" <<<"$lic" || { echo "::error::not LGPL"; exit 1; }
+          if grep -q -w "GNU General Public" <<<"$lic"; then echo "::error::ffmpeg -L says GPL"; exit 1; fi
+          conf=$(./ffmpeg -buildconf)
+          for bad in --enable-gpl --enable-nonfree; do
+            if grep -q -e "$bad" <<<"$conf"; then echo "::error::configured with $bad"; exit 1; fi
+          done
+          ./ffmpeg -hide_banner -encoders | grep -q h264_videotoolbox || { echo "::error::no h264_videotoolbox"; exit 1; }
+          mkdir ../out
+          xz -T0 -9e -c ./ffmpeg > ../out/ffmpeg-mac-arm64.xz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    needs: [btbn, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release; nothing else in this workflow can
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: out
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.btbn.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum ffmpeg-*.xz | tee SHA256SUMS
+          [ "$(ls ffmpeg-*.xz | wc -l)" = 4 ] || { echo "::error::expected 4 binaries"; exit 1; }
+          # Not "latest": this is not a PixlStash release.
+          gh release create "ffmpeg-lgpl-$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --latest=false --title "ffmpeg (LGPL) $VERSION" \
+            --notes "LGPL ffmpeg binaries bundled with PixlStash, with their corresponding source. See SOURCES.txt. Pinned in packaging/ffmpeg/ffmpeg_pin.json." \
+            ffmpeg-*.xz ffmpeg-source-*.tar.gz SHA256SUMS SOURCES.txt

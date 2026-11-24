@@ -1,0 +1,9 @@
+{
+  "release": "PLACEHOLDER-release-tag-ffmpeg-lgpl-X.Y.Z",
+  "assets": {
+    "linux-x64": {"file": "ffmpeg-linux-x64.xz", "sha256": "PLACEHOLDER-sha256"},
+    "linux-arm64": {"file": "ffmpeg-linux-arm64.xz", "sha256": "PLACEHOLDER-sha256"},
+    "win-x64": {"file": "ffmpeg-win-x64.xz", "sha256": "PLACEHOLDER-sha256"},
+    "mac-arm64": {"file": "ffmpeg-mac-arm64.xz", "sha256": "PLACEHOLDER-sha256"}
+  }
+}
