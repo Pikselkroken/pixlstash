@@ -1063,10 +1063,26 @@ def test_a_missing_env_path_warns_and_falls_back_to_path(
 ):
     gone = str(tmp_path / "nowhere" / "ffmpeg")
     monkeypatch.setenv(ffmpeg_utils.FFMPEG_ENV, gone)
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/local/bin", "/usr/bin"]))
     monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: "/usr/bin/ffmpeg")
     with caplog.at_level(logging.WARNING):
         assert ffmpeg_utils.ffmpeg_executable() == "/usr/bin/ffmpeg"
     assert gone in caplog.text
+
+
+def test_an_ffmpeg_found_only_in_the_working_directory_is_refused(
+    fresh_resolver, tmp_path, monkeypatch
+):
+    # Windows' which() looks in the working directory before PATH.
+    monkeypatch.delenv(ffmpeg_utils.FFMPEG_ENV, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    stray = str(tmp_path / "ffmpeg.exe")
+    monkeypatch.setattr(ffmpeg_utils.shutil, "which", lambda name: stray)
+    assert ffmpeg_utils.ffmpeg_executable() is None
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", str(tmp_path)]))
+    ffmpeg_utils.ffmpeg_executable.cache_clear()
+    assert ffmpeg_utils.ffmpeg_executable() == stray
 
 
 def test_no_env_and_nothing_on_path_is_none(fresh_resolver, monkeypatch):

@@ -96,6 +96,14 @@ def ffmpeg_executable() -> Optional[str]:
             configured,
         )
     found = shutil.which("ffmpeg")
+    if found and not _on_path(os.path.dirname(os.path.abspath(found))):
+        # Windows searches the working directory before PATH, so a stray
+        # ffmpeg.exe there (a Downloads folder) would run in place of the real one.
+        logger.warning(
+            "Ignoring %s: it was found in the working directory, not on PATH.",
+            found,
+        )
+        found = None
     if not found:
         logger.warning(
             "No ffmpeg found (set %s or put ffmpeg on PATH); playable video "
@@ -103,6 +111,13 @@ def ffmpeg_executable() -> Optional[str]:
             FFMPEG_ENV,
         )
     return found
+
+
+def _on_path(folder: str) -> bool:
+    """Whether ``folder`` is one of the PATH entries (not merely the cwd)."""
+    entries = os.environ.get("PATH", "").split(os.pathsep)
+    want = os.path.normcase(folder)
+    return any(e and os.path.normcase(os.path.abspath(e)) == want for e in entries)
 
 
 def pick_h264_encoder(listing: str) -> Optional[str]:
