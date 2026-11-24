@@ -6,6 +6,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
 import LibrariesSection from "./LibrariesSection.vue";
 import ImportFoldersSection from "./ImportFoldersSection.vue";
+import VideoCopiesSection from "./VideoCopiesSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
@@ -349,15 +350,16 @@ watch(
         role="region"
         aria-labelledby="settings-nav-libraries"
       >
-        <LibrariesSection
-          class="settings-pane__shrink"
+        <!-- The two lists give way to each other; Video copies never does
+             (#2807, see LibrariesSection's styles). The import folders'
+             anchor is its heading, inside the section. -->
+        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+        <ImportFoldersSection
           :open="dialogOpen && settingsTab === 'libraries'"
         />
-        <div id="settings-anchor-import-folders">
-          <ImportFoldersSection
-            :open="dialogOpen && settingsTab === 'libraries'"
-          />
-        </div>
+        <VideoCopiesSection
+          :open="dialogOpen && settingsTab === 'libraries'"
+        />
       </div>
       <div
         v-if="!isReadOnly"

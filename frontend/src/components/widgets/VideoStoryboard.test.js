@@ -1,6 +1,6 @@
 // VideoStoryboard - a clip's eleven frames in the lightbox's band (#2147).
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
 import VideoStoryboard from "./VideoStoryboard.vue";
@@ -109,5 +109,92 @@ describe("VideoStoryboard", () => {
       .findAll("button.storyboard-tile")
       .findIndex((t) => t.attributes("aria-current") === "true");
     expect(current).toBe(0);
+  });
+
+  describe("the waveform lane (#2807)", () => {
+    // Four audio seconds of a ten-second clip: the peaks span 40% of the lane.
+    const WAVE = { duration: 4, peaks: Array.from({ length: 512 }, () => 0.5) };
+    const lane = (w) => w.find(".storyboard-lane");
+
+    function laneAt(w, left, width) {
+      lane(w).element.getBoundingClientRect = () => ({ left, width });
+    }
+
+    it("seeks the video to the clicked point of the clip's length", async () => {
+      const w = mountBoard({ duration: 10, waveform: WAVE });
+      laneAt(w, 100, 500);
+      await lane(w).trigger("click", { clientX: 225 });
+      expect(w.props("media").currentTime).toBe(2.5);
+    });
+
+    it("steps a second with the arrows, and the keys stop at the lane", async () => {
+      const w = mountBoard({ duration: 10, waveform: WAVE });
+      await playTo(w, 3);
+      const right = new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true,
+      });
+      // The lightbox steps through the set on a window-level arrow.
+      const stepped = vi.fn();
+      document.body.appendChild(w.element);
+      window.addEventListener("keydown", stepped);
+      lane(w).element.dispatchEvent(right);
+      window.removeEventListener("keydown", stepped);
+      w.element.remove();
+      expect(w.props("media").currentTime).toBe(4);
+      expect(right.defaultPrevented).toBe(true);
+      expect(stepped).not.toHaveBeenCalled();
+      await lane(w).trigger("keydown", { key: "ArrowLeft" });
+      await lane(w).trigger("keydown", { key: "ArrowLeft" });
+      expect(w.props("media").currentTime).toBe(2);
+      await lane(w).trigger("keydown", { key: "End" });
+      expect(w.props("media").currentTime).toBe(10);
+    });
+
+    it("is a slider that says where the clip is, as m:ss", async () => {
+      const w = mountBoard({ duration: 75, waveform: WAVE });
+      await playTo(w, 62);
+      expect(lane(w).attributes()).toMatchObject({
+        role: "slider",
+        "aria-valuenow": "62",
+        "aria-valuemax": "75",
+        "aria-valuetext": "1:02",
+        tabindex: "0",
+      });
+    });
+
+    it("spans the audio's share of the video's length, played bars first", async () => {
+      const w = mountBoard({ duration: 10, waveform: WAVE });
+      await playTo(w, 2);
+      expect(w.find("svg.storyboard-wave").attributes("style")).toContain("width: 40%");
+      const bars = w.findAll("svg.storyboard-wave rect");
+      expect(bars).toHaveLength(128);
+      // 2 s of 4 audio seconds: the first half of the bars has played.
+      expect(bars.filter((b) => b.classes("played"))).toHaveLength(64);
+    });
+
+    it("draws no lane, and still the frames, for a silent or unread clip", () => {
+      for (const waveform of [
+        null,
+        { duration: null, peaks: null },
+        { duration: 4, peaks: null },
+        { duration: 4, peaks: [] },
+      ]) {
+        const w = mountBoard({ waveform });
+        expect(lane(w).exists()).toBe(false);
+        expect(w.findAll("button.storyboard-tile")).toHaveLength(11);
+      }
+    });
+
+    it("draws a refused clip's lane on its copy's length, and never seeks", async () => {
+      const w = mountBoard({ duration: null, clipLength: 8, waveform: WAVE });
+      expect(lane(w).attributes("aria-disabled")).toBe("true");
+      expect(w.find("svg.storyboard-wave").attributes("style")).toContain("width: 50%");
+      laneAt(w, 0, 100);
+      await lane(w).trigger("click", { clientX: 50 });
+      await lane(w).trigger("keydown", { key: "ArrowRight" });
+      expect(w.props("media").currentTime).toBe(0);
+    });
   });
 });

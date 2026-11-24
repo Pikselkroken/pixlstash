@@ -1,7 +1,8 @@
 <template>
   <!-- A clip's eleven frames, first to last, in the lightbox's filmstrip band
-       (#2147). Each tile seeks the video to its moment; hover or focus lifts
-       the whole frame above the tile. -->
+       (#2147), with its audio's waveform under them on the same axis (#2807).
+       Each tile seeks the video to its moment; hover or focus lifts the whole
+       frame above the tile. -->
   <div
     v-if="!failed"
     class="storyboard"
@@ -47,6 +48,41 @@
         ></span>
       </button>
     </div>
+    <!-- Inset half a tile at each end, so its axis meets the tile centres
+         and the one playhead crosses both. No lane for a silent clip. -->
+    <div
+      v-if="bars"
+      class="storyboard-lane"
+      role="slider"
+      aria-label="Position in the clip"
+      aria-valuemin="0"
+      :aria-valuemax="Math.round(axis)"
+      :aria-valuenow="Math.round(currentTime)"
+      :aria-valuetext="clock(currentTime)"
+      :aria-disabled="seekable ? undefined : 'true'"
+      :tabindex="seekable ? 0 : -1"
+      @click.stop="onLaneClick"
+      @keydown="onLaneKeydown"
+    >
+      <svg
+        class="storyboard-wave"
+        :style="{ width: `${span * 100}%` }"
+        :viewBox="`0 0 ${BARS} 100`"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <rect
+          v-for="(peak, i) in bars"
+          :key="i"
+          :class="{ played: playhead !== null && ((i + 0.5) / BARS) * span <= playhead }"
+          :x="i + 0.18"
+          :y="50 - peak / 2"
+          width="0.64"
+          :height="peak"
+          rx="0.3"
+        />
+      </svg>
+    </div>
     <span
       v-if="playhead !== null"
       class="storyboard-playhead"
@@ -75,6 +111,9 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 
 // The backend's STORYBOARD_FRAMES: tile i is i / (FRAMES - 1) of the clip.
 const FRAMES = 11;
+// The waveform's 512 peaks, drawn as this many bars (each the loudest of its
+// share), as the design draws them.
+const BARS = 128;
 
 const props = defineProps({
   // pictureStoryboardUrl(id, { version }).
@@ -85,6 +124,12 @@ const props = defineProps({
   // The lightbox's <video>, or null while there is none. The strip follows
   // its time itself, so playback re-renders only the strip.
   media: { type: Object, default: null },
+  // GET /pictures/waveforms/{id}.json, `{ duration, peaks }`, or null: no
+  // lane then (a silent clip, no ffmpeg, not fetched yet).
+  waveform: { type: Object, default: null },
+  // The clip's length when the browser cannot report one (a refused original,
+  // from its copy's status), so the lane still has an axis. It never seeks.
+  clipLength: { type: Number, default: null },
 });
 
 const emit = defineEmits(["unavailable"]);
@@ -157,8 +202,60 @@ const playhead = computed(() => {
   return Math.min(1, Math.max(0, currentTime.value / props.duration));
 });
 
+// The lane's axis is the video's length; the audio may be shorter, and then
+// its peaks span only its share of the lane. Until the video reports its
+// length the audio's stands in, so the band does not grow a beat late.
+const axis = computed(
+  () => props.duration || props.clipLength || props.waveform?.duration || 0,
+);
+const span = computed(() =>
+  Math.min(1, (props.waveform?.duration || 0) / axis.value),
+);
+
+// Bar heights in the lane's 0..100 viewBox; null when there is nothing to draw.
+const bars = computed(() => {
+  const peaks = props.waveform?.peaks;
+  if (!peaks?.length || !(axis.value > 0) || !(span.value > 0)) return null;
+  const per = peaks.length / BARS;
+  return Array.from({ length: BARS }, (_, i) => {
+    const share = peaks.slice(Math.floor(i * per), Math.ceil((i + 1) * per));
+    return Math.max(2, Math.min(1, Math.max(0, ...share)) * 100);
+  });
+});
+
+// The <video> is the lightbox's; seeking it is what the strip is for.
+function seekTo(seconds) {
+  const video = props.media;
+  if (!seekable.value || !video) return;
+  video.currentTime = Math.min(props.duration, Math.max(0, seconds));
+}
+
+function onLaneClick(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (!rect.width) return;
+  seekTo(((event.clientX - rect.left) / rect.width) * props.duration);
+}
+
+// A second a press; Home and End jump to the ends. Handled keys stop here, so
+// the lightbox's own arrows (step through the set) do not also fire.
+const LANE_KEYS = {
+  ArrowLeft: (t) => t - 1,
+  ArrowDown: (t) => t - 1,
+  ArrowRight: (t) => t + 1,
+  ArrowUp: (t) => t + 1,
+  Home: () => 0,
+  End: () => Infinity,
+};
+function onLaneKeydown(event) {
+  const step = LANE_KEYS[event.key];
+  if (!step || !seekable.value) return;
+  event.preventDefault();
+  event.stopPropagation();
+  seekTo(step(props.media?.currentTime || 0));
+}
+
 function onTileClick(index) {
-  if (seekable.value && props.media) props.media.currentTime = timeOf(index);
+  seekTo(timeOf(index));
 }
 
 function clock(seconds) {
@@ -185,7 +282,6 @@ function clock(seconds) {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: var(--filmstrip-thumb-h);
 }
 
 .storyboard-probe {
@@ -199,7 +295,35 @@ function clock(seconds) {
 .storyboard-tiles {
   display: flex;
   gap: var(--tile-gap);
+  height: var(--filmstrip-thumb-h);
+}
+
+/* 16px under the tiles, inset half a tile at each end. The band grows by
+   these 20px only when the lane is there (LightboxFilmstrip). */
+.storyboard-lane {
+  height: var(--space-5);
+  margin: var(--space-2) calc(var(--tile-w) / 2) 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.storyboard-lane[aria-disabled="true"] {
+  cursor: default;
+}
+
+.storyboard-wave {
+  display: block;
   height: 100%;
+}
+
+/* What has played at full strength, the rest at 40%. */
+.storyboard-wave rect {
+  fill: rgb(var(--v-theme-dark-surface-waveform));
+  opacity: 0.4;
+}
+
+.storyboard-wave rect.played {
+  opacity: 1;
 }
 
 .storyboard-tile {

@@ -524,13 +524,44 @@
   color: rgb(var(--v-theme-on-dark-surface));
   text-align: center;
   min-width: 280px;
+  max-width: 420px;
+}
+
+.lightbox-video-error-head {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 
 .lightbox-video-error-msg {
   margin: 0;
   font-size: var(--text-sm);
   opacity: 0.75;
-  max-width: 300px;
+}
+
+/* The heading and its sentence read as one block inside the box's rhythm. */
+.lightbox-video-error-head + .lightbox-video-error-msg {
+  margin-top: calc(-1 * var(--space-4));
+}
+
+.lightbox-video-error-acts {
+  display: flex;
+  gap: var(--space-3);
+}
+
+/* Bottom right of the stage, over the band whose frames it explains (#2807). */
+.lightbox-copy-hint {
+  position: absolute;
+  right: var(--space-5);
+  bottom: var(--space-4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+  pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease-standard);
+}
+
+.lightbox-copy-hint.hidden {
+  opacity: 0;
 }
 
 .lightbox-image-error {
@@ -551,23 +582,6 @@
   margin: 0;
   font-size: var(--text-sm);
   opacity: 0.75;
-}
-
-.lightbox-video-download-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-3) 20px;
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  text-decoration: none;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.lightbox-video-download-btn:hover {
-  background-image: var(--hover-shade);
 }
 
 /* Round arrows at the stage's edges, shown while the pointer is over the

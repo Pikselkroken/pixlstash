@@ -293,13 +293,14 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
       class="libraries-main"
       first
       title="Libraries"
+      :count="hasLoadedSuccessfully ? libraries.length : null"
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
     >
-      <div v-if="canManage" class="libraries-toolbar">
+      <template v-if="canManage" #action>
         <AppButton size="sm" variant="primary" @click="mappingStore.openWizard()">
           + Add a library…
         </AppButton>
-      </div>
+      </template>
 
       <div v-if="loading" class="libraries-loading" role="status" aria-live="polite">
         <v-progress-circular indeterminate size="20" width="2" />
@@ -313,7 +314,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
         </AppButton>
       </div>
 
-      <ul v-else class="libraries-list">
+      <ul v-else class="libraries-list scroll-fade">
         <li
           v-for="library in libraries"
           :key="library.uuid"
@@ -633,18 +634,13 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 
 <style scoped>
 /* The list is as tall as it needs to be, and gives way only when the pane
-   (shared with the import folders) runs out: every box between the pane and
-   the list may shrink, and the list scrolls inside itself. */
-.libraries-pane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
+   (shared with the import folders and video copies) runs out (#2807). Its
+   wrappers lend no box, so the list is itself an item of the pane's column:
+   it and the import folders' well are the only items that shrink, each in
+   proportion to its height and never below its floor. */
+.libraries-pane,
 .libraries-main {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  display: contents;
 }
 
 .libraries-loading {
@@ -669,8 +665,9 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
 }
 
 .libraries-list {
+  flex: 0 1 auto;
   list-style: none;
-  margin: 0;
+  margin: 0 0 var(--space-3);
   padding: 0;
   /* At least a row and a half, so a squeezed list still shows it scrolls. */
   min-height: calc(2 * var(--space-8));
@@ -771,12 +768,6 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.libraries-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: var(--space-3);
 }
 
 .library-row__more {

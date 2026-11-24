@@ -1,7 +1,15 @@
 <template>
   <div class="ifs">
-    <div class="ifs-head">
-      <h3 class="ifs-title section-label">Import folders</h3>
+    <!-- The settings dialog's deep link (`import-folders`) scrolls here. -->
+    <div id="settings-anchor-import-folders" class="ifs-head">
+      <h3 class="ifs-title section-label">
+        Import folders
+        <span
+          v-if="store.loaded"
+          class="ifs-count num"
+          >{{ store.folders.length }}</span
+        >
+      </h3>
       <AppButton
         class="ifs-add"
         size="sm"
@@ -13,9 +21,9 @@
       </AppButton>
     </div>
     <p class="ifs-lead">
-      While PixlStash runs it checks these folders and imports anything new into
-      this library. Every folder here is watched, and what it brings in waits in
-      the Inbox until it has a person or a set.
+      PixlStash watches these folders while it runs and imports anything new
+      into this library; new pictures wait in the Inbox until they have a
+      person or a set.
     </p>
 
     <p v-if="!store.loaded" class="ifs-state">Reading the import folders…</p>
@@ -25,7 +33,7 @@
 
     <!-- A table of four facts per folder, then its menu. Nothing is selected
          here, so it is a plain list of rows rather than a grid widget. -->
-    <div v-else class="ifs-well">
+    <div v-else class="ifs-well scroll-fade">
       <div class="ifs-row ifs-row--head" aria-hidden="true">
         <span>Folder</span>
         <span>After import</span>
@@ -317,24 +325,32 @@ async function removeFolder(folder) {
 
 <style scoped>
 /* Second section of the Libraries & imports pane: the same divider and
-   rhythm as a SettingsSection. */
+   rhythm as a SettingsSection. Its root lends no box, so the well is itself
+   an item of the pane's column and gives way with the libraries list
+   (LibrariesSection, #2807). */
 .ifs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  padding-top: var(--space-3);
+  display: contents;
 }
 
 .ifs-head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 /* The global `.section-label` sets the type; this only resets the h3. */
 .ifs-title {
   margin: 0;
+}
+
+.ifs-count {
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  letter-spacing: normal;
 }
 
 .ifs-add {
@@ -343,27 +359,29 @@ async function removeFolder(folder) {
 
 .ifs-lead,
 .ifs-state {
-  margin: 0;
+  margin: 0 0 var(--space-2);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
+/* Natural height while the pane has room; squeezed, it scrolls in its own
+   box under a header that stays put, and never below the header and a row
+   and a half. */
 .ifs-well {
+  flex: 0 1 auto;
+  min-height: calc(var(--space-6) + 1.5 * var(--space-8));
+  margin-bottom: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-background));
-  overflow: hidden;
+  overflow-y: auto;
 }
 
-/* Two rows, then the list scrolls in its own box so the pane, which it
-   shares with the libraries, does not. */
 .ifs-list {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: calc(2 * var(--space-8));
-  overflow-y: auto;
 }
 
 /* Folder, then three facts in columns that line up down the table, then ⋮. */
@@ -386,6 +404,10 @@ async function removeFolder(folder) {
 }
 
 .ifs-row--head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-raised);
+  background: rgb(var(--v-theme-background));
   min-height: 0;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);

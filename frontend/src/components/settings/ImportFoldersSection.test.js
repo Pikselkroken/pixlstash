@@ -69,6 +69,13 @@ describe("ImportFoldersSection", () => {
     expect(row.text()).toContain("12");
   });
 
+  it("counts its folders on the heading, which is the dialog's deep-link anchor", async () => {
+    const wrapper = mountSection();
+    await flushPromises();
+    const head = wrapper.find("#settings-anchor-import-folders");
+    expect(head.find(".ifs-title").text().replace(/\s+/g, " ")).toBe("Import folders 1");
+  });
+
   it("adds a folder named after its last component when no name is given", async () => {
     const wrapper = mountSection();
     await flushPromises();

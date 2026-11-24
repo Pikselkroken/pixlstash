@@ -102,6 +102,13 @@ const pixlStashLight = {
     // `surface-tertiary` is the light theme's wrong value there. 7.36:1 on
     // #242628, 8.37:1 on #181b20.
     "dark-surface-tertiary": "#8fbcc6",
+    // App-only, pending the design system and lead-designer sign-off: the
+    // lightbox's audio waveform under a clip's frames (#2807), a quieter teal
+    // than `dark-surface-tertiary` because it is a field of bars, not a mark,
+    // and teal-as-mark means "not saved". Its unplayed part is drawn at 40%.
+    // Identical in both themes, like the family above. 4.94:1 on #242628,
+    // 5.62:1 on #181b20.
+    "dark-surface-waveform": "#6f9aa4",
     // App-only, pending the design system and lead-designer sign-off: the red
     // of an ON picture favourite (the heart ending the score strip). On a
     // photo it sits on `--scrim-photo-strong`, where it measures 3.12:1 over a
@@ -262,6 +269,8 @@ const pixlStashDark = {
     // Identical in both themes too: teal as a mark on a dark chip (8.37:1 on
     // #181b20). See the light theme.
     "dark-surface-tertiary": "#8fbcc6",
+    // The waveform's teal, as in the light theme.
+    "dark-surface-waveform": "#6f9aa4",
     // The favourite red, as in the light theme. On dark chrome the photo red
     // already reads (4.90:1), so the two are one value here.
     "dark-surface-favourite": "#ff5a6e",
