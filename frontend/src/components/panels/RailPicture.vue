@@ -1035,8 +1035,9 @@ button.rail-face-edit:hover,
   border: 0;
   cursor: pointer;
 }
-.rail-picture__colour:hover,
-.rail-picture__colour:focus-visible {
+/* Pointing outlines a segment in ink; keyboard focus keeps the app's one
+   blue ring, which draws inside the edge and so survives the bar's clip. */
+.rail-picture__colour:hover {
   outline: 2px solid rgb(var(--v-theme-on-surface));
   outline-offset: -2px;
 }
