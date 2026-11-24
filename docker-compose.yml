@@ -2,14 +2,12 @@ services:
   pixlstash:
     build:
       context: .
+      # CPU image: runs on any host. For the NVIDIA GPU image add the override:
+      #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
       dockerfile: Dockerfile
     image: pixlstash:latest
     container_name: pixlstash
     restart: unless-stopped
-
-    # GPU access via nvidia-container-runtime.
-    # Requires: sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
-    runtime: nvidia
 
     ports:
       - "9537:9537"
@@ -28,8 +26,6 @@ services:
     environment:
       PIXLSTASH_HOST: "0.0.0.0"
       PIXLSTASH_PORT: "9537"
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       # Optional: uncomment + add a bind mount to put images on your real filesystem
       # PIXLSTASH_IMAGE_ROOT: "/mnt/photos"
 

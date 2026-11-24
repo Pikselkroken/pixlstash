@@ -1216,6 +1216,16 @@ docker run --rm -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:cpu
 docker run --rm --gpus all -p 9537:9537 -v pixlstash_data:/home/pixlstash pixlstash:gpu
 ```
 
+Or with Docker Compose:
+
+```bash
+# CPU
+docker compose up -d --build
+
+# GPU (needs the NVIDIA Container Toolkit)
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
 ### First-run setup in Docker
 
 Claiming the owner account (choosing the first username/password) is normally
