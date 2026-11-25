@@ -510,3 +510,44 @@ describe("the brush's size", () => {
     expect(paint.brushSize.value).toBe(29);
   });
 });
+
+describe("Extend's view", () => {
+  it("refits the extended canvas when only the stage resizes", async () => {
+    // The 800×600 picture is held by both axes; narrowing the stage leaves
+    // its layout size alone, so only the stage's own size can say the wider
+    // canvas no longer fits.
+    const observed = [];
+    const Original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        this.callback = callback;
+      }
+      observe(el) {
+        observed.push([this.callback, el]);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+    try {
+      const wrapper = await openMeasured();
+      wrapper.vm.sidebarTab = "edit";
+      await flush();
+      const paint = wrapper.vm.paint;
+      paint.setTool("extend");
+      paint.setExtension("right", 1600);
+      await flush();
+      // Twice the picture's width: 0.6 × 800 / 1600.
+      expect(wrapper.vm.extendFitted.scale).toBeCloseTo(0.3);
+      const canvasEl = wrapper.find(".lightbox-canvas").element;
+      Object.defineProperty(canvasEl, "clientWidth", {
+        configurable: true,
+        value: 400,
+      });
+      for (const [callback, el] of observed) if (el === canvasEl) callback([]);
+      expect(wrapper.vm.extendFitted.scale).toBeCloseTo(0.15);
+      wrapper.unmount();
+    } finally {
+      globalThis.ResizeObserver = Original;
+    }
+  });
+});

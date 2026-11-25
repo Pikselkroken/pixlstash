@@ -4734,6 +4734,25 @@ watch(
   { immediate: true },
 );
 
+// A stage resize along the axis the bare picture is not fitted by leaves its
+// layout size, and so the watch above, unchanged, while the extended canvas's
+// fit has changed: refit on the stage's own size too, between drags.
+let extendStageObserver = null;
+watch(
+  () =>
+    paintActive.value && paint.extending.value ? lightboxCanvasRef.value : null,
+  (canvas) => {
+    extendStageObserver?.disconnect();
+    extendStageObserver = null;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
+    extendStageObserver = new ResizeObserver(() => {
+      if (paint.draft.value?.tool !== "extend") fitExtendView();
+    });
+    extendStageObserver.observe(canvas);
+  },
+);
+onUnmounted(() => extendStageObserver?.disconnect());
+
 /** A press point in fractions of the picture, past its edges too. */
 function extendPoint(event) {
   if (!lightboxReady.value) return null;
