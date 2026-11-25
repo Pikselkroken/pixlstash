@@ -6,8 +6,8 @@ is still fresh, and the build time, which feeds the estimate for the next one.
 
 Schema-only and additive.
 
-Revision ID: 0149_add_video_copy
-Revises: 0148_add_picture_set_smart
+Revision ID: 0150_add_video_copy
+Revises: 0149_add_picture_colour_shares
 Create Date: 2026-11-24
 """
 
@@ -17,8 +17,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0149_add_video_copy"
-down_revision: Union[str, None] = "0148_add_picture_set_smart"
+revision: str = "0150_add_video_copy"
+down_revision: Union[str, None] = "0149_add_picture_colour_shares"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
