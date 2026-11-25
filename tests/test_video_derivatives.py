@@ -643,6 +643,19 @@ def test_a_long_copy_is_offered_until_confirmed(copier, server, tmp_path, monkey
     assert _until_settled(copier, pic)["state"] == "ready"
 
 
+def test_an_unmeasured_copy_does_not_set_the_rate(copier, server, tmp_path):
+    pic = _sound_clip(server, tmp_path)
+    _make_copy(copier, pic)
+
+    def unmeasure(session):
+        session.get(VideoCopy, pic).pixel_frames = 0
+        session.commit()
+
+    server.vault.db.run_task(unmeasure)
+    other = _sound_clip(server, tmp_path, name="other.mp4")
+    assert _status(copier, other)["estimate_seconds"] is not None
+
+
 def test_a_changed_original_makes_the_copy_count_as_none(copier, server, tmp_path):
     pic = _sound_clip(server, tmp_path)
     path = _make_copy(copier, pic)

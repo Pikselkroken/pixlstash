@@ -604,8 +604,13 @@ def register_routes(router, server):
         """Pixel-frames per second this machine made its latest copy at."""
 
         def latest(session: Session):
+            # A copy of a clip whose size could not be read (0) says nothing
+            # about speed, and would make the rate 0.
             return session.exec(
-                select(VideoCopy).order_by(VideoCopy.made_at.desc()).limit(1)
+                select(VideoCopy)
+                .where(VideoCopy.pixel_frames > 0)
+                .order_by(VideoCopy.made_at.desc())
+                .limit(1)
             ).first()
 
         row = vault.db.run_immediate_read_task(latest)
