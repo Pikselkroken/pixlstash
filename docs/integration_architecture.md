@@ -58,6 +58,8 @@ PixlStash is designed to be served from **one origin**: the FastAPI server hosts
 
 ---
 
+**Colour filter and colour summary (#2151).** `colour=<swatch>:<min_percent>` (repeatable, ANDed) on `GET /pictures`, `/pictures/count`, `/pictures/search`, `/pictures/stats` and `/pictures/likeness-groups`: swatches are `red, orange, yellow, green, teal, blue, purple, pink, brown, white, grey, black`, percent 0-100. An unknown swatch or malformed entry is HTTP 422. `GET /pictures/{id}/metadata` returns `colour_shares`: a list of 12 numbers in that swatch order, summing to 100, or null when not computed or unreadable.
+
 ### 2.1 The `/dedup` contract
 
 The contract is written in two places: this section holds the full route table

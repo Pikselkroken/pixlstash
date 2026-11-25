@@ -28,6 +28,7 @@ on a session it is handed (§10.1 of the backend architecture).
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
 
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from pixlstash.db_models import PictureSet, PictureSetMember
@@ -37,6 +38,7 @@ from pixlstash.services.project_membership_service import (
     reconcile_entity_projects_change,
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.query.predicate_filter import parse_colour_entry
 
 logger = get_logger(__name__)
 
@@ -60,6 +62,7 @@ RULE_KEYS = frozenset(
         "max_score",
         "unscored",
         "favourite",
+        "colour",
         "smart_score_bucket",
         "resolution_bucket",
         "file_path_prefix",
@@ -101,8 +104,9 @@ def normalise_filter(query: str) -> str:
     Keeps the :data:`RULE_KEYS` pairs in the order given and drops the rest.
 
     Raises:
-        SmartFilterError: Nothing that narrows the library is left, or the
-            rule is larger than :data:`MAX_FILTER_CHARS`.
+        SmartFilterError: Nothing that narrows the library is left, the
+            rule is larger than :data:`MAX_FILTER_CHARS`, or a ``colour``
+            entry is malformed (it would fail every refresh, quietly).
     """
     if not isinstance(query, str):
         raise SmartFilterError("smart_filter must be a query string")
@@ -115,6 +119,13 @@ def normalise_filter(query: str) -> str:
         raise SmartFilterError(
             "smart_filter has nothing a smart set can keep: pick a filter first"
         )
+    for key, value in pairs:
+        if key != "colour":
+            continue
+        try:
+            parse_colour_entry(value)
+        except HTTPException as exc:
+            raise SmartFilterError(str(exc.detail)) from exc
     encoded = urlencode(pairs)
     if len(encoded) > MAX_FILTER_CHARS:
         raise SmartFilterError("smart_filter is too large")

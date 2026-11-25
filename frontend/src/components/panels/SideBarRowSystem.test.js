@@ -83,7 +83,9 @@ describe("every workspace's sidebar is one sidebar", () => {
       expect(sfc).toMatch(/class="[^"]*\bsidebar-panel\b/);
       expect(sfc).toMatch(/class="[^"]*\bsidebar-nav-list\b/);
       expect(sfc).toContain('class="sidebar-list-icon');
-      expect(sfc).toContain('class="sidebar-section-header"');
+      // A static class or a bound list: Media's heads all fold, so theirs is
+      // the bound form.
+      expect(sfc).toMatch(/class="sidebar-section-header"|'sidebar-section-header',/);
     });
   }
 

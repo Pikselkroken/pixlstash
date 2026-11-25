@@ -1,0 +1,1 @@
+- Search by colour: twelve swatches in the search field and in Filters › Colour find pictures holding each picked colour, or sample one from a picture with the eyedropper, with one "contains at least" slider for how much. A picture's Info panel shows its colours as a bar; click one to filter by it. Existing pictures are counted in the background.

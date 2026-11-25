@@ -42,6 +42,7 @@ from pixlstash.utils.field_allowlist import (
     PICTURE_EXTRA_SERVABLE_FIELDS,
     require_servable_field,
 )
+from pixlstash.utils.image_processing.colour_shares import shares_from_column
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.orientation import (
     ROTATE_180,
@@ -179,6 +180,15 @@ class PictureFullMetadataResponse(BaseModel):
             "the picture than its own prompt. A sanity check for total failures "
             "(noise, a blank frame, an unrelated picture), not a quality score. "
             "Null without a prompt or before it is scored, -1 when scoring failed."
+        ),
+    )
+    colour_shares: Optional[list[float]] = Field(
+        default=None,
+        description=(
+            "The colour summary: twelve percentages that add to 100, one per "
+            "swatch in the fixed order red, orange, yellow, green, teal, blue, "
+            "purple, pink, brown, white, grey, black. Null when not computed yet "
+            "or when the thumbnail could not be read."
         ),
     )
     looks_like_prompt: Optional[bool] = Field(
@@ -1067,7 +1077,9 @@ def register_routes(router, server):
         id: str,
         smart_score: bool = Query(False),
     ):
-        metadata_fields = Picture.metadata_fields()
+        # colour_shares is outside metadata_fields (a raw JSON string there), but
+        # this route serves it shaped, so it is loaded explicitly.
+        metadata_fields = Picture.metadata_fields() | {"colour_shares"}
         pics = server.vault.db.run_immediate_read_task(
             Picture.find, id=id, select_fields=metadata_fields, include_deleted=True
         )
@@ -1111,6 +1123,7 @@ def register_routes(router, server):
         if smart_score:
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB
         pic_dict["looks_like_prompt"] = looks_like_prompt(pic.prompt_match)
+        pic_dict["colour_shares"] = shares_from_column(pic.colour_shares, pic.id)
 
         embedded_metadata = {}
         file_path = None

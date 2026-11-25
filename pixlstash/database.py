@@ -73,6 +73,8 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         # every hash computed before the columns existed.
         "ocr_text",
         "ocr_words",
+        # Colour summary (#2151): derived from the thumbnail, regenerable.
+        "colour_shares",
     }
 )
 

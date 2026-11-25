@@ -79,6 +79,12 @@
           </button>
           <span v-else class="stf-token-body stf-token-body--static">
             <span class="stf-token-kind">{{ token.label }}</span>
+            <span
+              v-if="token.swatch"
+              class="colour-mark"
+              :style="{ '--swatch': token.swatch.fill }"
+              aria-hidden="true"
+            ></span>
             <span class="stf-token-tag">{{ token.value }}</span>
           </span>
           <button
@@ -185,6 +191,12 @@
             </div>
           </template>
         </div>
+        <!-- Here whenever the list is, typed words or not, so a colour is
+             one click from anywhere (#2151); Esc that dismisses the list takes
+             it too. Esc from a swatch or the slider goes back to the words. -->
+        <div class="stf-colour" @keydown.esc.stop.prevent="focusInput">
+          <ColourSwatchPicker :count-for="colourCount" />
+        </div>
         <div class="stf-foot">
           <span><KeyCap k="Enter" /> search words</span>
           <span><kbd>Tab</kbd> add filter</span>
@@ -236,10 +248,19 @@ import {
 import { isGroupToken } from "../../stores/useTagGroupsStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import KeyCap from "../widgets/KeyCap.vue";
+import ColourSwatchPicker from "../widgets/ColourSwatchPicker.vue";
+import {
+  filterParams,
+  useFilterCounts,
+} from "../../composables/useFilterCounts";
+import { colourEntry } from "../../utils/colourSwatches";
 
 const props = defineProps({
   // "No character" and "In no set" only exist in All Pictures.
   allPicturesView: { type: Boolean, default: true },
+  // The grid's view with no filters, pre-encoded (buildFilterCountBaseQuery),
+  // for a swatch's "N at ≥10%"; null during a search, which has no count.
+  countBaseQuery: { type: String, default: null },
 });
 const emit = defineEmits(["update:open"]);
 
@@ -264,6 +285,15 @@ const copiedKey = ref(null);
 let copiedTimer = null;
 
 const catalog = ref({ ...catalogCache });
+
+// The pointed-at swatch's count over the view, as the Filters menu counts a
+// row: the view plus that one filter.
+const { count: viewCount } = useFilterCounts(() => props.countBaseQuery);
+function colourCount(id) {
+  return viewCount(
+    filterParams([["colour", colourEntry(id, filters.colourAmountFilter)]]),
+  );
+}
 
 async function loadCatalog() {
   if (Date.now() - catalogCache.fetchedAt < CATALOG_TTL_MS) return;
@@ -304,6 +334,7 @@ const tokens = computed(() =>
         // Only a tag token copies: the Clipboard holds tags, not a group's words.
         tag: tagLabel && !isGroupToken(chip.term) ? chip.term : null,
         style: tagLabel === "lacks" ? "lacks" : "has",
+        swatch: chip.swatch ?? null,
         remove: chip.remove,
       };
     },
@@ -1067,6 +1098,10 @@ defineExpose({ focus });
 .stf-row-label + .stf-row-keys,
 .stf-row-meta--count + .stf-row-keys {
   margin-left: auto;
+}
+.stf-colour {
+  padding: var(--space-3) var(--space-4) 0;
+  border-top: 1px solid rgb(var(--v-theme-divider));
 }
 .stf-foot {
   display: flex;

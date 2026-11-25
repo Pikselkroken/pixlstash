@@ -60,6 +60,8 @@ vi.mock("vue-router", async () => {
 });
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
+import { useInboxStore } from "../../stores/useInboxStore";
+import { useDedupStore } from "../../stores/useDedupStore";
 import SideBar from "./SideBar.vue";
 
 // People and Sets fold under a caret in their section heads. The caret is a
@@ -96,7 +98,7 @@ async function mountSidebar({ keepFolds = false } = {}) {
   wrapper.vm.refreshSidebar();
   for (let i = 0; i < 5; i += 1) await flushPromises();
   if (!keepFolds) {
-    for (const key of ["people", "sets"]) {
+    for (const key of ["review", "people", "sets"]) {
       const caret = wrapper.find(`[aria-controls="sidebar-section-${key}"]`);
       if (caret.attributes("aria-expanded") === "false") {
         await caret.trigger("click");
@@ -129,6 +131,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.innerHTML = "";
+  nav.route.name = "all-pictures";
 });
 
 describe("collapsing People and Sets", () => {
@@ -224,4 +227,87 @@ describe("collapsing People and Sets", () => {
     expect(section(wrapper, "people").shown()).toBe(true);
     wrapper.unmount();
   });
+});
+
+describe("collapsing Review", () => {
+  it("folds from its caret, remembers it, and opens from the head", async () => {
+    const wrapper = await mountSidebar();
+    const s = section(wrapper, "review");
+    expect(s.shown()).toBe(true);
+    expect(s.caret.attributes("aria-expanded")).toBe("true");
+    expect(s.caret.attributes("aria-label")).toBe("Collapse Review");
+
+    await s.caret.trigger("click");
+    expect(s.shown()).toBe(false);
+    expect(s.caret.attributes("aria-expanded")).toBe("false");
+    expect(s.caret.attributes("aria-label")).toBe("Expand Review");
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:collapsedSections"))[
+        "sidebar:review"
+      ],
+    ).toBe(true);
+    wrapper.unmount();
+
+    const again = await mountSidebar({ keepFolds: true });
+    expect(section(again, "review").shown()).toBe(false);
+    await section(again, "review").head.click();
+    await again.vm.$nextTick();
+    expect(section(again, "review").shown()).toBe(true);
+    again.unmount();
+  });
+
+  it("says what it hides while folded, and only then", async () => {
+    const wrapper = await mountSidebar();
+    const inbox = useInboxStore();
+    inbox.counts = { [inbox.period]: 1867 };
+    useDedupStore().openCount = 2;
+    await flushPromises();
+    const summary = () => wrapper.find('[data-testid="review-summary"]');
+    expect(summary().exists()).toBe(false);
+
+    await section(wrapper, "review").caret.trigger("click");
+    expect(summary().text()).toBe((1867).toLocaleString());
+    expect(summary().find(".sidebar-dedup-dot").exists()).toBe(true);
+
+    useDedupStore().openCount = 0;
+    await flushPromises();
+    expect(summary().find(".sidebar-dedup-dot").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("keeps the selection rail on a folded head that hides the open view", async () => {
+    const wrapper = await mountSidebar();
+    const head = () => section(wrapper, "review").head;
+    const holds = () =>
+      head().classList.contains("sidebar-section-header--holds-view");
+
+    nav.route.name = "inbox";
+    await flushPromises();
+    expect(holds()).toBe(false); // open: the Inbox row itself is lit
+
+    await section(wrapper, "review").caret.trigger("click");
+    expect(holds()).toBe(true);
+
+    nav.route.name = "all-pictures";
+    await flushPromises();
+    expect(holds()).toBe(false); // the open view is not in Review
+    wrapper.unmount();
+  });
+});
+
+describe("folded People and Sets", () => {
+  for (const [key, total] of [
+    ["people", CHARACTERS.length],
+    ["sets", SETS.length],
+  ]) {
+    it(`${key} shows its total only while folded`, async () => {
+      const wrapper = await mountSidebar();
+      const summary = () =>
+        section(wrapper, key).head.querySelector(".sidebar-section-summary");
+      expect(summary()).toBeNull();
+      await section(wrapper, key).caret.trigger("click");
+      expect(summary()?.textContent.trim()).toBe(String(total));
+      wrapper.unmount();
+    });
+  }
 });

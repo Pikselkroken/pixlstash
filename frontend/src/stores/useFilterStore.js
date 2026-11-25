@@ -2,6 +2,7 @@ import { ref, onScopeDispose, watch } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
+import { COLOUR_AMOUNT_DEFAULT, colourEntry } from "../utils/colourSwatches";
 import { useSelectionStore } from "./useSelectionStore";
 
 export const useFilterStore = defineStore("filter", () => {
@@ -22,6 +23,11 @@ export const useFilterStore = defineStore("filter", () => {
   const tagRejectedFilter = ref([]);
   const tagConfidenceAboveFilter = ref([]);
   const tagConfidenceBelowFilter = ref([]);
+  // Search by colour (#2151): the picked swatches' ids, and the one
+  // "contains at least N%" every one of them shares. A picture must hold each
+  // picked swatch at that amount (`colourFilterParams`).
+  const colourFilter = ref([]);
+  const colourAmountFilter = ref(COLOUR_AMOUNT_DEFAULT);
   const faceBboxFilter = ref(null);
   const sharedOnlyFilter = ref(false);
   // "Imported from": an import folder's path, or null for any picture.
@@ -100,6 +106,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagRejectedFilter.value = [];
     tagConfidenceAboveFilter.value = [];
     tagConfidenceBelowFilter.value = [];
+    colourFilter.value = [];
+    colourAmountFilter.value = COLOUR_AMOUNT_DEFAULT;
     faceBboxFilter.value = null;
     sharedOnlyFilter.value = false;
     importedFromFilter.value = null;
@@ -125,6 +133,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagRejectedFilter,
     tagConfidenceAboveFilter,
     tagConfidenceBelowFilter,
+    colourFilter,
+    colourAmountFilter,
     faceBboxFilter,
     sharedOnlyFilter,
     importedFromFilter,
@@ -158,4 +168,18 @@ export function workflowFilterParams(filter) {
     ...list.filter((w) => w.id).map((w) => ["workflow", w.id]),
     ...(lora ? [["workflow_lora", lora]] : []),
   ];
+}
+
+/**
+ * The listing params the colour filter sends: one `colour=<id>:<percent>` per
+ * picked swatch, each at the shared amount.
+ *
+ * @param {{colourFilter?: string[], colourAmountFilter?: number}} store
+ * @returns {Array<[string, string]>}
+ */
+export function colourFilterParams(store) {
+  return (store.colourFilter || []).map((id) => [
+    "colour",
+    colourEntry(id, store.colourAmountFilter),
+  ]);
 }

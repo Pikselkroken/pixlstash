@@ -1387,6 +1387,7 @@ def create_router(server) -> APIRouter:
         _predicate_filter = PredicateFilter.from_query_params(request)
         unscored = _predicate_filter.unscored
         favourite_only = _predicate_filter.favourite_only
+        colour_filter = _predicate_filter.colour_filter
         tags_filter = _predicate_filter.tags_filter
         tags_rejected_filter = _predicate_filter.tags_rejected_filter
         tags_confidence_above_filter = _predicate_filter.tags_confidence_above_filter
@@ -1575,6 +1576,7 @@ def create_router(server) -> APIRouter:
                 max_score=max_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 tags_filter=tags_filter,
