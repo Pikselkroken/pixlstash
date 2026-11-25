@@ -393,6 +393,9 @@ const tagReviewRowEl = ref(null);
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 // Right-click on a section HEADER (not an item): 'people' | 'sets', or null. Offers the "create/add" action.
 const sidebarCtxHeader = ref(null);
+// The header's toggle, for a dialog its menu opens to hand focus back to: the
+// header itself takes no focus.
+let sidebarCtxHeaderEl = null;
 // Right-click on empty/uncovered sidebar space: offers the view toggles
 // (auto-hide, dock mode).
 const sidebarCtxEmpty = ref(false);
@@ -2277,8 +2280,11 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
     sidebarCtxDeleteIds.value = [];
-    if (type === "header") sidebarCtxHeader.value = item;
-    else if (type === "empty") sidebarCtxEmpty.value = true;
+    if (type === "header") {
+      sidebarCtxHeader.value = item;
+      const header = event?.currentTarget ?? null;
+      sidebarCtxHeaderEl = header?.querySelector?.("button") ?? header;
+    } else if (type === "empty") sidebarCtxEmpty.value = true;
     sidebarCtxX.value = event.clientX;
     sidebarCtxY.value = event.clientY;
     sidebarCtxVisible.value = true;
@@ -7362,7 +7368,10 @@ defineExpose({
           :disabled="isReadOnly"
           data-testid="ctx-location-sheets"
           @click="
-            emit('item-sheets', { kind: 'location' });
+            emit('item-sheets', {
+              kind: 'location',
+              returnFocusTo: sidebarCtxHeaderEl,
+            });
             closeSidebarCtxMenu();
           "
         >
@@ -7374,7 +7383,10 @@ defineExpose({
           :disabled="isReadOnly"
           data-testid="ctx-prop-sheets"
           @click="
-            emit('item-sheets', { kind: 'prop' });
+            emit('item-sheets', {
+              kind: 'prop',
+              returnFocusTo: sidebarCtxHeaderEl,
+            });
             closeSidebarCtxMenu();
           "
         >

@@ -2320,6 +2320,20 @@ def test_item_sheets_are_prompted_ranked_and_cut_into_four_pictures(client):
         3,
     ]
     assert row["agreement_words"] == "the four views agree"
+    # Owner only: a READ token, and one scoped to the sheet itself, are refused
+    # both routes, which the owner reaches here (so they resolve). The refusal
+    # is the READ write-belt's, ahead of the gate: no mintable token but the
+    # owner's can POST, so the registry row is not what this exercises.
+    for restriction in ({}, {"resource_type": "picture", "resource_id": sheet}):
+        guest = bearer_client(
+            client.server, mint_read_token(client, "item sheets", **restriction)
+        )
+        for route in ("rank", "use"):
+            refused = guest.post(
+                f"{API_PREFIX}/item-sheets/{route}",
+                json={"kind": "location", "picture_ids": [sheet]},
+            )
+            assert refused.status_code == 403, (route, restriction)
     used = client.post(
         f"{API_PREFIX}/item-sheets/use",
         json={"kind": "location", "picture_ids": [sheet]},
