@@ -41,8 +41,8 @@ class SheetPromptRequest(BaseModel):
         "character",
         description="`character` is a person's six-photo sheet; `outfit`, "
         "`location` and `prop` are four angles of one item, always as prose "
-        "(`layout`, `framing`, `subject`, `proportions` and `trigger` are "
-        "ignored for them).",
+        "from `description` and `size` alone (every other field is ignored "
+        "for them).",
     )
     description: str = Field("", max_length=_TEXT)
     body: str = Field("", max_length=_TEXT)
@@ -82,22 +82,6 @@ class SheetPromptRequest(BaseModel):
         description="With `layout: prose`, the photos read as a model agency's "
         'unedited digitals rather than renders, and "photorealistic" is '
         "left out. The `moss` and `regions` layouts ignore it.",
-    )
-    contents: str = Field(
-        "", max_length=_TEXT, description="A location's: what is in it."
-    )
-    ground: str = Field("", max_length=_TEXT, description="A location's ground.")
-    surroundings: str = Field(
-        "", max_length=_TEXT, description="A location's: what is around it."
-    )
-    material: str = Field("", max_length=_TEXT, description="A prop's material.")
-    scale: str = Field(
-        "", max_length=200, description="A prop's size, in words ('about 1 m')."
-    )
-    daylight: bool = Field(
-        True,
-        description="A location is drawn in plain midday daylight, since each "
-        "scene sets its own time and weather; off, as described.",
     )
     look_added_by_run: bool = Field(
         False,
@@ -297,31 +281,11 @@ def create_router(server) -> APIRouter:
     def sheet_prompt(payload: SheetPromptRequest):
         fields = payload.model_dump()
         kind = fields.pop("kind")
-        item = {
-            key: fields.pop(key)
-            for key in (
-                "contents",
-                "ground",
-                "surroundings",
-                "material",
-                "scale",
-                "daylight",
-            )
-        }
         if kind == "character":
             prompt = character_sheet.sheet_prompt(**fields)
         else:
             prompt = character_sheet.item_sheet_prompt(
-                kind=kind,
-                description=fields["description"],
-                top=fields["top"],
-                trousers=fields["trousers"],
-                shoes=fields["shoes"],
-                background=fields["background"],
-                reference=fields["reference"],
-                photo_look=fields["photo_look"],
-                look_added_by_run=fields["look_added_by_run"],
-                **item,
+                kind=kind, description=payload.description
             )
         return SheetPrompt(
             prompt=prompt,

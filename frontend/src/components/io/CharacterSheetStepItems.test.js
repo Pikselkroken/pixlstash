@@ -1,7 +1,7 @@
 // The sheet step drawing an item (an outfit here) rather than a character:
-// prose workflows only, MiniMax H3 Image first; the outfit's fields reach the
-// prompt; its sheets rank without faces; and using one makes a set of its
-// panels under the person who wears it.
+// prose workflows only, MiniMax H3 Image first and a shipped one ahead of the
+// owner's own; a form of description, name and count alone; its sheets rank
+// without faces; and using one makes a set of its panels under the person.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -81,6 +81,16 @@ const MINIMAX = {
   id: "auto:h3",
   name: "MiniMax H3 Image Sheet",
   type: "txt2img",
+  built_in: true,
+  models: [{ kind: "unet", base_model_family: "minimax_h3_image" }],
+};
+// The owner's own MiniMax graph, used last: it may save several pictures a
+// run, so the shipped one still comes first.
+const MINIMAX_OWN = {
+  id: "manual:own",
+  name: "SABsheet-test",
+  type: "txt2img",
+  last_used: "2026-11-25",
   models: [{ kind: "unet", base_model_family: "minimax_h3_image" }],
 };
 
@@ -89,7 +99,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   setActivePinia(createPinia());
   localStorage.clear();
-  api.listWorkflowCards.mockResolvedValue({ cards: [MOSS, QWEN, MINIMAX] });
+  api.listWorkflowCards.mockResolvedValue({
+    cards: [MOSS, QWEN, MINIMAX_OWN, MINIMAX],
+  });
   api.getWorkflowCard.mockResolvedValue({
     card: {
       name: "sheet",
@@ -168,17 +180,24 @@ describe("CharacterSheetStep: an outfit", () => {
     expect(api.getCharacter).not.toHaveBeenCalled();
     expect(api.listAdapters).not.toHaveBeenCalled();
     const offered = wrapper.vm.workflowOptions.map((o) => o.value);
-    expect(offered).toEqual(["auto:h3", "auto:qwen"]);
+    expect(offered).toEqual(["auto:h3", "manual:own", "auto:qwen"]);
     expect(wrapper.vm.workflowId).toBe("auto:h3");
-    expect(wrapper.find('[data-testid="cs-lora"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="cs-framing"]').exists()).toBe(false);
+    // Description, name and count: none of a character's controls, no size,
+    // look or sampler, and no drawing from a picture.
+    for (const id of [
+      "cs-lora",
+      "cs-framing",
+      "cs-size",
+      "cs-photo-look",
+      "cs-sampler",
+      "cs-mode",
+    ]) {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists(), id).toBe(false);
+    }
+    expect(wrapper.vm.form.count).toBe(2);
 
     await wrapper.find('[data-testid="cs-description"] textarea').setValue(
       "a mustard raincoat",
-    );
-    wrapper.findComponent('[data-testid="cs-item-top"]').vm.$emit(
-      "update:modelValue",
-      "a black roll-neck",
     );
     wrapper.findComponent('[data-testid="cs-item-name"]').vm.$emit(
       "update:modelValue",
@@ -191,7 +210,6 @@ describe("CharacterSheetStep: an outfit", () => {
       expect.objectContaining({
         kind: "outfit",
         description: "a mustard raincoat",
-        top: "a black roll-neck",
         layout: "prose",
       }),
     );
@@ -200,9 +218,13 @@ describe("CharacterSheetStep: an outfit", () => {
       expect.objectContaining({
         workflow_id: "auto:h3",
         hold: true,
+        count: 2,
         label: "Outfit sheet · Mustard raincoat",
       }),
     );
+    const run = api.runWorkflowCard.mock.calls[0][0];
+    expect(run.prompt_assist).toBeUndefined();
+    expect(run.sampler).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(3000);
     await flushPromises();

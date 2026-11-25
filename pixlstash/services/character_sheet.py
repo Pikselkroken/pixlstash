@@ -657,100 +657,53 @@ ITEM_PHOTO_LOOK = (
 )
 
 
-def item_sheet_prompt(
-    *,
-    kind: ItemKind,
-    description: str,
-    top: str = "",
-    trousers: str = "",
-    shoes: str = "",
-    background: str = "",
-    contents: str = "",
-    ground: str = "",
-    surroundings: str = "",
-    material: str = "",
-    scale: str = "",
-    daylight: bool = True,
-    reference: bool = False,
-    photo_look: bool = True,
-    look_added_by_run: bool = False,
-) -> str:
+def item_sheet_prompt(*, kind: ItemKind, description: str) -> str:
     """The prose prompt for one sheet of an outfit, a location or a prop.
 
     Prose only: the layouts MOSS-Image reads are probed for a character's six
     panels. Every view is named by its place on the sheet, and the whole item
     is said once for all four, so every panel draws the same one. An outfit is
-    worn, chin to feet, so no face competes with it; a location is always
-    empty, in plain daylight unless *daylight* is off (each scene sets its own
-    time and weather); a prop stands alone. *reference* says the item is the
-    one in the reference picture. *photo_look* and *look_added_by_run* work as
-    in :func:`sheet_prompt`, with :data:`ITEM_PHOTO_LOOK` as the look.
+    on an invisible mannequin, collar to shoe soles, so no body competes with
+    it; a location is always empty, in plain daylight (each scene sets its own
+    time and weather); a prop stands alone. :data:`ITEM_PHOTO_LOOK` is always
+    the look.
     """
     noun = _ITEM_NOUN[kind]
-    described = _phrase(description)
-    if reference:
-        same = f"the same {noun} as in the reference picture"
-        if kind == "location":
-            same = f"{same}, without any people in it"
-        described = f"{same}, {described}" if described else same
-    described = described or f"an everyday {noun}"
+    described = _phrase(description) or f"an everyday {noun}"
     views = ", ".join(f"({n}) {view}" for n, view in enumerate(_ITEM_VIEWS[kind], 1))
-    unrendered = photo_look or look_added_by_run
-    photos = "photographs" if unrendered else "photorealistic photographs"
-    backdrop = _phrase(background)
-    setting = (
-        f"with the background: {backdrop}"
-        if backdrop
-        else "on a plain light-grey studio background, soft even studio lighting"
-    )
+    studio = "on a plain light-grey studio background, soft even studio lighting"
     if kind == "outfit":
-        parts = [
-            _phrase(top),
-            _phrase(trousers),
-            _phrase(shoes),
-        ]
-        pieces = "; ".join(part for part in parts if part)
         text = (
-            f"Outfit reference sheet {setting}, {photos}: one and the same "
-            "outfit worn by the same adult, in four tall photos of equal size "
-            "side by side, each spanning the full height of the sheet, "
-            "separated by thin white borders. Every photo is cropped at the "
-            "chin, so no face shows, and runs down to the feet: "
-            f"{views}. The outfit is {described}"
-            f"{f': {pieces}' if pieces else ''}. Identical garments, colours, "
-            "fabric, fit and details in every photo."
-        )
-    elif kind == "location":
-        details = [
-            f"In it: {_phrase(contents)}." if _phrase(contents) else "",
-            f"The ground: {_phrase(ground)}." if _phrase(ground) else "",
-            f"Around it: {_phrase(surroundings)}." if _phrase(surroundings) else "",
-            "Plain daylight at midday, clear weather." if daylight else "",
-        ]
-        text = (
-            f"Location reference sheet, {photos} of one and the same place, "
-            f"{described}, in four photos of equal size, two by two, "
-            f"separated by thin white borders: {views}. "
-            f"{' '.join(d for d in details if d)} The place is empty: no "
-            "people and no animals. Identical place, layout, materials and "
+            f"Outfit reference sheet {studio}, photographs: one and the same "
+            "outfit on an invisible mannequin (ghost mannequin product "
+            "photography), in four tall photos of equal size side by side, "
+            "each spanning the full height of the sheet, separated by thin "
+            "white borders. Nobody wears it: no head, neck, skin, hands or "
+            "legs show, the clothes hold the shape of a body and the inside "
+            "of the collar shows. Every photo runs from the collar down to "
+            "the soles of the shoes, which rest on the bottom edge of the "
+            f"photo with no floor below them: {views}. The outfit is "
+            f"{described}. Identical garments, colours, fabric, fit and "
             "details in every photo."
         )
-    else:
-        details = [
-            f"Material: {_phrase(material)}." if _phrase(material) else "",
-            f"Size: {_phrase(scale)}." if _phrase(scale) else "",
-        ]
+    elif kind == "location":
         text = (
-            f"Prop reference sheet {setting}, {photos} of one and the same "
-            f"object, {described}, on its own in four photos of equal size, "
-            f"two by two, separated by thin white borders: {views}. "
-            f"{' '.join(d for d in details if d)} Nothing else is in the "
-            "photos: no people and no hands. Identical shape, colours, "
-            "material and details in every photo."
+            "Location reference sheet, photographs of one and the same place, "
+            f"{described}, in four photos of equal size, two by two, "
+            f"separated by thin white borders: {views}. Plain daylight at "
+            "midday, clear weather. The place is empty: no people and no "
+            "animals. Identical place, layout, materials and details in "
+            "every photo."
         )
-    text = " ".join(text.split())
-    look = photo_look and not look_added_by_run
-    return f"{text} {ITEM_PHOTO_LOOK}" if look else text
+    else:
+        text = (
+            f"Prop reference sheet {studio}, photographs of one and the same "
+            f"object, {described}, on its own in four photos of equal size, "
+            f"two by two, separated by thin white borders: {views}. Nothing "
+            "else is in the photos: no people and no hands. Identical shape, "
+            "colours, material and details in every photo."
+        )
+    return f"{' '.join(text.split())} {ITEM_PHOTO_LOOK}"
 
 
 class SheetConversionRefused(ValueError):

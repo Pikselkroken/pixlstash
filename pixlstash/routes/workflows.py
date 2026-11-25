@@ -857,6 +857,10 @@ class WorkflowCard(BaseModel):
             "edit, an extract)."
         ),
     )
+    built_in: bool = Field(
+        False,
+        description="A workflow PixlStash ships, stored from its built-in file.",
+    )
     versions: int = Field(
         1,
         description=(
@@ -4415,6 +4419,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         from_name=figure.card.from_name,
         draft=figure.card.draft,
         origin_category=_origin_category(figure.card),
+        built_in=figure.card.built_in,
         versions=figure.card.versions,
         version=figure.card.version,
         version_at=figure.card.version_at,

@@ -35,7 +35,7 @@ from pixlstash.hub.workflow_cards import (
     STRIP_LORAS_FOR_STACKS,
     variant_workflow_id,
 )
-from pixlstash.hub.workflow_origin import TEMPLATE_ORIGIN
+from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, TEMPLATE_ORIGIN
 from pixlstash.hub.workflow_versions import saved_over_ids
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
@@ -134,6 +134,8 @@ class Card:
     # from ComfyUI (a version holding the API graph) or a conversion stored
     # on it ends it.
     draft: bool = False
+    # Stored from a workflow PixlStash ships (a ``builtin`` origin row).
+    built_in: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,7 +248,9 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
         "d.created_at) AS version_at, "
         "(SELECT MAX(v.version) FROM workflow_version v "
         "WHERE v.workflow_id = d.workflow_id) AS current_version, "
-        f"{_DRAFT_SQL} AS draft "
+        f"{_DRAFT_SQL} AS draft, "
+        "EXISTS (SELECT 1 FROM workflow_origin o WHERE o.workflow_name = "
+        f"d.workflow_id AND o.origin = '{BUILTIN_ORIGIN}') AS built_in "
         "FROM workflow_document d ORDER BY d.workflow_id"
     )
     # A deleted workflow's description goes with it.
@@ -269,6 +273,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             version_at=row["version_at"],
             created_at=row["created_at"],
             draft=bool(row["draft"]),
+            built_in=bool(row["built_in"]),
         )
         for row in rows
         for facts in (

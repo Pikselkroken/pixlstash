@@ -118,26 +118,15 @@
           />
           <span class="cs-hint">{{ descriptionHint }}</span>
         </div>
-        <!-- An item's own fields, then its name: the set its panels go in. -->
-        <template v-if="item">
-          <div class="cs-grid2">
-            <RecentInput
-              v-for="field in item.fields"
-              :key="field.key"
-              v-model="form[field.key]"
-              :label="field.label"
-              :placeholder="field.placeholder"
-              :options="field.recent ? offered[field.key] : []"
-              :data-testid="`cs-item-${field.key}`"
-            />
-            <RecentInput
-              v-model="form.name"
-              label="Name"
-              :placeholder="item.newName"
-              data-testid="cs-item-name"
-            />
-          </div>
-        </template>
+        <!-- An item's name: the set its panels go in. The description says
+             the rest. -->
+        <RecentInput
+          v-if="item"
+          v-model="form.name"
+          label="Name"
+          :placeholder="item.newName"
+          data-testid="cs-item-name"
+        />
         <!-- Each offers what earlier sheets were drawn with, the last one
              filled in. -->
         <template v-else>
@@ -176,7 +165,7 @@
              the Natural/Off switch below. On, the run adds its lines and the
              sheet prompt none of its own; off, neither adds a look. -->
         <PromptAssistGroup
-          v-if="layout === 'prose' && sheetAssist"
+          v-if="!item && layout === 'prose' && sheetAssist"
           :assist="sheetAssist"
           :model="sheetLook"
           @change="askSheetAssist"
@@ -184,7 +173,7 @@
         <!-- Until the chosen workflow answers its check the group's place is held,
              so the step does not open on the switch below and then swap it. -->
         <div
-          v-else-if="sheetLookPending"
+          v-else-if="!item && sheetLookPending"
           class="cs-look-pending"
           aria-hidden="true"
           data-testid="cs-look-pending"
@@ -212,7 +201,7 @@
                 :options="COUNTS"
               />
             </div>
-            <div class="cs-opt">
+            <div v-if="!item" class="cs-opt">
               <FieldLabel>Sheet size</FieldLabel>
               <!-- A pick: a click, even on the size shown, or the arrows. -->
               <Segmented
@@ -222,15 +211,6 @@
                 data-testid="cs-size"
                 @pick="picked.add('size')"
                 @update:model-value="picked.add('size')"
-              />
-            </div>
-            <div v-if="kind === 'location'" class="cs-opt">
-              <FieldLabel>Drawn as</FieldLabel>
-              <Segmented
-                v-model="form.daylight"
-                aria-label="Drawn as"
-                :options="DRAWN_AS"
-                data-testid="cs-drawn-as"
               />
             </div>
             <div v-if="!item" class="cs-opt">
@@ -243,7 +223,10 @@
                 @pick="proportionsTouched = true"
               />
             </div>
-            <div v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-opt">
+            <div
+              v-if="!item && layout === 'prose' && !sheetAssist && !sheetLookPending"
+              class="cs-opt"
+            >
               <FieldLabel>Photo look</FieldLabel>
               <Segmented
                 v-model="form.photo_look"
@@ -252,7 +235,7 @@
                 data-testid="cs-photo-look"
               />
             </div>
-            <div v-if="sheetSamplerChoice" class="cs-opt">
+            <div v-if="!item && sheetSamplerChoice" class="cs-opt">
               <FieldLabel>Sampler</FieldLabel>
               <Segmented
                 v-model="sampler"
@@ -265,19 +248,17 @@
           <span v-if="!item" class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
-          <span v-else-if="kind === 'location'" class="cs-hint"
-            >Plain daylight draws the place at midday with no weather, because
-            each scene sets its own.</span
-          >
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
           >
-          <span v-if="layout === 'prose' && !sheetAssist && !sheetLookPending" class="cs-hint"
+          <span
+            v-if="!item && layout === 'prose' && !sheetAssist && !sheetLookPending"
+            class="cs-hint"
             >Photo look asks for plain, unretouched photos rather than a
             polished render.</span
           >
           <span
-            v-if="sheetSamplerChoice"
+            v-if="!item && sheetSamplerChoice"
             class="cs-hint"
             data-testid="cs-sampler-hint"
             >{{ SAMPLER_HINT }}</span
@@ -861,7 +842,7 @@ import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import { usePromptAssist } from "../../composables/usePromptAssist";
 import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
 import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
-import { DRAWN_AS, ITEM_KINDS, panelSize } from "../../utils/sheetKinds";
+import { ITEM_KINDS, panelSize } from "../../utils/sheetKinds";
 import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
@@ -1031,19 +1012,17 @@ const form = reactive({
   proportions: "typical",
   // An older saved form has none, and reads as on.
   photo_look: true,
-  // An item's: its name and the fields only it has (utils/sheetKinds.js).
+  // An item's name: the set its panels go in.
   name: "",
-  contents: "",
-  ground: "",
-  surroundings: "",
-  material: "",
-  scale: "",
-  daylight: true,
 });
 // A step with nothing saved starts from the choices last made.
 const remembered = props.saved ? null : readChoices();
 if (SIZES.some((s) => s.id === remembered?.size)) form.size = remembered.size;
-if (COUNTS.some((c) => c.id === remembered?.count)) form.count = remembered.count;
+// An item starts at two sheets, whatever a character's draw last asked for.
+if (item.value) form.count = 2;
+else if (COUNTS.some((c) => c.id === remembered?.count)) {
+  form.count = remembered.count;
+}
 if (typeof remembered?.photo_look === "boolean") {
   form.photo_look = remembered.photo_look;
 }
@@ -2284,11 +2263,14 @@ async function draw() {
   const inputs = workflowInputs.value;
   const sheetLayout = layout.value;
   // Where the group shows it is the photo look's On/Off: off adds no look.
-  const grouped = Boolean(sheetAssist.value) && sheetLayout === "prose";
+  // An item's sheet takes no look from the run, and the graph's own sampler.
+  const grouped =
+    !item.value && Boolean(sheetAssist.value) && sheetLayout === "prose";
   const assist = grouped ? sheetLook.request() : null;
   const photoLook = grouped ? false : form.photo_look;
   // LCM is the graph as saved, so only Euler is sent.
-  const euler = sheetSamplerChoice.value && sampler.value === "euler";
+  const euler =
+    !item.value && sheetSamplerChoice.value && sampler.value === "euler";
   rememberRecent();
   try {
     const description = form.description.trim();
@@ -2296,15 +2278,6 @@ async function draw() {
       await patchCharacter(props.character.id, { description });
       savedDescription.value = description;
     }
-    const itemFields = item.value
-      ? {
-          kind: props.kind,
-          ...Object.fromEntries(
-            item.value.fields.map((f) => [f.key, form[f.key] || ""]),
-          ),
-          ...(props.kind === "location" ? { daylight: form.daylight } : {}),
-        }
-      : {};
     const sheet = await buildSheetPrompt({
       description,
       top: form.top,
@@ -2322,9 +2295,8 @@ async function draw() {
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
       ...(sheetLayout ? { layout: sheetLayout } : {}),
-      // An item's kind and fields over the character's; the route ignores
-      // the character's for an item.
-      ...itemFields,
+      // An item's sheet is its description alone; the route ignores the rest.
+      ...(item.value ? { kind: props.kind } : {}),
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -2728,11 +2700,14 @@ function sortCards(cards) {
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
   cardRows = cards;
   // An item sheet is prose only. MiniMax H3 Image is the model it starts on
-  // (no item sheet has been probed on any model yet), so it is listed first.
+  // (no item sheet has been probed on any model yet), so it is listed first,
+  // and a shipped workflow ahead of the owner's own: one of theirs may run
+  // several samplers and save each.
   const itemFirst = (a, b) =>
     item.value
       ? Number(cardEngine(b) === ENGINES.minimaxImage) -
-        Number(cardEngine(a) === ENGINES.minimaxImage)
+          Number(cardEngine(a) === ENGINES.minimaxImage) ||
+        Number(!!b.built_in) - Number(!!a.built_in)
       : 0;
   workflows.value = cards
     .filter(
@@ -2755,16 +2730,20 @@ function sortCards(cards) {
         cardEngine(card) !== ENGINES.moss,
     )
     .sort(recent);
-  referenceCards.value = cards
-    .filter((card) => card.reference_inputs > 0 && referenceEngine(card))
-    .sort((a, b) => itemFirst(a, b) || recent(a, b));
+  // An item is drawn from words alone.
+  referenceCards.value = item.value
+    ? []
+    : cards
+        .filter((card) => card.reference_inputs > 0 && referenceEngine(card))
+        .sort(recent);
   // An edit workflow that draws on its picture's own canvas: a sheet copy of
   // it is what the reference mode runs.
-  convertible.value = referenceCards.value.length
-    ? null
-    : cards
-        .filter((card) => card.type === "img2img" && referenceEngine(card))
-        .sort(recent)[0] || null;
+  convertible.value =
+    item.value || referenceCards.value.length
+      ? null
+      : cards
+          .filter((card) => card.type === "img2img" && referenceEngine(card))
+          .sort(recent)[0] || null;
 }
 
 /** Show the workflows of the last full check at once. Their checks are run
@@ -2958,13 +2937,10 @@ function readRecent(choices) {
 /** Put what this draw wears and stands in front of first in each field's
  * list. Shoes only at full body, the one framing that shows them. */
 function rememberRecent() {
-  // An item remembers only the shared fields it shows; an outfit always
-  // shows its shoes.
-  const shown = item.value
-    ? item.value.fields.filter((f) => f.recent).map((f) => f.key)
-    : RECENT_FIELDS;
-  const fields = shown.filter(
-    (field) => item.value || field !== "shoes" || form.framing === "full_body",
+  // An item shows none of the fields.
+  if (item.value) return;
+  const fields = RECENT_FIELDS.filter(
+    (field) => field !== "shoes" || form.framing === "full_body",
   );
   remember((all) => {
     const lists = readRecent(all);
@@ -3009,6 +2985,7 @@ watch(
 watch(
   () => form.count,
   (count) =>
+    item.value ||
     remember((all) => {
       all.count = count;
     }),

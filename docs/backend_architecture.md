@@ -13373,9 +13373,13 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **Outfit, location and prop sheets.** The same dialog and step draw an
   item by its *kind* (`outfit`, `location`, `prop`): `POST
   /character-sheets/prompt` with `kind` writes `item_sheet_prompt`, always
-  prose, four angles on one 5:3 sheet (an outfit's four tall chin-to-feet
-  panels side by side: Front, ¾, Side, Back; a location's Wide, Reverse, Left,
-  Right and a prop's Front, ¾, Side, Back two by two). The run, the hold in the
+  prose from the description alone, four angles on one 5:3 sheet (an
+  outfit's four tall panels side by side, on an invisible mannequin from the
+  collar to the shoe soles: Front, ¾, Side, Back; a location's Wide, Reverse,
+  Left, Right and a prop's Front, ¾, Side, Back two by two). The step lists
+  MiniMax H3 Image workflows first and, among them, the shipped ones
+  (`WorkflowCard.built_in`): an owner's graph may sample several seeds a run
+  and save each, which multiplies the sheets asked for. The run, the hold in the
   Scrapheap and the cut search (`_find_cut`, the frame and gutter trims) are
   the character sheet's; `item_sheet_cells` cuts the item's grid, columns
   first, then each column's rows. Items have no faces, so `POST

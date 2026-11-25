@@ -1447,36 +1447,20 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
 
 
 def test_each_item_sheet_names_its_four_views_and_the_item_once():
-    outfit = item_sheet_prompt(
-        kind="outfit",
-        description="A mustard raincoat.",
-        top="a black roll-neck",
-        trousers="dark jeans",
-        shoes="rubber boots",
-    )
+    outfit = item_sheet_prompt(kind="outfit", description="A mustard raincoat.")
     assert "four tall photos of equal size side by side" in outfit
-    assert "(4) back view" in outfit and "cropped at the chin" in outfit
-    assert "a mustard raincoat: a black roll-neck; dark jeans; rubber boots" in outfit
+    assert "(4) back view" in outfit and "The outfit is a mustard raincoat." in outfit
+    # Nobody inside it, and nothing below the shoes.
+    assert "invisible mannequin" in outfit and "no head, neck, skin" in outfit
+    assert "soles of the shoes" in outfit and "no floor below them" in outfit
+    assert "worn by" not in outfit and "cropped at the chin" not in outfit
     location = item_sheet_prompt(kind="location", description="a pine trail")
     assert "two by two" in location and "(2) top right, the reverse view" in location
     assert "no people" in location and "Plain daylight" in location
-    assert "Plain daylight" not in item_sheet_prompt(
-        kind="location", description="a pine trail", daylight=False
-    )
-    prop = item_sheet_prompt(
-        kind="prop", description="a red umbrella", material="nylon", scale="1 m"
-    )
-    assert "Material: nylon. Size: 1 m." in prop and "no hands" in prop
-
-
-def test_an_item_sheet_from_a_picture_and_its_look():
-    drawn = item_sheet_prompt(kind="location", description="x", reference=True)
-    assert "the same place as in the reference picture, without any people" in drawn
-    assert drawn.endswith(ITEM_PHOTO_LOOK) and "photorealistic" not in drawn
-    plain = item_sheet_prompt(kind="prop", description="x", photo_look=False)
-    assert ITEM_PHOTO_LOOK not in plain and "photorealistic" in plain
-    by_run = item_sheet_prompt(kind="prop", description="x", look_added_by_run=True)
-    assert ITEM_PHOTO_LOOK not in by_run and "photorealistic" not in by_run
+    prop = item_sheet_prompt(kind="prop", description="a red umbrella")
+    assert "a red umbrella, on its own" in prop and "no hands" in prop
+    for prompt in (outfit, location, prop):
+        assert prompt.endswith(ITEM_PHOTO_LOOK) and "photorealistic" not in prompt
 
 
 def test_an_outfit_sheet_is_cut_into_four_columns_on_its_dividers():
