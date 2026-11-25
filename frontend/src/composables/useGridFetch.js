@@ -30,6 +30,7 @@ import { debounce } from "../utils/utils";
 import {
   useFilterStore,
   workflowFilterParams,
+  colourFilterParams,
 } from "../stores/useFilterStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
@@ -222,6 +223,8 @@ export function useGridFetch(
       // early-return as a no-op against the previous state's key.
       stackStateFilter: filterStore.stackStateFilter ?? "all",
       favouriteOnlyFilter: Boolean(filterStore.favouriteOnlyFilter),
+      // Changes which pictures the grid shows (#2151).
+      colourFilter: new URLSearchParams(colourFilterParams(filterStore)).toString(),
       similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
@@ -486,6 +489,9 @@ export function useGridFetch(
     (filterStore.tagConfidenceBelowFilter || []).forEach((e) =>
       params.append("tag_confidence_below", e),
     );
+    colourFilterParams(filterStore).forEach(([name, value]) =>
+      params.append(name, value),
+    );
     if (userPrefsStore.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }
@@ -611,6 +617,9 @@ export function useGridFetch(
     );
     (filterStore.tagConfidenceBelowFilter || []).forEach((e) =>
       params.append("tag_confidence_below", e),
+    );
+    colourFilterParams(filterStore).forEach(([name, value]) =>
+      params.append(name, value),
     );
     if (filterStore.faceBboxFilter != null) {
       params.append("face_filter", filterStore.faceBboxFilter);
@@ -1181,6 +1190,10 @@ export function useGridFetch(
         );
         (filterStore.tagConfidenceBelowFilter || []).forEach((e) =>
           _filterP.append("tag_confidence_below", e),
+        );
+        // Filter params: picked colours, each at the shared amount (#2151)
+        colourFilterParams(filterStore).forEach(([name, value]) =>
+          _filterP.append(name, value),
         );
         // Filter params: face bbox filter
         if (filterStore.faceBboxFilter != null)

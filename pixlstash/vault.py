@@ -2589,6 +2589,14 @@ class Vault:
                     or 0
                 )
                 label = "orientations_read"
+            elif worker_type == TaskType.COLOUR_SHARES:
+                # The colour backfill (#2151) walks the whole library once; in
+                # `planner_managed` it would read finished all the way through.
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_colour_shares)
+                    or 0
+                )
+                label = "colours_counted"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
                 # the v1.8.0 upgrade this counted the entire library; a fresh
@@ -2659,6 +2667,24 @@ class Vault:
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
         ).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    def _count_missing_colour_shares(self, session: Session) -> int:
+        """Mirrors ``MissingColourSharesFinder._fetch_candidates``, so the row can reach 0."""
+        stmt = (
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.colour_shares.is_(None))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.thumbnail_width.is_not(None))
+            .where(Picture.file_path.is_not(None))
+        )
+        suppressed = self.db.unprocessable_images.active_suppressed_ids()
+        if suppressed:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed)))
+        result = session.exec(stmt).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0

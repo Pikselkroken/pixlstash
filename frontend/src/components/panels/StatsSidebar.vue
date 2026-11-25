@@ -31,7 +31,10 @@ import {
   useRailPicture,
 } from "../../composables/useRailPicture";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
-import { useFilterStore } from "../../stores/useFilterStore";
+import {
+  colourFilterParams,
+  useFilterStore,
+} from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -543,6 +546,9 @@ function buildQueryParams() {
   );
   (filterStore.tagConfidenceBelowFilter || []).forEach((e) =>
     params.append("tag_confidence_below", e),
+  );
+  colourFilterParams(filterStore).forEach(([name, value]) =>
+    params.append(name, value),
   );
 
   return params.toString();

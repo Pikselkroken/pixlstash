@@ -10,6 +10,12 @@
       <span v-for="chip in chips" :key="chip.key" class="filter-chip">
         <span class="filter-chip-text"
           ><span class="filter-chip-kind">{{ chip.kind }}</span>
+          <span
+            v-if="chip.swatch"
+            class="colour-mark filter-chip-swatch"
+            :style="{ '--swatch': chip.swatch.fill }"
+            aria-hidden="true"
+          ></span>
           {{ chip.value }}</span
         >
         <button
@@ -176,6 +182,9 @@ function clearAll() {
 }
 .filter-chip-text {
   padding-right: var(--space-1);
+}
+.filter-chip-swatch {
+  vertical-align: middle;
 }
 .filter-chip-kind {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));

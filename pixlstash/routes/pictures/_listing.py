@@ -51,6 +51,7 @@ from pixlstash.utils.query.predicate_filter import (
     PredicateFilter,
     inbox_cutoff,
     is_truthy_flag,
+    parse_colour_entry,
 )
 
 from ._helpers import (
@@ -325,6 +326,16 @@ class PictureListFilters:
         ),
         favourite: bool = Query(
             False, description="Only the owner's favourite pictures."
+        ),
+        colour: list[str] = Query(
+            [],
+            description=(
+                "Repeatable colour filter, ANDed: <swatch>:<min_percent>, e.g. "
+                "blue:10 keeps pictures at least 10% blue. Swatches: red, orange, "
+                "yellow, green, teal, blue, purple, pink, brown, white, grey, black. "
+                "Pictures with no colour summary yet never match."
+            ),
+            examples=["blue:10"],
         ),
         smart_score_bucket: str | None = Query(
             None, description="unscored | 1-2 | 2-3 | 3-4 | 4-5"
@@ -769,6 +780,13 @@ def select_pictures_for_listing(
     # key that is not a Picture column, so the filter would do nothing at all.
     unscored = is_truthy_flag(query_params.pop("unscored", None))
     favourite_only = is_truthy_flag(query_params.pop("favourite", None))
+    # Repeatable ``colour=<swatch>:<min_percent>``; read with getlist because
+    # ``dict(request.query_params)`` keeps only the last value of a repeated key.
+    # Validated here so a malformed entry is a 422 from the route itself.
+    colour_filter = request.query_params.getlist("colour") or None
+    query_params.pop("colour", None)
+    for _colour_entry in colour_filter or []:
+        parse_colour_entry(_colour_entry)
     smart_score_bucket = query_params.pop("smart_score_bucket", None) or None
     resolution_bucket = query_params.pop("resolution_bucket", None) or None
     project_id_raw = query_params.pop("project_id", None)
@@ -954,6 +972,7 @@ def select_pictures_for_listing(
         max_score_value: int | None = None,
         unscored_value: bool = False,
         favourite_only_value: bool = False,
+        colour_filter_value: list[str] | None = None,
         smart_score_bucket_value: str | None = None,
         resolution_bucket_value: str | None = None,
         tags_filter_value: list[str] | None = None,
@@ -1005,6 +1024,7 @@ def select_pictures_for_listing(
                 and max_score_value is None
                 and not unscored_value
                 and not favourite_only_value
+                and not colour_filter_value
                 and smart_score_bucket_value is None
                 and resolution_bucket_value is None
                 and not tags_filter_value
@@ -1062,6 +1082,7 @@ def select_pictures_for_listing(
             max_score=max_score_value,
             unscored=unscored_value,
             favourite_only=favourite_only_value,
+            colour_filter=colour_filter_value,
             smart_score_bucket=smart_score_bucket_value,
             resolution_bucket=resolution_bucket_value,
             tags_filter=tags_filter_value,
@@ -1103,6 +1124,7 @@ def select_pictures_for_listing(
             max_score_value=max_score,
             unscored_value=unscored,
             favourite_only_value=favourite_only,
+            colour_filter_value=colour_filter,
             smart_score_bucket_value=smart_score_bucket,
             resolution_bucket_value=resolution_bucket,
             tags_filter_value=query_params.get("tags_filter"),
@@ -1231,6 +1253,7 @@ def select_pictures_for_listing(
                 max_score=max_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -1271,6 +1294,7 @@ def select_pictures_for_listing(
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
@@ -1318,6 +1342,7 @@ def select_pictures_for_listing(
                 max_score=max_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
@@ -1342,6 +1367,7 @@ def select_pictures_for_listing(
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
@@ -1602,6 +1628,7 @@ def select_pictures_for_listing(
                 max_score=max_score,
                 unscored=unscored,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
@@ -1624,6 +1651,7 @@ def select_pictures_for_listing(
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

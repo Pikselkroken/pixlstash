@@ -46,6 +46,8 @@ from .pixel_sha_task import PixelShaTask
 from .missing_pixel_sha_finder import MissingPixelShaFinder
 from .orientation_task import OrientationTask
 from .missing_orientation_finder import MissingOrientationFinder
+from .colour_shares_task import ColourSharesTask
+from .missing_colour_shares_finder import MissingColourSharesFinder
 from .dedup_scan_task import DedupScanTask
 from .dedup_scan_finder import DedupScanFinder
 
@@ -97,6 +99,8 @@ __all__ = [
     "MissingPixelShaFinder",
     "OrientationTask",
     "MissingOrientationFinder",
+    "ColourSharesTask",
+    "MissingColourSharesFinder",
     "DedupScanTask",
     "DedupScanFinder",
 ]

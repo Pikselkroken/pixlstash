@@ -68,7 +68,8 @@ export function useCascadeMenu(isOpen, focusIn) {
   }
 
   // Left arrow inside a submenu returns to its row, unless it is moving a caret
-  // (in a field it goes back only from the start of the text) or a select. Bound
+  // (in a field it goes back only from the start of the text), a select or a
+  // slider's thumb (Filters › Colour's amount). Bound
   // in the capture phase so a radio group's own arrow handling never sees it
   // and changes the pick instead.
   function onLeft(event) {
@@ -77,6 +78,7 @@ export function useCascadeMenu(isOpen, focusIn) {
     if (
       !sub.value ||
       target?.tagName === "SELECT" ||
+      field?.type === "range" ||
       (field && (field.selectionStart || field.selectionEnd))
     ) {
       return;

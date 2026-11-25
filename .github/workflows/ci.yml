@@ -519,6 +519,7 @@ jobs:
           tests/test_civitai_lookup.py
           tests/test_cli_documentation.py
           tests/test_clip_text_embedding_similarity.py
+          tests/test_colour_shares.py
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_pack_model_mark.py
           tests/test_comfyui_pixlstash_saver.py

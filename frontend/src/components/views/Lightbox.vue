@@ -956,6 +956,7 @@
             @create-person="openCreatePersonForFace"
             @hover-tag="(label) => (hoveredTagLabel = label)"
             @pick-title="descriptionPanelRef?.selectText(pictureName)"
+            @colour-filter="emit('close')"
             @tags-applied="onTagsApplied"
             @lightbox-change="(payload) => emit('lightbox-change', payload)"
           >

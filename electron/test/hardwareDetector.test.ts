@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { detectHardware } from '../src/backend/HardwareDetector';
+import { detectHardware, driverRunsCuda13, gpuUpgrades, Hardware } from '../src/backend/HardwareDetector';
 import { ACCEL_LABELS } from '../src/config';
 
 /**
@@ -11,8 +11,8 @@ import { ACCEL_LABELS } from '../src/config';
  */
 describe('detectHardware forced-accel injection', () => {
   it('injects a forced GPU accelerator and sets a synthetic gpuName', async () => {
-    const hw = await detectHardware('cu128');
-    assert.ok(hw.accelerators.includes('cu128'), 'forced cu128 must be available');
+    const hw = await detectHardware('cu132');
+    assert.ok(hw.accelerators.includes('cu132'), 'forced cu132 must be available');
     // CPU stays the universal fallback at the end of the list.
     assert.equal(hw.accelerators.at(-1), 'cpu');
     // gpuName is set: either the real probe's name, or our synthetic label.
@@ -69,9 +69,35 @@ describe('detectHardware forced-accel injection', () => {
   });
 
   it('keeps cpu last so the forced accel is preferred over the fallback', async () => {
-    const hw = await detectHardware('cu128');
-    const cuIdx = hw.accelerators.indexOf('cu128');
+    const hw = await detectHardware('cu132');
+    const cuIdx = hw.accelerators.indexOf('cu132');
     const cpuIdx = hw.accelerators.indexOf('cpu');
     assert.ok(cuIdx >= 0 && cuIdx < cpuIdx, 'forced accel must rank ahead of cpu');
+  });
+});
+
+describe('driverRunsCuda13', () => {
+  it('offers CUDA 13 from the 580 driver branch up, Linux and Windows numbering alike', () => {
+    assert.equal(driverRunsCuda13('615.71.09'), true);
+    assert.equal(driverRunsCuda13('580.65.06'), true);
+    assert.equal(driverRunsCuda13('581.57'), true);
+  });
+
+  it('withholds it on an older branch, where cu132 torch cannot initialise CUDA', () => {
+    assert.equal(driverRunsCuda13('570.133.07'), false);
+    assert.equal(driverRunsCuda13('576.88'), false);
+  });
+
+  it('offers it when the version is unreadable rather than hiding the GPU', () => {
+    assert.equal(driverRunsCuda13(undefined), true);
+    assert.equal(driverRunsCuda13(''), true);
+    assert.equal(driverRunsCuda13('[N/A]'), true);
+  });
+});
+
+describe('gpuUpgrades', () => {
+  it('offers cu132 but never the retired cu128, even when it is forced', () => {
+    const hw: Hardware = { os: 'linux', arch: 'x64', accelerators: ['cu132', 'cu128', 'cpu'] };
+    assert.deepEqual(gpuUpgrades(hw, 'cpu'), ['cu132']);
   });
 });

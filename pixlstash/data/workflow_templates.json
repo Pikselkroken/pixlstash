@@ -1,6 +1,6 @@
 {
  "source": "comfyui-workflow-templates-json",
- "version": "0.1.142",
+ "version": "0.1.143",
  "templates": [
   {
    "name": "3d_hunyuan3d-v2.1",
@@ -5990,12 +5990,14 @@
     {
      "name": "sensenova_u1.6_8b_mot_int8_convrot.safetensors",
      "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/checkpoints/sensenova_u1.6_8b_mot_int8_convrot.safetensors",
-     "directory": "checkpoints"
+     "directory": "checkpoints",
+     "sha256": "f6e5dc3bfb2023c3d009a8134b8dea8481551afb21b4a03b0e40ce7c651b6f78"
     },
     {
      "name": "sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
      "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/loras/sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
-     "directory": "loras"
+     "directory": "loras",
+     "sha256": "e37315e45125c53b3aeccaf99a58343409a0b7b344454a8978d29d993bb9b2c5"
     },
     {
      "name": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
@@ -6026,12 +6028,14 @@
     {
      "name": "sensenova_u1.6_8b_mot_int8_convrot.safetensors",
      "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/checkpoints/sensenova_u1.6_8b_mot_int8_convrot.safetensors",
-     "directory": "checkpoints"
+     "directory": "checkpoints",
+     "sha256": "f6e5dc3bfb2023c3d009a8134b8dea8481551afb21b4a03b0e40ce7c651b6f78"
     },
     {
      "name": "sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
      "url": "https://huggingface.co/Comfy-Org/SenseNova-U1/resolve/main/loras/sensenova_u1.6_8b_mot_8step_lora_bf16.safetensors",
-     "directory": "loras"
+     "directory": "loras",
+     "sha256": "e37315e45125c53b3aeccaf99a58343409a0b7b344454a8978d29d993bb9b2c5"
     },
     {
      "name": "qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors",

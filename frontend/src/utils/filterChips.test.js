@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
-import { useFilterStore } from "../stores/useFilterStore";
+import { colourFilterParams, useFilterStore } from "../stores/useFilterStore";
+import { colourShareSegments } from "./colourSwatches";
 import { useTagGroupsStore } from "../stores/useTagGroupsStore";
 import {
   filterChips,
@@ -276,5 +277,42 @@ describe("filterChips: a group term reads as its words (#2469)", () => {
   it("labels a term directly", () => {
     expect(tagTermLabel("hat")).toBe("hat");
     expect(tagTermLabel("__group:none")).toBe("any Ungrouped tag");
+  });
+});
+
+describe("colour filter", () => {
+  it("is one chip per swatch at the shared amount, sent as one param each", () => {
+    const s = useFilterStore();
+    s.colourFilter = ["blue", "grey"];
+    s.colourAmountFilter = 15;
+    const chips = filterChips(s).filter((c) => c.kind === "Colour");
+    expect(chips.map((c) => c.value)).toEqual(["blue ≥15%", "grey ≥15%"]);
+    expect(chips[0].swatch.fill).toBe("#3c66ae");
+    expect(colourFilterParams(s)).toEqual([
+      ["colour", "blue:15"],
+      ["colour", "grey:15"],
+    ]);
+    chips[0].remove();
+    expect(s.colourFilter).toEqual(["grey"]);
+    s.resetFilters();
+    expect(s.colourFilter).toEqual([]);
+    expect(s.colourAmountFilter).toBe(10);
+  });
+
+  it("orders a picture's shares largest first and names those of 2% and up", () => {
+    const shares = [0, 0, 0, 0, 0, 14.1, 0, 0, 15.2, 1.5, 28.8, 40.4];
+    const segs = colourShareSegments(shares);
+    expect(segs.map((x) => x.id)).toEqual([
+      "black",
+      "grey",
+      "brown",
+      "blue",
+      "white",
+    ]);
+    expect(segs.filter((x) => x.legend).map((x) => x.id)).not.toContain(
+      "white",
+    );
+    expect(colourShareSegments(null)).toEqual([]);
+    expect(colourShareSegments([1, 2])).toEqual([]);
   });
 });

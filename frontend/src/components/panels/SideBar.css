@@ -49,13 +49,16 @@
    visual-language.md §5.1, "Child rows".
 
    Geometry, all from the row's padding edge: `--tree-row-start` is where a
-   depth-1 row's content begins; a child's spacer (`--tree-spacer`) puts its
+   top-level person or set row's content (its mark) begins, two section
+   steps in; a child's spacer (`--tree-spacer`) puts its
    mark under its parent's name; `--tree-x` is where its guide falls inside
    that spacer. The template computes both per level (utils/setTree.js).
    --------------------------------------------------------------------------- */
 .sidebar-media-list .sidebar-section-scroll {
   --sidebar-thumb-size: var(--sidebar-entity-thumb, 20px);
-  --tree-row-start: calc(var(--row-pad, var(--space-3)) + var(--indent-step));
+  --tree-row-start: calc(
+    var(--row-pad, var(--space-3)) + 2 * var(--indent-step)
+  );
 }
 
 .sidebar-media-list .sidebar-section-scroll .sidebar-list-item {
@@ -74,18 +77,22 @@
   );
 }
 
-/* The chevron sits in the gutter left of the mark, which every depth-1 row
-   already leaves empty, so a person's first child set moves nothing. */
+/* The caret stands one level out from its row's content: under the label of
+   the head the row sits in (design "Strict tree"). A section head's caret is
+   at the rail edge, a person's under the section label, so each level owns a
+   column and a head's caret never shares one with the rows it folds. */
 .sidebar-tree-toggle {
   position: absolute;
   top: 50%;
-  left: var(--row-pad, var(--space-3));
+  left: calc(
+    var(--row-pad, var(--space-3)) + (var(--depth, 1) - 1) * var(--indent-step)
+  );
   transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--gutter-glyph);
-  height: var(--gutter-glyph);
+  width: var(--gutter-caret);
+  height: var(--gutter-caret);
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -103,6 +110,9 @@
 .sidebar-tree-kid > .sidebar-tree-toggle {
   /* Over the spacer, which follows it and would otherwise take its clicks. */
   z-index: var(--z-raised);
+  /* A child's slot is the #2124 geometry, sized to its smaller mark. */
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
   left: calc(
     var(--tree-row-start) + var(--tree-spacer) - var(--gutter-glyph)
   );
@@ -208,7 +218,7 @@
   /* Restated here, not inherited: a custom property is computed where it is
      declared, so the section's --tree-row-start was built from the section's
      own padding and put every stub and caret in a group 5px off its line. */
-  --tree-row-start: calc(var(--row-pad) + var(--indent-step));
+  --tree-row-start: calc(var(--row-pad) + 2 * var(--indent-step));
   --sidebar-right-edge: calc(var(--space-3) - var(--tree-group-inset));
   /* Not the 100% `.sidebar-character-group` carries: with the margin that
      pushes the counts past the rail's edge. */
@@ -234,6 +244,37 @@
   flex-direction: column;
   min-height: 0;
   flex: 0 0 auto;
+  /* The section level steps a caret box and a gap, so a row's caret (or a
+     glyph row's icon) lands under its head's label. Child sets hang off
+     their parent's mark by the #2124 geometry, which does not use the step;
+     the Folders tree is outside any block and keeps --indent-step.
+     visual-language.md §5.1. */
+  --indent-step: var(--section-step);
+}
+
+/* Review's rows: icon rows that never fold, so the icon takes the section's
+   caret column and the label follows it. */
+.sidebar-section-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-section-rows > .sidebar-list-item {
+  --depth: 1;
+}
+
+.sidebar-section-rows > .sidebar-review-session {
+  --depth: 2;
+}
+
+/* A glyph row (a 16px icon, never a caret or a face) puts its icon in its
+   level's caret column, so its label sits --space-2 past it, on the section
+   labels' edge. Picture rows (People, Sets) and the Folders tree keep their
+   own mark column and gap. */
+.sidebar-media-list > .sidebar-list-item:not(.sidebar-folder-row) > .sidebar-list-icon,
+.sidebar-all-of-scope > .sidebar-list-icon,
+.sidebar-section-rows > .sidebar-list-item > .sidebar-list-icon {
+  margin-right: var(--space-2);
 }
 
 /* People and Sets scale their type with their thumbnails, driven by
@@ -895,23 +936,60 @@
   z-index: var(--z-raised);
 }
 
-/* Items within People/Sets sit one step in, which puts the thumbnail directly
-   below the section head's label (the head steps in past its caret). */
+/* Items within People/Sets sit two section steps in: their caret under the
+   head's label, their mark one step past it. */
 .sidebar-section-scroll .sidebar-list-item {
-  --depth: 1;
+  --depth: 2;
 }
 
 .sidebar-section-block .sidebar-section-header {
   padding-bottom: var(--space-1);
 }
 
-/* People and Sets fold under their heads. The caret takes the gutter the rows'
-   own carets use, so the label steps one level in and sits over the rows'
-   marks. The whole head toggles, like an inspector section's. */
+/* Review, People and Sets fold under their heads. The caret has its own
+   column at the rail edge and the label steps one section level in, over the
+   rows' carets. The whole head toggles, like an inspector section's, so the
+   whole head answers hover and wears the caret's focus ring. */
 .sidebar-section-header--collapsible {
   --depth: 1;
   cursor: pointer;
   user-select: none;
+}
+
+.sidebar-section-header--collapsible:hover {
+  background: var(--hover-wash);
+}
+
+.sidebar-section-header--collapsible:has(> .sidebar-section-toggle:focus-visible) {
+  box-shadow: var(--focus-ring-inset);
+}
+
+/* A folded head hiding the open view keeps the selection rail, so the user
+   can still see where they are, and takes the rows' full ink while it does. */
+.sidebar-section-header--holds-view {
+  border-left-color: var(--active-bar);
+  color: rgb(var(--v-theme-sidebar-text));
+}
+
+/* What a folded head hides: Review's Inbox count and Duplicates dot, People's
+   and Sets' totals. Row-count type, not the head's caps. */
+.sidebar-section-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  white-space: nowrap;
+}
+
+/* With no "+" after it (Review), the summary ends on the rows' count column. */
+.sidebar-section-summary:last-child {
+  margin-right: var(--sidebar-right-edge, var(--space-3));
 }
 
 /* The caret takes its head's ink, never its own (visual-language §5.1). */
@@ -919,9 +997,11 @@
   color: inherit;
 }
 
-.sidebar-section-toggle:focus-visible {
-  outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: var(--focus-offset);
+/* The ring moves to the whole head where :has() can draw it there. */
+@supports selector(:has(*)) {
+  .sidebar-section-toggle:focus-visible {
+    outline: none;
+  }
 }
 
 /* All-pictures row: same compact height as regular items */

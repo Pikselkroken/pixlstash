@@ -425,4 +425,102 @@ describe("SearchTokenField", () => {
     expect(wrapper.find("input.stf-input").exists()).toBe(true);
     expect(wrapper.find("button.stf-clear").exists()).toBe(false);
   });
+
+  it("picks a colour from the swatch row, as a token at the shared amount", async () => {
+    await mountField();
+    const filters = useFilterStore();
+    const blue = () => wrapper.find('[data-swatch="blue"]');
+    await blue().trigger("click");
+    expect(filters.colourFilter).toEqual(["blue"]);
+    expect(blue().attributes("aria-pressed")).toBe("true");
+    expect(wrapper.find(".stf-token").text()).toContain("blue ≥10%");
+
+    const slider = wrapper.find('.csp input[type="range"]');
+    slider.element.value = "25";
+    await slider.trigger("input");
+    // The thumb moving is a draft; the grid's filter lands on release.
+    expect(filters.colourAmountFilter).toBe(10);
+    await slider.trigger("change");
+    expect(filters.colourAmountFilter).toBe(25);
+    expect(wrapper.find(".stf-token").text()).toContain("blue ≥25%");
+
+    await blue().trigger("click");
+    expect(filters.colourFilter).toEqual([]);
+    expect(wrapper.find(".stf-token").exists()).toBe(false);
+  });
+
+  it("picks the swatch a colour sampled from the screen counts toward", async () => {
+    window.EyeDropper = class {
+      open() {
+        return Promise.resolve({ sRGBHex: "#1e90ff" });
+      }
+    };
+    try {
+      await mountField();
+      const filters = useFilterStore();
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      await flushPromises();
+      expect(filters.colourFilter).toEqual(["blue"]);
+      // Sampling it again does not take it back off.
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      await flushPromises();
+      expect(filters.colourFilter).toEqual(["blue"]);
+    } finally {
+      delete window.EyeDropper;
+    }
+  });
+
+  it("in the desktop app, samples the next click in the window", async () => {
+    const samplePixel = vi.fn().mockResolvedValue("#1e90ff");
+    window.pixlstashDesktop = { samplePixel };
+    const opened = vi.fn();
+    try {
+      await mountField();
+      const filters = useFilterStore();
+      document.body.addEventListener("click", opened);
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      const root = document.documentElement;
+      expect(root.classList.contains("colour-picking")).toBe(true);
+      // Other keys reach nothing while picking, and do not end it.
+      const pressed = vi.fn();
+      document.body.addEventListener("keydown", pressed);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      document.body.removeEventListener("keydown", pressed);
+      expect(pressed).not.toHaveBeenCalled();
+      expect(root.classList.contains("colour-picking")).toBe(true);
+
+      // Esc leaves picking without a colour.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await flushPromises();
+      expect(root.classList.contains("colour-picking")).toBe(false);
+      expect(filters.colourFilter).toEqual([]);
+
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      const at = { clientX: 40, clientY: 30, bubbles: true, button: 0 };
+      document.body.dispatchEvent(new MouseEvent("pointerdown", at));
+      document.body.dispatchEvent(new MouseEvent("click", at));
+      await flushPromises();
+      expect(samplePixel).toHaveBeenCalledWith(40, 30);
+      expect(opened).not.toHaveBeenCalled();
+      expect(root.classList.contains("colour-picking")).toBe(false);
+      expect(filters.colourFilter).toEqual(["blue"]);
+      // The sampled colour shows in its own well while Blue stays picked.
+      const well = wrapper.find('[data-testid="csp-sample"]');
+      expect(well.attributes("aria-label")).toBe(
+        "Picked #1e90ff · searches as Blue",
+      );
+      await wrapper.find('[data-swatch="blue"]').trigger("click");
+      expect(wrapper.find('[data-testid="csp-sample"]').exists()).toBe(false);
+    } finally {
+      document.body.removeEventListener("click", opened);
+      delete window.pixlstashDesktop;
+    }
+  });
+
+  it("offers no screen picker where the browser has none", async () => {
+    await mountField();
+    expect(wrapper.find('[data-testid="csp-eyedropper"]').exists()).toBe(false);
+  });
 });

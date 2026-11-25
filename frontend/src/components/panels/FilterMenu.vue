@@ -75,7 +75,20 @@
           >
             <v-icon size="16" class="fm-row-lead">{{ k.icon }}</v-icon>
             <span class="fm-row-label">{{ k.label }}</span>
-            <span class="fm-n">{{ rowValue(k.id) }}</span>
+            <!-- Colour's value is its picked swatches and their one amount. -->
+            <span
+              v-if="k.id === 'colour' && store.colourFilter.length"
+              class="fm-n fm-colour-value"
+            >
+              <span
+                v-for="id in store.colourFilter"
+                :key="id"
+                class="colour-mark"
+                :style="{ '--swatch': colourSwatch(id)?.fill }"
+              ></span>
+              ≥{{ store.colourAmountFilter }}%
+            </span>
+            <span v-else class="fm-n">{{ rowValue(k.id) }}</span>
             <v-icon size="16" class="fm-row-trail">mdi-chevron-right</v-icon>
           </button>
         </template>
@@ -347,6 +360,33 @@
         @clear="clearTags"
       />
 
+      <!-- Colour: the search list's swatch row and slider, the same control. -->
+      <div
+        v-else-if="sub === 'colour'"
+        class="tbm fm-sub fm-sub--colour"
+        role="group"
+        aria-label="Colour"
+      >
+        <div class="tbm-header">
+          <span class="tbm-title">Colour</span>
+          <span class="tbm-spacer"></span>
+          <button
+            class="tbm-ghost"
+            type="button"
+            :disabled="!store.colourFilter.length"
+            @click="store.colourFilter = []"
+          >
+            Clear
+          </button>
+        </div>
+        <div class="tbm-section">
+          <ColourSwatchPicker
+            hint="A picture must hold every colour picked"
+            :count-for="colourCount"
+          />
+        </div>
+      </div>
+
       <FilterTagField
         v-else-if="sub === 'confidence'"
         title="Tag confidence"
@@ -421,6 +461,8 @@ import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import FilterTagField from "./FilterTagField.vue";
+import ColourSwatchPicker from "../widgets/ColourSwatchPicker.vue";
+import { colourEntry, colourSwatch } from "../../utils/colourSwatches";
 import { isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { getFaceClusters } from "../../api/characters";
@@ -490,6 +532,7 @@ const PICTURE_KINDS = [
 const CONTENT_KINDS = [
   { id: "score", label: "Score", icon: "mdi-star-outline" },
   { id: "tags", label: "Tags", icon: "mdi-tag-outline" },
+  { id: "colour", label: "Colour", icon: "mdi-palette-outline" },
   { id: "confidence", label: "Tag confidence", icon: "mdi-tag-search-outline" },
   // The checkpoint glyph is the model shelf's (CAPABILITY_ICONS).
   { id: "model", label: "Checkpoint", icon: "mdi-package-variant-closed" },
@@ -632,6 +675,7 @@ const KIND_OF_CHIP = {
   "Lacks tag": "tags",
   "Missing tag": "confidence",
   "Doubtful tag": "confidence",
+  Colour: "colour",
   Checkpoint: "model",
   LoRA: "lora",
   Workflow: "workflow",
@@ -652,6 +696,13 @@ function rowValue(kind) {
 
 function clearAll() {
   for (const chip of chips.value) chip.remove();
+}
+
+// A swatch's count: the view plus that one colour at the current amount.
+function colourCount(id) {
+  return count(
+    filterParams([["colour", colourEntry(id, store.colourAmountFilter)]]),
+  );
 }
 
 watch(
@@ -1111,6 +1162,15 @@ function clearConfidence() {
   border-radius: var(--radius-sm);
   object-fit: cover;
   flex: none;
+}
+/* Twelve swatches need more room than a list submenu: the row sets it. */
+.fm-sub--colour {
+  width: auto;
+}
+.fm-colour-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 .fm-hint {
   font-size: var(--text-xs);
