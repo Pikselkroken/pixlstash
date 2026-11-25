@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   useItemSheets: vi.fn(),
   createPictureSet: vi.fn(),
   bulkAddPicturesToSet: vi.fn(),
+  deletePictureSet: vi.fn(),
   getCharacter: vi.fn(),
   getReferencePictures: vi.fn(),
   patchCharacter: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("../../api/characterSheets", () => ({
 vi.mock("../../api/pictureSets", () => ({
   createPictureSet: api.createPictureSet,
   bulkAddPicturesToSet: api.bulkAddPicturesToSet,
+  deletePictureSet: api.deletePictureSet,
 }));
 vi.mock("../../api/characters", () => ({
   getCharacter: api.getCharacter,
@@ -138,13 +140,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function mountOutfit() {
+  return mount(CharacterSheetStep, {
+    props: { kind: "outfit", character: { id: 3, name: "Mira" } },
+    global: { stubs: { teleport: true } },
+    attachTo: document.body,
+  });
+}
+
+/** Describe, draw one sheet and wait for it to be ranked and kept. */
+async function drawOne(wrapper) {
+  await wrapper.find('[data-testid="cs-description"] textarea').setValue(
+    "a mustard raincoat",
+  );
+  await flushPromises();
+  await wrapper.vm.footer.primary.run();
+  await flushPromises();
+  await vi.advanceTimersByTimeAsync(3000);
+  await flushPromises();
+}
+
 describe("CharacterSheetStep: an outfit", () => {
   it("draws in prose, ranks without faces and files the panels in a set", async () => {
-    const wrapper = mount(CharacterSheetStep, {
-      props: { kind: "outfit", character: { id: 3, name: "Mira" } },
-      global: { stubs: { teleport: true } },
-      attachTo: document.body,
-    });
+    const wrapper = mountOutfit();
     await flushPromises();
     // A character's own reads are not made, and MOSS draws no item sheet.
     expect(api.getCharacter).not.toHaveBeenCalled();
@@ -208,6 +226,40 @@ describe("CharacterSheetStep: an outfit", () => {
       [51, 52, 53, 54],
       { id: 8, name: "Mustard raincoat" },
     ]);
+    wrapper.unmount();
+  });
+
+  it("stops before cutting when the set's name is taken", async () => {
+    api.createPictureSet.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: "A set named New outfit exists" } },
+    });
+    const wrapper = mountOutfit();
+    await flushPromises();
+    await drawOne(wrapper);
+    expect(wrapper.vm.phase).toBe("pick");
+    await wrapper.vm.footer.primary.run();
+    await flushPromises();
+    expect(api.createPictureSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "New outfit" }),
+    );
+    // Nothing is cut, the sheets stay on show and say why.
+    expect(api.useItemSheets).not.toHaveBeenCalled();
+    expect(wrapper.vm.phase).toBe("pick");
+    expect(wrapper.vm.error).toContain("Couldn't make the set New outfit");
+    expect(wrapper.emitted("cut")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("takes the empty set away when the cut fails", async () => {
+    api.useItemSheets.mockRejectedValueOnce(new Error("unreadable"));
+    const wrapper = mountOutfit();
+    await flushPromises();
+    await drawOne(wrapper);
+    await wrapper.vm.footer.primary.run();
+    await flushPromises();
+    expect(api.deletePictureSet).toHaveBeenCalledWith(8);
+    expect(api.bulkAddPicturesToSet).not.toHaveBeenCalled();
+    expect(wrapper.vm.phase).toBe("pick");
     wrapper.unmount();
   });
 });

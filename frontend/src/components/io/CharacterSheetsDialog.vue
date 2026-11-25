@@ -99,8 +99,8 @@
  * dialog finds the sheets and the runs still going. Cancel instead stops the
  * runs and forgets the draw.
  *
- * With a `kind` other than `character` it draws an outfit (for `character`,
- * who wears it), a location or a prop instead: the same step, four angles a
+ * With a `kind` other than `character` it draws an outfit (worn by
+ * `character`), a location or a prop instead: the same step, four angles a
  * sheet (utils/sheetKinds.js), and `done` carries the set the panels went in.
  */
 import { computed, nextTick, ref } from "vue";

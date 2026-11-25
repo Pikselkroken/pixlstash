@@ -822,7 +822,11 @@ import {
   useItemSheets,
   useSheets,
 } from "../../api/characterSheets";
-import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
+import {
+  bulkAddPicturesToSet,
+  createPictureSet,
+  deletePictureSet,
+} from "../../api/pictureSets";
 import {
   getCharacter,
   getReferencePictures,
@@ -1465,7 +1469,7 @@ const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
   if (item.value) {
     const [w, h] = panelSize(props.kind, size.w, size.h);
-    return `Each ${item.value.views === "views" ? "view" : "angle"} comes out about ${w}×${h}. Larger is slower to draw. MiniMax H3 Image draws items best; 4K and up is its own.`;
+    return `Each ${item.value.views === "views" ? "view" : "angle"} comes out about ${w}×${h}. Larger is slower to draw. 4K and up are MiniMax H3 Image's own.`;
   }
   const own = engine.value.sizes;
   const labels = (own || []).map((id) => SIZES.find((s) => s.id === id).label);
@@ -2532,20 +2536,11 @@ async function use() {
 
 /** Cut the kept item sheets and put their panels in a new set named for the
  * item: an outfit's under its person. The set is the item until the Studio
- * keeps outfits, locations and props of its own. */
+ * keeps outfits, locations and props of its own. The set is made first, so a
+ * name already taken stops the use before anything is cut, and a cut that
+ * fails takes its empty set away again. */
 async function useItem(keep, boxes) {
-  let ids;
-  try {
-    ({ picture_ids: ids } = await useItemSheets(props.kind, keep, boxes));
-  } catch (e) {
-    phase.value = "pick";
-    error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
-    working.value = false;
-    return;
-  }
-  cutDone.value = true;
-  emit("cut", ids);
-  let set = null;
+  let set;
   try {
     ({ picture_set: set } = await createPictureSet({
       name: itemName.value,
@@ -2554,11 +2549,34 @@ async function useItem(keep, boxes) {
         ? { parent_character_id: props.character.id }
         : {}),
     }));
+  } catch (e) {
+    phase.value = "pick";
+    error.value = `Couldn't make the set ${itemName.value}. ${errorMessage(e, "Please try again.")} Edit the name and use the sheet again.`;
+    working.value = false;
+    return;
+  }
+  let ids;
+  try {
+    ({ picture_ids: ids } = await useItemSheets(props.kind, keep, boxes));
+  } catch (e) {
+    try {
+      await deletePictureSet(set.id);
+    } catch (removal) {
+      console.warn("Couldn't remove the empty set of a failed cut", set.id, removal);
+    }
+    phase.value = "pick";
+    error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
+    working.value = false;
+    return;
+  }
+  cutDone.value = true;
+  emit("cut", ids);
+  try {
     await bulkAddPicturesToSet(set.id, ids);
   } catch (e) {
-    // The pictures are in the library either way; only the set is missing.
-    console.warn("Couldn't file the sheet pictures in a set", ids, e);
-    error.value = `The pictures were made but couldn't be put in a set. ${errorMessage(e, "Add them to one by hand.")}`;
+    // The pictures are in the library and the set exists; only the filing failed.
+    console.warn("Couldn't file the sheet pictures in their set", set.id, ids, e);
+    error.value = `The pictures were made but couldn't be put in ${set.name}. ${errorMessage(e, "Add them to it by hand.")}`;
     set = null;
   }
   working.value = false;
@@ -2709,7 +2727,8 @@ function sortCards(cards) {
   const recent = (a, b) =>
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
   cardRows = cards;
-  // An item sheet is prose only, and MiniMax H3 Image draws it best: first.
+  // An item sheet is prose only. MiniMax H3 Image is the model it starts on
+  // (no item sheet has been probed on any model yet), so it is listed first.
   const itemFirst = (a, b) =>
     item.value
       ? Number(cardEngine(b) === ENGINES.minimaxImage) -
@@ -2965,7 +2984,10 @@ function remember(update) {
   writeChoices(update);
 }
 
+// A character's mode only: an item's must not change how the next
+// character sheet opens.
 watch(mode, (now) =>
+  item.value ||
   remember((all) => {
     all.mode = now;
   }),

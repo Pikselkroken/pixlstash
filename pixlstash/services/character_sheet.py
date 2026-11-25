@@ -2202,7 +2202,7 @@ def _cut(
         with Image.open(path) as image:
             rgb = image.convert("RGB")
             if boxes is not None:
-                count = PANEL_COUNT if kind == "character" else 4
+                count = PANEL_COUNT if kind == "character" else len(ITEM_ANGLES[kind])
                 panels = _hand_cut_panels(rgb, boxes, count)
             elif kind == "character":
                 panels = split_sheet(rgb, faces)
@@ -2322,7 +2322,7 @@ def rank_item_sheets(vault, kind: ItemKind, picture_ids: list[int]) -> list[dict
             if not path:
                 raise FileNotFoundError(picture.file_path)
             ranked = _item_rank_of_file(path, os.stat(path).st_mtime_ns, kind)
-        except (OSError, Image.DecompressionBombError) as exc:
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
             logger.warning(
                 "Couldn't read %s sheet %s at %s to rank it: %s",
                 kind,
