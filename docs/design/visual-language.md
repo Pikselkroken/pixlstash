@@ -656,8 +656,9 @@ values carry it, all in the sidebar only:
   `--gutter-glyph`.
 - `--section-step` (24px = `--gutter-caret` + `--space-2`): the section level's indent,
   set as `--indent-step` on `.sidebar-section-block`. It is the glyph-arithmetic step
-  the paragraph above retired, confined to the section level: child sets and the
-  Folders tree keep the 16px step.
+  the paragraph above retired, confined to the section level: child sets keep the
+  #2124 geometry (hung off their parent's mark, which moves with it), and the
+  Folders tree keeps the 16px step.
 - A **glyph row** (a 16px icon that never folds: All media, Favourites, Scrapheap and
   Review's rows) puts its icon in its level's caret column and its label `--space-2`
   past it, so columns 1 and 2 merge for that row. A **picture row** (People, Sets)

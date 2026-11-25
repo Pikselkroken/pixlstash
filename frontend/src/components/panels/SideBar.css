@@ -49,7 +49,8 @@
    visual-language.md §5.1, "Child rows".
 
    Geometry, all from the row's padding edge: `--tree-row-start` is where a
-   depth-1 row's content begins; a child's spacer (`--tree-spacer`) puts its
+   top-level person or set row's content (its mark) begins, two section
+   steps in; a child's spacer (`--tree-spacer`) puts its
    mark under its parent's name; `--tree-x` is where its guide falls inside
    that spacer. The template computes both per level (utils/setTree.js).
    --------------------------------------------------------------------------- */
@@ -244,8 +245,10 @@
   min-height: 0;
   flex: 0 0 auto;
   /* The section level steps a caret box and a gap, so a row's caret (or a
-     glyph row's icon) lands under its head's label. Deeper levels (child
-     sets, the Folders tree) keep --indent-step. visual-language.md §5.1. */
+     glyph row's icon) lands under its head's label. Child sets hang off
+     their parent's mark by the #2124 geometry, which does not use the step;
+     the Folders tree is outside any block and keeps --indent-step.
+     visual-language.md §5.1. */
   --indent-step: var(--section-step);
 }
 
@@ -980,6 +983,8 @@
   letter-spacing: 0;
   text-transform: none;
   font-variant-numeric: tabular-nums;
+  flex: none;
+  white-space: nowrap;
 }
 
 /* With no "+" after it (Review), the summary ends on the rows' count column. */
@@ -992,8 +997,11 @@
   color: inherit;
 }
 
-.sidebar-section-toggle:focus-visible {
-  outline: none;
+/* The ring moves to the whole head where :has() can draw it there. */
+@supports selector(:has(*)) {
+  .sidebar-section-toggle:focus-visible {
+    outline: none;
+  }
 }
 
 /* All-pictures row: same compact height as regular items */
