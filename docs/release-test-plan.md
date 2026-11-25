@@ -9,10 +9,9 @@ starts:
   OS-sensitive subset on Windows runners).
 - **Browser journeys** — the Playwright e2e suite (`frontend/e2e/specs/`,
   the `e2e` job in `ci.yml`), catalogued in `docs/regular-tests.md`.
-- **Electron logic** — 40 `node --test` unit tests in `electron/test/`
-  (overlay install args, CPU fallback state machine, backends location,
-  forced-backend parsing, hardware-detector injection). Run them locally with
-  `cd electron && npm test` — they are **not** wired into any workflow yet.
+- **Electron logic** — the `node --test` suite in `electron/test/` (overlay
+  install and fallback, backends location, setup, IPC validation, MCP shim and
+  more), run by `npm test` in both `ci.yml` and `electron.yml`.
 - **ROCm GPU overlay install** — `rocm-overlay-install.yml` (weekly) installs
   the ROCm torch overlay with the app's pip arguments and asserts a real HIP
   build imports. The cu132 overlay has no CI equivalent — it is covered by the
@@ -43,6 +42,14 @@ plan; legacy § numbers are still cited in spec titles):
 | Deep links (`?overlay=` on entity routes, multi-entity URLs, `?review=`) | `deep-links.spec.js` |
 | Grid and lightbox keyboard shortcuts, typing safety | `grid-keys.spec.js`, `lightbox-keys.spec.js` |
 | §0.5 From source (Linux) | CI `e2e` job (pip install, `npm run build`, boots server, logs in, renders grid) |
+| §9 Folder Management: reference and import folders (no sidebar row; pictures still listed; a new file is picked up) | `reference-folders.spec.js`, `import-folders.spec.js`, `tests/test_reference_folder_watcher.py` |
+| Workflows: adding, cards, navigation, the Workflow tab editor and its versions, the Run popup, seeds, LoRA runs against a fake ComfyUI | `workflows-*.spec.js`, `workflow-*.spec.js`, `run-popup-save.spec.js`, `comfyui-fixture.spec.js` |
+| Recipes tab | `workflow-recipes-tab.spec.js` |
+| Models shelf: listing, names, base model edit, move, delete, removing a folder | `model-shelf-*.spec.js`, `model-tile-names.spec.js` |
+| Training a LoRA end to end (finished, stopped, failed) against a fake ai-toolkit; Train longer | `training.spec.js`, `training-run-board-steady.spec.js`; `tests/training/test_training_service.py` |
+| Lightbox editing (rotate, crop, description, naming a face); inpaint graph conversion | `lightbox-editing.spec.js`; `tests/test_inpaint_conversion.py` |
+| Installing a third-party node pack through ComfyUI-Manager | `tests/test_node_pack_install.py` |
+| MCP server: tools, token scope, write gating | `tests/test_mcp_server.py` |
 
 ---
 
@@ -69,34 +76,59 @@ Perform on a **clean machine/VM** (no prior PixlStash install, no existing
 `vault.db`). CI builds all of these artifacts but never runs them — this
 section is the only place they are executed.
 
-**For release-candidate testing:** on a machine you use to test RC builds,
-create an empty marker file in the app-data directory so the version-check data
-correctly excludes your installs from the real active-install count. Its
-contents are never read, only its existence, so any way of making the file will
-do (`touch` on Linux and macOS, `type nul >` or New-Item on Windows). The path is
-`~/.local/share/pixlstash/.pixlstash-dev-machine` on Linux,
-`~/Library/Application Support/pixlstash/.pixlstash-dev-machine` on macOS, and
-`%LOCALAPPDATA%\pixlstash\pixlstash\.pixlstash-dev-machine` on Windows (adjust
-the home-directory reference for the user running the test). The doubled
-`pixlstash\pixlstash` on Windows is not a typo: the server resolves the marker
-with `platformdirs.user_data_dir("pixlstash")`, which supplies the app name as
-the author segment when none is given.
+**Which build:** always the newest release candidate, by its exact version.
+One set of issues covers rc1 to rcN, so every block below looks the RC up
+itself and prints it; write that version next to your results. Docker pulls
+`latest-dev` / `latest-dev-gpu`, which move with every development release,
+and prints the version inside the image. Bash blocks run on Linux and macOS (and
+Git Bash on Windows); PowerShell blocks are for Windows.
+
+**Mark the machine as a test machine** first, so the version-check data
+excludes your installs from the real active-install count. Only the file's
+existence is read:
+
+```bash
+# Linux
+mkdir -p ~/.local/share/pixlstash && touch ~/.local/share/pixlstash/.pixlstash-dev-machine
+# macOS
+mkdir -p ~/Library/Application\ Support/pixlstash && touch ~/Library/Application\ Support/pixlstash/.pixlstash-dev-machine
+```
+
+```powershell
+New-Item -ItemType File -Force "$env:LOCALAPPDATA\pixlstash\pixlstash\.pixlstash-dev-machine"
+```
+
+The doubled `pixlstash\pixlstash` on Windows is not a typo: the server
+resolves the marker with `platformdirs.user_data_dir("pixlstash")`, which
+supplies the app name as the author segment when none is given. The Docker
+commands set `PIXLSTASH_TELEMETRY_DEV=1` instead.
+
+Where a pip or source install keeps its state (server-config.json, hub.db, and
+by default the library with its `vault.db` under `images/`):
+`~/.config/pixlstash` on Linux, `~/Library/Application Support/pixlstash` on
+macOS, `%LOCALAPPDATA%\pixlstash\pixlstash` on Windows.
 
 ### 1.1 pip + venv (PyPI)
 
 Requires Python 3.11+.
 
+```bash
+RC=$(curl -s https://api.github.com/repos/Pikselkroken/pixlstash/releases | grep -o '"tag_name": *"v[0-9.]*rc[0-9]*"' | head -1 | grep -o 'v[^"]*'); echo "Testing ${RC:?no release candidate found}"
+python3 -m venv venv
+venv/bin/pip install "pixlstash==${RC#v}"
+venv/bin/pixlstash-server
 ```
+
+```powershell
+$RC = ((Invoke-RestMethod https://api.github.com/repos/Pikselkroken/pixlstash/releases) | Where-Object tag_name -match '^v[\d.]+rc\d+$' | Select-Object -First 1).tag_name; "Testing $RC"
 python -m venv venv
-# Linux/macOS:  source venv/bin/activate
-# Windows:      venv\Scripts\activate
-pip install pixlstash
-pixlstash-server
+venv\Scripts\pip install "pixlstash==$($RC.TrimStart('v'))"
+venv\Scripts\pixlstash-server
 ```
 
 | Check | macOS | Ubuntu 24.04 | Windows |
 |-------|-------|--------------|---------|
-| `pip install pixlstash` completes with exit code 0 | | | |
+| `pip install` completes with exit code 0 and installs the version printed (not the last stable release) | | | |
 | `pixlstash-server` starts; logs show model download then "Uvicorn running" | | | |
 | `http://localhost:9537` shows the login page; log in, import one `.jpg` — it appears in the grid | | | |
 | Ctrl-C — server exits cleanly, no traceback, no lock files left | | | |
@@ -104,14 +136,29 @@ pixlstash-server
 ### 1.2 Docker — CPU image
 
 ```bash
-docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 \
-  ghcr.io/pikselkroken/pixlstash:latest
+docker pull ghcr.io/pikselkroken/pixlstash:latest-dev
+docker run --rm --entrypoint python ghcr.io/pikselkroken/pixlstash:latest-dev \
+  -c "from importlib.metadata import version; print('Testing', version('pixlstash'))"
+PW=$(openssl rand -base64 18); echo "Log in as: owner / $PW"
+docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -e PIXLSTASH_TELEMETRY_DEV=1 \
+  -e PIXLSTASH_INITIAL_USERNAME=owner -e PIXLSTASH_INITIAL_PASSWORD="$PW" \
+  -p 9537:9537 ghcr.io/pikselkroken/pixlstash:latest-dev
 ```
+
+```powershell
+docker pull ghcr.io/pikselkroken/pixlstash:latest-dev
+docker run --rm --entrypoint python ghcr.io/pikselkroken/pixlstash:latest-dev -c "from importlib.metadata import version; print('Testing', version('pixlstash'))"
+$PW = [Guid]::NewGuid().ToString('N'); "Log in as: owner / $PW"
+docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -e PIXLSTASH_TELEMETRY_DEV=1 -e PIXLSTASH_INITIAL_USERNAME=owner -e "PIXLSTASH_INITIAL_PASSWORD=$PW" -p 9537:9537 ghcr.io/pikselkroken/pixlstash:latest-dev
+```
+
+The browser cannot create the owner through Docker's network (the request is
+not from the same machine), so the command creates it and prints the login.
 
 | Check | Any host OS |
 |-------|-------------|
-| Container pulls and logs "Uvicorn running" | |
-| Login page loads; log in, import one `.jpg` — it appears in the grid | |
+| The printed version is the RC under test (the newest release); the log says it claimed the owner account, then "Uvicorn running" | |
+| `http://localhost:9537` shows the login page; the printed login works; import one `.jpg` — it appears in the grid | |
 | Ctrl-C — container stops cleanly (nothing dangling in `docker ps -a`) | |
 
 ### 1.3 Docker — GPU image (Ubuntu, NVIDIA)
@@ -119,11 +166,23 @@ docker run --rm -e PIXLSTASH_HOST=0.0.0.0 -p 9537:9537 \
 Requires NVIDIA Container Toolkit. Verify GPU access first:
 `docker run --rm --gpus all nvidia/cuda:13.2.1-base-ubuntu24.04 nvidia-smi`
 
+Then, in one terminal, this block and the next:
+
+```bash
+docker pull ghcr.io/pikselkroken/pixlstash:latest-dev-gpu
+docker run --rm --entrypoint python ghcr.io/pikselkroken/pixlstash:latest-dev-gpu \
+  -c "from importlib.metadata import version; print('Testing', version('pixlstash'))"
+mkdir -p ~/Pictures/pixlstash
+if [ -z "$(ls -A ~/Pictures/pixlstash)" ]; then PW=$(openssl rand -base64 18); echo "Log in as: owner / $PW"
+else echo "~/Pictures/pixlstash holds an earlier run: log in with its password, or move it aside and paste this block again"; fi
+```
+
 ```bash
 docker run -d --gpus all --user $(id -u):$(id -g) \
   -e HOME=/home/pixlstash -e PIXLSTASH_HOST=0.0.0.0 \
   -p 9537:9537 -v ~/Pictures/pixlstash:/home/pixlstash \
-  --name pixlstash ghcr.io/pikselkroken/pixlstash:latest-gpu
+  -e PIXLSTASH_TELEMETRY_DEV=1 -e PIXLSTASH_INITIAL_USERNAME=${PW:+owner} -e PIXLSTASH_INITIAL_PASSWORD="$PW" \
+  --name pixlstash ghcr.io/pikselkroken/pixlstash:latest-dev-gpu
 ```
 
 > If the container exits with a permission error, a previous run may have left
@@ -133,7 +192,7 @@ docker run -d --gpus all --user $(id -u):$(id -g) \
 | Check | Ubuntu 24.04 |
 |-------|--------------|
 | `docker logs pixlstash` shows "Uvicorn running", CUDA inference messages, and **no** "CPU fallback" warning | |
-| Log in, import one `.jpg`, wait ~30 s — background tagging completes on GPU and tags appear | |
+| Log in with the printed login, import one `.jpg`, wait ~30 s — background tagging completes on GPU and tags appear | |
 
 ### 1.4 From source (macOS / Windows)
 
@@ -141,11 +200,19 @@ Linux is covered by the CI `e2e` job (same steps, real boot + login). Run on
 the other two:
 
 ```bash
-git clone https://github.com/pikselkroken/pixlstash.git && cd pixlstash
-python -m venv venv && venv activation
-pip install --upgrade pip && pip install -e .
-cd frontend && npm ci && npm run build && cd ..
-pixlstash-server
+RC=$(curl -s https://api.github.com/repos/Pikselkroken/pixlstash/releases | grep -o '"tag_name": *"v[0-9.]*rc[0-9]*"' | head -1 | grep -o 'v[^"]*'); echo "Testing ${RC:?no release candidate found}"
+git clone --branch "$RC" --depth 1 --recurse-submodules --shallow-submodules https://github.com/Pikselkroken/pixlstash.git "pixlstash-$RC" && cd "pixlstash-$RC"
+python3 -m venv venv && venv/bin/python -m pip install --upgrade pip && venv/bin/pip install -e .
+(cd frontend && npm ci && npm run build)
+venv/bin/pixlstash-server
+```
+
+```powershell
+$RC = ((Invoke-RestMethod https://api.github.com/repos/Pikselkroken/pixlstash/releases) | Where-Object tag_name -match '^v[\d.]+rc\d+$' | Select-Object -First 1).tag_name; "Testing $RC"
+git clone --branch $RC --depth 1 --recurse-submodules --shallow-submodules https://github.com/Pikselkroken/pixlstash.git "pixlstash-$RC"; cd "pixlstash-$RC"
+python -m venv venv; venv\Scripts\python -m pip install --upgrade pip; venv\Scripts\pip install -e .
+cd frontend; npm.cmd ci; npm.cmd run build; cd ..
+venv\Scripts\pixlstash-server
 ```
 
 | Check | macOS | Windows |
@@ -158,9 +225,15 @@ pixlstash-server
 The standalone server installer built by `windows-installer.yml` (distinct
 from the Electron desktop installer, covered in section 3).
 
+```powershell
+$RC = ((Invoke-RestMethod https://api.github.com/repos/Pikselkroken/pixlstash/releases) | Where-Object tag_name -match '^v[\d.]+rc\d+$' | Select-Object -First 1).tag_name; "Testing $RC"
+$a = (Invoke-RestMethod "https://api.github.com/repos/Pikselkroken/pixlstash/releases/tags/$RC").assets | Where-Object name -like 'pixlstash-server-*-windows-x64*.exe' | Select-Object -First 1
+$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest $a.browser_download_url -OutFile $a.name; "Downloaded $($a.name)"
+```
+
 | Check | Windows |
 |-------|---------|
-| Download the `.exe` from the release page; wizard completes as a normal user with no error dialog | |
+| Run the downloaded `.exe`; wizard completes as a normal user with no error dialog | |
 | Right-click the `.exe` → Properties → Digital Signatures: a valid SHA-256 Certum signature with timestamp (signed releases; a `-unsigned.exe` has no signature tab) | |
 | SmartScreen: on a signed build it should show the publisher name if it appears at all (reputation accrues over time); on a `-unsigned` build **More info** → **Run anyway** proceeds normally | |
 | Start Menu → **PixlStash Server** — console opens with startup logs; login page loads; import one `.jpg` | |
@@ -170,20 +243,37 @@ from the Electron desktop installer, covered in section 3).
 
 ## 2. Upgrade from the previous minor release
 
-Run against a **copy** of a real `vault.db` created by the previous minor
-version (e.g. testing 1.7.x → use a 1.6.x vault). Do not wipe the database —
-the point is the migration chain. (Individual migration logic is covered by
-the pytest migration/schema suites; this checks the end-to-end chain on real
-data.)
+Run on a test machine where the previous minor release (e.g. testing 2.1.x →
+2.0.x) was installed with §1.1's commands, in the same folder, and used for a
+while. The server migrates the library when it opens it, so the check is
+starting the new version on that state. Do not wipe anything: the point is the
+migration chain. (Individual migration logic is covered by the pytest
+migration/schema suites; this checks the end-to-end chain on real data.) Stop
+the old server before pasting.
 
 ```bash
-cp vault.db vault.db.bak
-alembic upgrade head
+RC=$(curl -s https://api.github.com/repos/Pikselkroken/pixlstash/releases | grep -o '"tag_name": *"v[0-9.]*rc[0-9]*"' | head -1 | grep -o 'v[^"]*'); echo "Testing ${RC:?no release candidate found}"
+CONF=~/.config/pixlstash; [ "$(uname)" = Darwin ] && CONF=~/Library/Application\ Support/pixlstash
+grep '"image_root"' "$CONF/server-config.json"   # the library: its vault.db is in this folder
+cp -a "$CONF" ~/pixlstash-config-before-upgrade
+venv/bin/pip install "pixlstash==${RC#v}"
+venv/bin/pixlstash-server
 ```
+
+```powershell
+$RC = ((Invoke-RestMethod https://api.github.com/repos/Pikselkroken/pixlstash/releases) | Where-Object tag_name -match '^v[\d.]+rc\d+$' | Select-Object -First 1).tag_name; "Testing $RC"
+Select-String '"image_root"' "$env:LOCALAPPDATA\pixlstash\pixlstash\server-config.json"
+Copy-Item -Recurse "$env:LOCALAPPDATA\pixlstash\pixlstash" "$HOME\pixlstash-config-before-upgrade"
+venv\Scripts\pip install "pixlstash==$($RC.TrimStart('v'))"
+venv\Scripts\pixlstash-server
+```
+
+The copy holds the config, `hub.db` and, when `image_root` is the default
+`images/` folder inside it, the library too. If `image_root` points elsewhere,
+copy that folder as well before starting.
 
 | Check |  |
 |-------|--|
-| `alembic upgrade head` completes with exit code 0, no traceback | |
 | Server starts against the upgraded vault with no schema errors in logs | |
 | Existing pictures, sets, characters, projects, tags, and scores are intact (spot-check counts and a few known pictures) | |
 | Columns reset to `NULL` by migrations are picked up for reprocessing by the background finders (watch the task indicator) | |
@@ -215,6 +305,19 @@ from Settings (ROCm where applicable on Linux); **macOS has no overlay UI at
 all** — Metal is bundled in the runtime.
 
 ### 3.1 Install & first run
+
+The RC's installers (the line printing them is the one for your OS):
+
+```bash
+RC=$(curl -s https://api.github.com/repos/Pikselkroken/pixlstash/releases | grep -o '"tag_name": *"v[0-9.]*rc[0-9]*"' | head -1 | grep -o 'v[^"]*'); echo "Testing ${RC:?no release candidate found}"
+curl -s "https://api.github.com/repos/Pikselkroken/pixlstash/releases/tags/$RC" | grep -o 'https://[^"]*/PixlStash-desktop-[^"]*'
+```
+
+```powershell
+$RC = ((Invoke-RestMethod https://api.github.com/repos/Pikselkroken/pixlstash/releases) | Where-Object tag_name -match '^v[\d.]+rc\d+$' | Select-Object -First 1).tag_name; "Testing $RC"
+$a = (Invoke-RestMethod "https://api.github.com/repos/Pikselkroken/pixlstash/releases/tags/$RC").assets | Where-Object name -like 'PixlStash-desktop-*-win-x64*.exe' | Select-Object -First 1
+$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest $a.browser_download_url -OutFile $a.name; "Downloaded $($a.name)"
+```
 
 | Check | Windows | Linux | macOS |
 |-------|---------|-------|-------|
@@ -294,9 +397,11 @@ Requires a live ComfyUI server.
 
 - [ ] Settings → **ComfyUI**, no address saved, ComfyUI running locally: "Found ComfyUI on this computer" offers its address → **Connect** → Connected, with the node-pack line
 - [ ] Same, ComfyUI stopped: the address form appears; a wrong port shows "Nothing answered at …" and saves nothing (reopen Settings: still not connected)
-- [ ] Toolbar ComfyUI menu: run a text-to-image workflow with a prompt — progress shows; the output picture appears in the grid
-- [ ] Run an image-to-image workflow from a source picture — output appears and is linked to the source
-- [ ] **Abort** during a run — execution stops and the progress indicator disappears
+- [ ] Settings → **ComfyUI**, on a ComfyUI without the PixlStash nodes: the row's Nodes column says **Missing**; **Link** offers to install them, ComfyUI restarts, and the row comes back **Installed** and **Linked**
+- [ ] **Workflows**: Run… a text-to-image workflow with a prompt — progress shows in the title bar's Tasks pill; the picture appears in the grid, and its recipe in the lightbox names that workflow
+- [ ] **Workflows**: open a workflow and **Open in ComfyUI** — ComfyUI shows the same graph
+- [ ] Lightbox → **Edit** tab: paint a mask on a picture and run an Inpaint workflow — the result joins the picture's stack, and only the painted area has changed (judgement)
+- [ ] Stop a run from the **Tasks** pill while it draws — ComfyUI stops and the run ends as stopped
 
 ---
 
@@ -320,15 +425,15 @@ one page).
 
 ---
 
-## 9. Folder Management (Reference + Import)
+## 9. Models, training and the MCP server — manual remainder
 
-The sidebar no longer lists or adds folders: adding a folder is **Add a
-library**. Reference and import folders made by an earlier release keep working
-in the backend. Use a library that already has one of each.
+The suites run these against three stub models, a fake ai-toolkit and a test
+token (see the coverage map). What needs real files, a GPU or a real agent:
 
-- [ ] The sidebar shows no Folders section, expanded or docked, and the docked library menu offers only Global and Projects
-- [ ] The reference folder's pictures are still in All Pictures
-- [ ] Copy a new image into the import folder while running — it still appears in the grid automatically
+- [ ] **Models** shelf on a real model folder (hundreds of files): the scan finishes, and the base models it names look right for files you know
+- [ ] Train a LoRA of a person on a real ai-toolkit and GPU: samples appear while it runs; when it finishes the LoRA is on the shelf, attached to the person
+- [ ] **Train longer…** on that run: it carries on in the same run from a kept checkpoint, and the run's page says from which step
+- [ ] Settings → **API Tokens** → **Connect AI agent**: paste the Claude Code command into a terminal, ask Claude "how many picture sets do I have?" — the answer matches the sidebar
 
 ---
 
