@@ -171,4 +171,14 @@ def shares_from_column(
             raw,
         )
         return None
-    return [float(v) for v in values]
+    try:
+        return [float(v) for v in values]
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "picture %s has a colour_shares value with non-numeric items %r (%s); "
+            "reporting none",
+            picture_id,
+            raw,
+            exc,
+        )
+        return None

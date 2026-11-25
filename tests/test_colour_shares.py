@@ -85,6 +85,11 @@ def test_column_reader_treats_sentinel_and_null_as_no_summary():
     assert shares_from_column(_shares_row(blue=14)) == [
         0.0 if n != "blue" else 14.0 for n in SWATCH_NAMES
     ]
+    # Malformed values a hand edit could leave read as none, never raise.
+    assert shares_from_column("not json") is None
+    assert shares_from_column("[1, 2]") is None
+    assert shares_from_column(json.dumps(["a"] * len(SWATCH_NAMES))) is None
+    assert shares_from_column(json.dumps([None] * len(SWATCH_NAMES))) is None
 
 
 # ── the query parameter ──────────────────────────────────────────────────────
