@@ -645,6 +645,7 @@
             @pointermove.prevent="onPaintMove"
             @pointerup.prevent="onPaintEnd"
             @pointercancel.prevent="onPaintCancel"
+            @pointerleave="onPaintLeave"
             @click.stop
             @dblclick.stop
             @touchstart.stop
@@ -4868,6 +4869,11 @@ function onPaintMove(event) {
   if (!paint.draft.value) return;
   const at = paintPoint(event);
   if (at) paint.move(at);
+}
+
+/** Off the stage, no handle is under the pointer any more. */
+function onPaintLeave() {
+  if (!paint.draft.value) extendHot.value = "";
 }
 
 function onPaintEnd(event) {

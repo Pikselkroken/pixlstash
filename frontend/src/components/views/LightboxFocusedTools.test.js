@@ -551,3 +551,29 @@ describe("Extend's view", () => {
     }
   });
 });
+
+describe("Extend's handles", () => {
+  it("lets go of the hot handle when the pointer leaves the stage", async () => {
+    const wrapper = await openMeasured();
+    wrapper.vm.sidebarTab = "edit";
+    await flush();
+    wrapper.vm.paint.setTool("extend");
+    await flush();
+    const layer = wrapper.find(".paint-input-layer");
+    // The picture's right edge, which is where the frame starts, drawn at
+    // Extend's fit (the stubbed rect does not move with it).
+    const { scale } = wrapper.vm.extendFitted;
+    layer.element.dispatchEvent(
+      new MouseEvent("pointermove", {
+        clientX: 800 * scale,
+        clientY: 300 * scale,
+        bubbles: true,
+      }),
+    );
+    await flush();
+    expect(wrapper.vm.extendHot).toBe("right");
+    await layer.trigger("pointerleave");
+    expect(wrapper.vm.extendHot).toBe("");
+    wrapper.unmount();
+  });
+});
