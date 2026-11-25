@@ -1323,6 +1323,9 @@ const workflowInputs = computed(
  * null while they are still being checked, and while there are none: the
  * no-workflow notice says that). */
 const workflowProblem = computed(() => {
+  // The chosen one passing is enough to draw: the rest (a hundred workflows
+  // in a large library) may still be checking.
+  if (checks.value[workflowId.value]?.problem === "") return "";
   if (!checksDone.value || !modeCards.value.length) return null;
   if (usableCards.value.length) return workflowId.value ? "" : null;
   const down = modeCards.value
@@ -2778,6 +2781,11 @@ async function load() {
     id == null ? none : getReferencePictures(id),
   ]);
   if (!alive) return;
+  // Read, so drawable as soon as a workflow's check passes, not once all have.
+  loaded.value = character.status === "fulfilled";
+  if (!loaded.value) {
+    error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
+  }
   if (character.status === "fulfilled") {
     savedDescription.value = (character.value?.description || "").trim();
     if (!form.description) form.description = savedDescription.value;
@@ -2808,10 +2816,6 @@ async function load() {
     await checkCards();
   }
   workflowsLoaded.value = true;
-  loaded.value = character.status === "fulfilled";
-  if (!loaded.value) {
-    error.value = `Couldn't read ${name.value}. Open the set again to try again.`;
-  }
   // What `restore` puts back is not a choice made: its watchers run after it
   // has set `restored`, so they are let run before choices are remembered.
   restoring = true;

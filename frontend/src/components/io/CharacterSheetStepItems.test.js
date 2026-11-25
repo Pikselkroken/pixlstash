@@ -251,6 +251,22 @@ describe("CharacterSheetStep: an outfit", () => {
     wrapper.unmount();
   });
 
+  it("can draw once the chosen workflow passes, before the rest answer", async () => {
+    // A large library pre-flights a hundred workflows; one still out must not
+    // hold Draw back.
+    const ok = { ok: true, groups: [{ reasons: [] }] };
+    api.preflightWorkflowRun.mockImplementation(({ workflow_id }) =>
+      workflow_id === "auto:qwen" ? new Promise(() => {}) : Promise.resolve(ok),
+    );
+    const wrapper = mountOutfit();
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("a jumper");
+    await flushPromises();
+    expect(wrapper.vm.workflowId).toBe("auto:h3");
+    expect(wrapper.vm.footer.primary.enabled).toBe(true);
+    wrapper.unmount();
+  });
+
   it("stops before cutting when the set's name is taken", async () => {
     api.createPictureSet.mockRejectedValueOnce({
       response: { status: 409, data: { detail: "A set named New outfit exists" } },
