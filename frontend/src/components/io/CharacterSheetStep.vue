@@ -1,5 +1,6 @@
 <template>
-  <div class="cs-split">
+  <!-- An outfit's sheet is 4:5 portrait, the others 5:3. -->
+  <div class="cs-split" :class="{ 'cs-split--portrait': kind === 'outfit' }">
     <div ref="mainPane" class="cs-pane" data-testid="cs-main">
       <template v-if="phase === 'describe'">
         <div v-if="item" class="cs-step-h">
@@ -842,7 +843,7 @@ import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import { usePromptAssist } from "../../composables/usePromptAssist";
 import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
 import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
-import { ITEM_KINDS, panelSize } from "../../utils/sheetKinds";
+import { ITEM_KINDS } from "../../utils/sheetKinds";
 import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
@@ -1445,11 +1446,9 @@ const framingHint = computed(() => {
 });
 
 const sizeHint = computed(() => {
+  // An item has no size to pick.
+  if (item.value) return "";
   const size = SIZES.find((s) => s.id === form.size);
-  if (item.value) {
-    const [w, h] = panelSize(props.kind, size.w, size.h);
-    return `Each ${item.value.views === "views" ? "view" : "angle"} comes out about ${w}×${h}. Larger is slower to draw. 4K and up are MiniMax H3 Image's own.`;
-  }
   const own = engine.value.sizes;
   const labels = (own || []).map((id) => SIZES.find((s) => s.id === id).label);
   const why = own
@@ -3307,6 +3306,11 @@ defineExpose({
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-input-background));
   cursor: pointer;
+}
+
+.cs-split--portrait .cs-sheetimg,
+.cs-split--portrait .cs-rail__sheet {
+  aspect-ratio: 4 / 5;
 }
 
 .cs-sheetimg:disabled {

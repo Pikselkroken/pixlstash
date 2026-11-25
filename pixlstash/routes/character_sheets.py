@@ -279,6 +279,7 @@ def create_router(server) -> APIRouter:
         response_model=SheetPrompt,
     )
     def sheet_prompt(payload: SheetPromptRequest):
+        width, height = character_sheet.item_canvas(payload.kind, payload.size)
         fields = payload.model_dump()
         kind = fields.pop("kind")
         if kind == "character":
@@ -290,8 +291,8 @@ def create_router(server) -> APIRouter:
         return SheetPrompt(
             prompt=prompt,
             negative=character_sheet.NEGATIVE_PROMPT,
-            width=character_sheet.SIZES[payload.size][0],
-            height=character_sheet.SIZES[payload.size][1],
+            width=width,
+            height=height,
         )
 
     @router.post(

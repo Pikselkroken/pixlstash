@@ -13373,10 +13373,11 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
 - **Outfit, location and prop sheets.** The same dialog and step draw an
   item by its *kind* (`outfit`, `location`, `prop`): `POST
   /character-sheets/prompt` with `kind` writes `item_sheet_prompt`, always
-  prose from the description alone, four angles on one 5:3 sheet (an
-  outfit's four tall panels side by side, on an invisible mannequin from the
-  collar to the shoe soles: Front, ¾, Side, Back; a location's Wide, Reverse,
-  Left, Right and a prop's Front, ¾, Side, Back two by two). The step lists
+  prose from the description alone, four angles two by two on one sheet (an
+  outfit's Front, ¾, Side, Back on an invisible mannequin, framed to the
+  garments described, on a 4:5 sheet from `item_canvas` so a jumper fills its
+  panel; a location's Wide, Reverse, Left, Right and a prop's Front, ¾, Side,
+  Back on the 5:3 one). The step lists
   MiniMax H3 Image workflows first and, among them, the shipped ones
   (`WorkflowCard.built_in`): an owner's graph may sample several seeds a run
   and save each, which multiplies the sheets asked for. The run, the hold in the

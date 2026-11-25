@@ -1,8 +1,8 @@
 /**
  * What the sheet dialog draws besides a character: an outfit, a location or a
- * prop, each four angles that agree, drawn together on one 5:3 sheet and cut
- * (`POST /character-sheets/prompt` with `kind`, `POST /item-sheets/rank` and
- * `/use`). The step (CharacterSheetStep) is the same for every kind; this is
+ * prop, each four angles that agree, drawn together two by two on one sheet
+ * and cut (`POST /character-sheets/prompt` with `kind`, `POST
+ * /item-sheets/rank` and `/use`). The step (CharacterSheetStep) is the same for every kind; this is
  * what differs: the words and the panels' names. An item's form is its
  * description and its name alone.
  */
@@ -13,12 +13,12 @@ export const ITEM_KINDS = {
     title: "Outfit sheets",
     newName: "New outfit",
     intro: () =>
-      "Each sheet is the outfit drawn four times on an invisible mannequin, from the collar to the shoes: front, three-quarter, side and back. Panels within one sheet agree, so you keep the sheet that looks right.",
+      "Each sheet is the outfit drawn four times on an invisible mannequin, two by two: front, three-quarter, side and back. Only the clothes you describe are drawn. Panels within one sheet agree, so you keep the sheet that looks right.",
     describe: (who) => `Describe ${who ? `${who}'s` : "the"} outfit and draw sheets`,
     descriptionPlaceholder:
       "a mustard-yellow hooded raincoat, knee length, open over a black roll-neck, dark slim jeans, black rubber boots",
     descriptionHint:
-      "The whole outfit, top to shoes. Every panel's caption carries it, so every panel draws the same clothes.",
+      "The clothes to draw: a jumper alone, or a whole outfit down to the shoes. Every panel's caption carries it, so every panel draws the same clothes.",
     angles: ["Front", "¾", "Side", "Back"],
     views: "angles",
   },
@@ -51,11 +51,3 @@ export const ITEM_KINDS = {
     views: "angles",
   },
 };
-
-/** The width and height of one panel of *kind* on a `width`×`height` sheet:
- * an outfit's four side by side, the others two by two. */
-export function panelSize(kind, width, height) {
-  return kind === "outfit"
-    ? [Math.round(width / 4), height]
-    : [Math.round(width / 2), Math.round(height / 2)];
-}

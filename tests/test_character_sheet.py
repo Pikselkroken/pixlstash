@@ -42,6 +42,7 @@ from pixlstash.services.character_sheet import (
     closeness,
     colour_agreement,
     item_agreement_words,
+    item_canvas,
     item_sheet_cells,
     item_sheet_prompt,
     panel_of,
@@ -1448,11 +1449,14 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
 
 def test_each_item_sheet_names_its_four_views_and_the_item_once():
     outfit = item_sheet_prompt(kind="outfit", description="A mustard raincoat.")
-    assert "four tall photos of equal size side by side" in outfit
-    assert "(4) back view" in outfit and "The outfit is a mustard raincoat." in outfit
-    # Nobody inside it, and nothing below the shoes.
+    assert "four photos of equal size, two by two" in outfit
+    assert "(4) bottom right, back view" in outfit
+    assert "The outfit is a mustard raincoat." in outfit
+    # Nobody inside it, and nothing the description does not name: a jumper
+    # gets no legs or shoes.
     assert "invisible mannequin" in outfit and "no head, neck, skin" in outfit
-    assert "soles of the shoes" in outfit and "no floor below them" in outfit
+    assert "framed to the garments described" in outfit and "shoes" in outfit
+    assert "soles of the shoes" not in outfit
     assert "worn by" not in outfit and "cropped at the chin" not in outfit
     location = item_sheet_prompt(kind="location", description="a pine trail")
     assert "two by two" in location and "(2) top right, the reverse view" in location
@@ -1463,17 +1467,18 @@ def test_each_item_sheet_names_its_four_views_and_the_item_once():
         assert prompt.endswith(ITEM_PHOTO_LOOK) and "photorealistic" not in prompt
 
 
-def test_an_outfit_sheet_is_cut_into_four_columns_on_its_dividers():
-    image = _sheet([("x", 660, 0, 1536), ("x", 1270, 0, 1536), ("x", 1930, 0, 1536)])
+def test_an_outfit_sheet_is_cut_two_by_two_on_its_4_5_canvas():
+    width, height = item_canvas("outfit", "large")
+    assert (width, height) == (1792, 2240) and width * 5 == height * 4
+    image = _sheet(
+        [("x", 900, 0, height), ("y", 1100, 0, 900), ("y", 1140, 900, width)],
+        size=(width, height),
+    )
     cells, clean = item_sheet_cells(image, "outfit")
     assert clean
-    assert [(c[0], c[2]) for c in cells] == [
-        (0, 658),
-        (666, 1268),
-        (1276, 1928),
-        (1936, 2560),
-    ]
-    assert all((c[1], c[3]) == (0, 1536) for c in cells)
+    (a, b, c, d) = cells
+    assert a[2] < 900 < b[0] and a[3] < 1100 < c[1] and b[3] < 1140 < d[1]
+    assert (a[0], c[0], b[2], d[2], c[3], d[3]) == (0, 0, width, width, height, height)
 
 
 def test_a_location_sheet_is_cut_two_by_two_each_column_on_its_own_row():
@@ -1594,6 +1599,13 @@ def test_prompt_route_hands_out_the_canvas(client):
         )
         assert drawn.status_code == 200, drawn.text
         assert (drawn.json()["width"], drawn.json()["height"]) == canvas
+    # An outfit's sheet is 4:5, so its 2x2 panels are; a prop's is the 5:3.
+    for kind, canvas in (("outfit", (2688, 3360)), ("prop", (3840, 2304))):
+        drawn = client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"kind": kind, "description": "x", "size": "4k", "layout": "prose"},
+        ).json()
+        assert (drawn["width"], drawn["height"]) == canvas
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},

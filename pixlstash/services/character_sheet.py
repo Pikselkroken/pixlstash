@@ -613,13 +613,14 @@ def sheet_prompt(
 
 
 # Outfits, locations and props are drawn the way characters are: described
-# once, every angle on one 5:3 sheet so the angles agree, and the best sheet
-# kept and cut. Four panels each: an outfit's four tall ones side by side, a
-# location's and a prop's two by two, numbered row by row.
+# once, every angle on one sheet so the angles agree, and the best sheet kept
+# and cut. Four panels each, two by two, numbered row by row: a location's and
+# a prop's on the 5:3 sheet, an outfit's on a 4:5 one (item_canvas), so a
+# jumper fills its panel rather than leaving room for legs.
 ItemKind = Literal["outfit", "location", "prop"]
 Kind = Literal["character", ItemKind]
 ITEM_GRIDS: dict[str, tuple[int, int]] = {
-    "outfit": (1, 4),
+    "outfit": (2, 2),
     "location": (2, 2),
     "prop": (2, 2),
 }
@@ -628,25 +629,21 @@ ITEM_ANGLES: dict[str, tuple[str, ...]] = {
     "location": ("Wide", "Reverse", "Left", "Right"),
     "prop": ("Front", "¾", "Side", "Back"),
 }
+_ANGLE_VIEWS = (
+    "top left, front view",
+    "top right, three-quarter view",
+    "bottom left, side view",
+    "bottom right, back view",
+)
 _ITEM_VIEWS = {
-    "outfit": (
-        "front view",
-        "three-quarter view turned to the left",
-        "side view facing right",
-        "back view",
-    ),
+    "outfit": _ANGLE_VIEWS,
     "location": (
         "top left, a wide establishing view",
         "top right, the reverse view, looking back the other way",
         "bottom left, looking to the left",
         "bottom right, looking to the right",
     ),
-    "prop": (
-        "top left, front view",
-        "top right, three-quarter view",
-        "bottom left, side view",
-        "bottom right, back view",
-    ),
+    "prop": _ANGLE_VIEWS,
 }
 _ITEM_NOUN = {"outfit": "outfit", "location": "place", "prop": "object"}
 # The prose item sheet as plain product or location photographs. ponytail:
@@ -657,14 +654,25 @@ ITEM_PHOTO_LOOK = (
 )
 
 
+def item_canvas(kind: Kind, size: str) -> tuple[int, int]:
+    """The sheet's canvas for *kind* at *size*: :data:`SIZES`, or for an
+    outfit the 4:5 portrait of about the same area, every side a multiple of
+    32, so each of its panels is 4:5 as well."""
+    width, height = SIZES[size]
+    if kind != "outfit":
+        return width, height
+    n = round((width * height / (128 * 160)) ** 0.5)
+    return 128 * n, 160 * n
+
+
 def item_sheet_prompt(*, kind: ItemKind, description: str) -> str:
     """The prose prompt for one sheet of an outfit, a location or a prop.
 
     Prose only: the layouts MOSS-Image reads are probed for a character's six
     panels. Every view is named by its place on the sheet, and the whole item
     is said once for all four, so every panel draws the same one. An outfit is
-    on an invisible mannequin, collar to shoe soles, so no body competes with
-    it; a location is always empty, in plain daylight (each scene sets its own
+    on an invisible mannequin, so no body competes with it, and framed to the
+    garments described, so a jumper is drawn without legs or shoes; a location is always empty, in plain daylight (each scene sets its own
     time and weather); a prop stands alone. :data:`ITEM_PHOTO_LOOK` is always
     the look.
     """
@@ -676,15 +684,14 @@ def item_sheet_prompt(*, kind: ItemKind, description: str) -> str:
         text = (
             f"Outfit reference sheet {studio}, photographs: one and the same "
             "outfit on an invisible mannequin (ghost mannequin product "
-            "photography), in four tall photos of equal size side by side, "
-            "each spanning the full height of the sheet, separated by thin "
-            "white borders. Nobody wears it: no head, neck, skin, hands or "
-            "legs show, the clothes hold the shape of a body and the inside "
-            "of the collar shows. Every photo runs from the collar down to "
-            "the soles of the shoes, which rest on the bottom edge of the "
-            f"photo with no floor below them: {views}. The outfit is "
-            f"{described}. Identical garments, colours, fabric, fit and "
-            "details in every photo."
+            "photography), in four photos of equal size, two by two, "
+            "separated by thin white borders. Nobody wears it: no head, neck, "
+            "skin, hands or legs show, the clothes hold the shape of a body "
+            "and the inside of the collar shows. Each photo is framed to the "
+            "garments described and shows nothing else: no trousers, shoes "
+            f"or other clothing the outfit does not name: {views}. The "
+            f"outfit is {described}. Identical garments, colours, fabric, "
+            "fit and details in every photo."
         )
     elif kind == "location":
         text = (
