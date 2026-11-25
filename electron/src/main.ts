@@ -950,7 +950,7 @@ async function changeBackendsLocation(rawDir: string): Promise<void> {
 function deviceFor(accel: Accel | null): string | undefined {
   if (isDevBackend()) return undefined; // dev uses the developer's own env/config
   const a = accel ?? bundledAccel();
-  if (a === 'cu128' || a === 'rocm') return 'cuda';
+  if (a === 'cu132' || a === 'cu128' || a === 'rocm') return 'cuda';
   if (a === 'metal') return 'auto';
   return 'cpu';
 }
@@ -2285,6 +2285,9 @@ function registerIpc(): void {
     // just-downloaded dir is kept (only the active state is cleared), and the
     // state returned below is computed AFTER, so it reflects the real outcome.
     await startWithOverlayFallback(accel);
+    // Only once the new overlay is the one running: the restart above has let go
+    // of the old overlay's files, and a fallback to CPU keeps the old one.
+    if ((await manager.getActiveAccel()) === accel) await manager.removeReplaced(accel);
     return acceleratorState();
   });
 

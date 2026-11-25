@@ -9,7 +9,7 @@ artifact we host. Instead:
   `pixlstash` wheel + all deps + **CPU** torch on Windows/Linux. The app runs
   offline out of the box.
 - **GPU acceleration is added on demand.** If a discrete GPU is detected, the app
-  pip-installs the heavy wheels (`torch+cu128`/`torch+rocm`, `onnxruntime-gpu`)
+  pip-installs the heavy wheels (`torch+cu132`/`torch+rocm`, `onnxruntime-gpu`)
   straight from PyPI / PyTorch into a writable overlay — **we host nothing**.
 
 ## How it works

@@ -23,8 +23,8 @@ This is option **C** from the design discussion.
 
 | Runner / platform | Bundled in the installer | Fetched on demand (from PyPI/PyTorch) |
 | --- | --- | --- |
-| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — `onnxruntime-migraphx` needs MIGraphX from a system ROCm install) |
-| Windows x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu128`, `onnxruntime-gpu` |
+| Linux x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu132`, `onnxruntime-gpu`; AMD → `torch+rocm` (ORT stays CPU — `onnxruntime-migraphx` needs MIGraphX from a system ROCm install) |
+| Windows x64 | CPython + all deps + **CPU** torch + onnxruntime | NVIDIA → `torch+cu132`, `onnxruntime-gpu` (driver 580+; an older driver is not offered the overlay) |
 | macOS arm64 | CPython + all deps + **Metal** torch (default PyPI macOS wheel) + onnxruntime | nothing — MPS is already in the bundled torch |
 
 Notes:
@@ -56,7 +56,7 @@ proves fragile for torch/onnxruntime — to be validated during implementation.)
 
 **Version pinning:** the build writes `resources/runtime.json` recording the exact
 `torch`/`torchvision`/`onnxruntime` versions baked into the bundled env. The GPU
-installer pins to those same versions (just swapping the `+cpu` build for `+cu128`/
+installer pins to those same versions (just swapping the `+cpu` build for `+cu132`/
 `+rocm`), guaranteeing torch/torchvision ABI compatibility.
 
 **`--target` shadowing did prove fragile — but not for torch.** The fallback
@@ -378,7 +378,7 @@ sub-option). Also deferred: wiring automatic update checks.
 ## Verification
 - **Local CPU**: `build_desktop_runtime.py --accel cpu` → `npm start` → app opens into the
   library with no network; server runs from the bundled env.
-- **Local GPU** (on an NVIDIA box): trigger `installGpu('cu128')` → confirm overlay created,
+- **Local GPU** (on an NVIDIA box): trigger `installGpu('cu132')` → confirm overlay created,
   `torch.cuda.is_available()` true in the launched server, model inference uses the GPU.
 - **Offline**: disconnect network → CPU/Metal launch still works; GPU action fails gracefully
   back to CPU.

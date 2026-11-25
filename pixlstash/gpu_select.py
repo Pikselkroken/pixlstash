@@ -80,7 +80,7 @@ def inventory(nvml=pynvml) -> list[dict]:
                     "free_mb": int(memory.free) // _MB,
                     # NVML never lists an integrated GPU.
                     "integrated": False,
-                    "backend": "cu128",
+                    "backend": "cu132",
                 }
             )
         return gpus

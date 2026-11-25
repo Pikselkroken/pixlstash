@@ -14,7 +14,7 @@ RUN npm run build
 # ── Stage 2: Build Python venv with all dependencies ─────────────────────────
 # Use the CUDA image so torch can link against the right CUDA version at build
 # time, but we only copy the finished venv into the final stage.
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 AS python-builder
+FROM nvidia/cuda:13.2.1-cudnn-runtime-ubuntu24.04 AS python-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -40,13 +40,15 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# PyTorch with CUDA 12.8, required for Blackwell (RTX 5xxx / sm_120) support.
-# Installed before the rest so nothing pulls in a CPU-only torch. Not
-# pyproject's torch specifier: the cu128 index stops at 2.11 (#2755).
+# PyTorch for CUDA 13.2, the same CUDA as the base image and the desktop's
+# NVIDIA overlay (TORCH_INDEX.cu132 in electron/src/config.ts), at the torch CI
+# tests (requirements.txt) and the torchvision built for it. The 13.2 base
+# makes the container need driver 595+ (NVIDIA_REQUIRE_CUDA=cuda>=13.2).
+# Installed before the rest so nothing pulls in a CPU-only torch.
 RUN pip install --no-cache-dir \
-    torch \
-    torchvision \
-    --index-url https://download.pytorch.org/whl/cu128
+    torch==2.13.0 \
+    torchvision==0.28.0 \
+    --index-url https://download.pytorch.org/whl/cu132
 
 # Everything else: pyproject.toml's dependencies, less torch, torchvision and
 # onnxruntime.
@@ -56,21 +58,29 @@ RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('/tmp/pyprojec
     && pip install --no-cache-dir -r /tmp/deps.txt \
     && rm /tmp/pyproject.toml /tmp/deps.txt
 
-# onnxruntime-gpu for CUDA inference, at the last CUDA 12 release: 1.27+ links
-# libcudart.so.13 (the desktop pins the same, ORT_GPU_PIN in
-# electron/src/config.ts). It goes in last, after removing plain onnxruntime:
-# insightface depends on that, and both install the same `onnxruntime` module,
-# so whichever lands second wins. The check fails the build if CPU won.
+# onnxruntime-gpu for CUDA inference, a CUDA 13 build like the base image (the
+# desktop pins the same, ORT_GPU_PIN.cu132 in electron/src/config.ts). It goes
+# in last, after removing plain onnxruntime: insightface depends on that, and
+# both install the same `onnxruntime` module, so whichever lands second wins.
+# The check reads the CUDA provider library's links: listing the provider
+# among the available ones only says it was compiled in, and a CUDA-generation
+# mismatch passes that and runs face detection on the CPU. Every library must
+# resolve except libcuda.so.1, the driver, which the NVIDIA runtime mounts only
+# when the container starts.
 RUN pip uninstall -y onnxruntime
-RUN pip install --no-cache-dir onnxruntime-gpu==1.26.0 \
-    && python -c "import onnxruntime as o; p = o.get_available_providers(); assert 'CUDAExecutionProvider' in p, p"
+RUN pip install --no-cache-dir onnxruntime-gpu==1.32.0 \
+    && python -c "import onnxruntime as o; assert 'CUDAExecutionProvider' in o.get_available_providers()" \
+    && lib=/opt/venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime_providers_cuda.so \
+    && test -f "$lib" \
+    && missing="$(ldd "$lib" | grep 'not found' | grep -v 'libcuda\.so\.1 ' || true)" \
+    && if [ -n "$missing" ]; then echo "ONNX Runtime's CUDA provider cannot load: $missing"; exit 1; fi
 
 
 
 # ── Stage 3: Lean runtime image ───────────────────────────────────────────────
 # Start from the same CUDA base but only copy the finished venv — no build
 # tools, no dev headers, no pip cache, no compiler output.
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.2.1-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
