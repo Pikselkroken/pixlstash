@@ -10947,10 +10947,12 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_id}/outpaint-copy",
         summary="Convert a workflow to outpainting",
         description=(
-            "Store a new manual workflow that extends the picture with FLUX.1 "
-            "Fill: it pads the picture by the extension a run sends, draws "
-            "only the new area and keeps the original's pixels. Only this "
-            "workflow's prompt is carried over; the original is not changed."
+            "Store a new manual workflow that extends the picture: it pads the "
+            "picture by the extension a run sends, draws the new area and "
+            "keeps the original's pixels. A Qwen Image 2.1 or FLUX.2 workflow's "
+            "copy runs Qwen Image 2.1 or FLUX.2 Klein 9B; any other's runs "
+            "FLUX.1 Fill with this workflow's prompt. The original is not "
+            "changed."
         ),
         response_model=WorkflowFile,
         status_code=201,

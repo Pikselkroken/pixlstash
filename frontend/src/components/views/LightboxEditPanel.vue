@@ -647,6 +647,7 @@ const PROMPT_HELP = {
     placeholder: "The rest of the room, same light",
     tips: [
       "Describe what surrounds the picture, not the change: “the rest of the beach, the sea to the horizon”, not “make it wider”.",
+      "A Qwen Image 2.1 or FLUX.2 Klein outpaint workflow takes an instruction: keep “Outpaint the image. Remove the white rectangles.” and add what goes there.",
       "Left empty, the workflow's own prompt is used.",
     ],
   },

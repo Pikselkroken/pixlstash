@@ -24,10 +24,23 @@ The model files are those of ComfyUI's own Flux Fill templates, so a ComfyUI
 without them is refused with ``missing_models`` and each file offers its
 download (``services/model_downloads.py``; the Fill model comes from
 Comfy-Org's ungated copy, not the gated Black Forest Labs repository). There
-is no fallback to another model: an edit model is what failed.
+is no fallback to another model.
+
+A Qwen Image 2.1 or FLUX.2 workflow converts to an outpainter on its own
+family's edit model instead (:func:`edit_outpaint_graph`, issue #2812's probes):
+the pad is filled white, the whole padded canvas is the edit's only reference
+and is sampled at exactly its own size, so the model keeps the original's
+framing, and the decode is pasted back as the Fill graph's is. Their models are
+the built-in Inpaint workflows' (``FLUX.2 Klein 9B Inpaint.json``,
+``Qwen-Image 2.1 Inpaint.json``), and their prompt is an instruction
+(:data:`EDIT_PROMPT`), not the source's.
 """
 
 from __future__ import annotations
+
+import json
+import os
+from functools import lru_cache
 
 from pixlstash.services.inpaint_conversion import InpaintConversionRefused
 from pixlstash.services.workflow_hash import WorkflowGraphError, reduce_api_graph
@@ -47,6 +60,20 @@ FLUX_VAE = "ae.safetensors"
 FILL_MEGAPIXELS = 2.0
 PAD_FEATHER = 40
 SAVE_PREFIX = "Outpaint-"
+QWEN_IMAGE_21 = "qwen_image_21"
+KLEIN = "flux2_klein"
+# What the probes prompted with. "White rectangles" is the pad; red bled a cast
+# into the skin.
+EDIT_PROMPT = "Outpaint the image. Remove the white rectangles. Same picture style."
+_BUILT_IN_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "data", "comfyui-workflows", "built-in"
+)
+# The built-in whose model loaders each family's outpainter loads.
+_FAMILY_SOURCE = {
+    KLEIN: "FLUX.2 Klein 9B Inpaint.json",
+    QWEN_IMAGE_21: "Qwen-Image 2.1 Inpaint.json",
+}
+_LOADER_CLASSES = ("UNETLoader", "PixlStashCLIPLoader", "PixlStashVAELoader")
 
 _TYPE_REFUSALS = {
     "inpaint": (
@@ -62,8 +89,9 @@ _TYPE_REFUSALS = {
 def convert_to_outpaint(graph: dict) -> dict:
     """The FLUX.1 Fill outpaint graph, prompted as *graph* is.
 
-    *graph* is not modified, and nothing else of it is kept: whatever model it
-    runs, the copy runs the Fill model.
+    *graph* is not modified, and nothing else of it is kept: a Qwen Image 2.1
+    or FLUX.2 graph's copy runs that family's edit model
+    (:func:`edit_outpaint_graph`), any other's the Fill model.
 
     Raises:
         InpaintConversionRefused: *graph* cannot be read, or is already
@@ -78,6 +106,9 @@ def convert_to_outpaint(graph: dict) -> dict:
         ) from exc
     if kind in _TYPE_REFUSALS:
         raise InpaintConversionRefused(_TYPE_REFUSALS[kind])
+    family = edit_family(graph)
+    if family:
+        return edit_outpaint_graph(family)
     return fill_outpaint_graph(_positive_prompt(graph, io.positive_prompt_nodes))
 
 
@@ -176,6 +207,198 @@ def fill_outpaint_graph(prompt: str = "") -> dict:
             "SaveImage", "Save Image", images=["16", 0], filename_prefix=SAVE_PREFIX
         ),
     }
+
+
+def edit_family(graph: dict) -> str | None:
+    """:data:`QWEN_IMAGE_21` or :data:`KLEIN` for a graph of that family, else ``None``.
+
+    Read off node classes and the text encoder's type, never the latent's:
+    MOSS-Image samples on FLUX.2's empty latent too. Any FLUX.2 graph counts
+    as Klein: the copy runs Klein 9B whatever FLUX.2 model the source loads.
+    """
+    nodes = [node for node in graph.values() if isinstance(node, dict)]
+    classes = {str(node.get("class_type", "")) for node in nodes}
+    if classes & {"TextEncodeQwenImage21", "QwenImage21Cache"}:
+        return QWEN_IMAGE_21
+    if any(
+        "CLIPLoader" in str(node.get("class_type", ""))
+        and (node.get("inputs") or {}).get("type") == "flux2"
+        for node in nodes
+    ):
+        return KLEIN
+    return None
+
+
+@lru_cache(maxsize=None)
+def _family_loaders(family: str) -> dict[str, dict]:
+    """The model loader nodes of *family*'s built-in Inpaint workflow, by class."""
+    path = os.path.join(_BUILT_IN_DIR, _FAMILY_SOURCE[family])
+    with open(path, encoding="utf-8") as handle:
+        graph = json.load(handle)
+    return {
+        node["class_type"]: node["inputs"]
+        for node in graph.values()
+        if isinstance(node, dict) and node.get("class_type") in _LOADER_CLASSES
+    }
+
+
+def edit_outpaint_graph(family: str, prompt: str = EDIT_PROMPT) -> dict:
+    """*family*'s edit-model outpaint graph, with every side 0 and *prompt*.
+
+    The probes cropped and stitched with Inpaint Crop & Stitch; this keeps to
+    core nodes. The crop spanned the whole canvas there (every side was
+    padded), and with one side padded it would have cut the original out of
+    the reference, so the whole canvas is sampled and the decode is pasted
+    back through the pad's feathered mask as in :func:`fill_outpaint_graph`.
+    """
+    graph: dict[str, dict] = {}
+
+    def add(class_type: str, title: str, **inputs) -> str:
+        node_id = str(len(graph) + 1)
+        graph[node_id] = {
+            "class_type": class_type,
+            "inputs": inputs,
+            "_meta": {"title": title},
+        }
+        return node_id
+
+    loaders = _family_loaders(family)
+    load = add("LoadImage", "Load Image", image="example.png")
+    pad = add(
+        PAD_CLASS,
+        "Pad for outpainting",
+        image=[load, 0],
+        left=0,
+        top=0,
+        right=0,
+        bottom=0,
+        feathering=PAD_FEATHER,
+    )
+    # The pad is grey and its mask feathers into the original; the new area
+    # alone (mask 1) is painted white.
+    new_area = add("ThresholdMask", "New area", mask=[pad, 1], value=0.99)
+    white = add("MaskToImage", "White", mask=[new_area, 0])
+    filled = add(
+        "ImageCompositeMasked",
+        "White pad",
+        destination=[pad, 0],
+        source=[white, 0],
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=[new_area, 0],
+    )
+    canvas = add(
+        "ImageScaleToTotalPixels",
+        "Canvas to the model's size",
+        image=[filled, 0],
+        upscale_method="lanczos",
+        megapixels=FILL_MEGAPIXELS,
+        # Qwen Image 2.1 rounds its reference to 32; FLUX.2 needs 16.
+        resolution_steps=32,
+    )
+    unet = add("UNETLoader", "Load model", **loaders["UNETLoader"])
+    clip = add("PixlStashCLIPLoader", "Load CLIP", **loaders["PixlStashCLIPLoader"])
+    vae = add("PixlStashVAELoader", "Load VAE", **loaders["PixlStashVAELoader"])
+    if family == QWEN_IMAGE_21:
+        model = add(
+            "QwenImage21Cache",
+            "Qwen Image 2.1 Cache",
+            model=[unet, 0],
+            device="auto",
+            dtype="default",
+        )
+        encode = add(
+            "TextEncodeQwenImage21",
+            "Prompt",
+            clip=[clip, 0],
+            prompt=prompt,
+            negative_prompt="",
+            vae=[vae, 0],
+            # 0: the reference at its own size, so its latent is the canvas's.
+            resolution=0,
+            **{"images.image_1": [canvas, 0]},
+        )
+        sampled = add(
+            "KSampler",
+            "KSampler",
+            model=[model, 0],
+            positive=[encode, 0],
+            negative=[encode, 1],
+            latent_image=[encode, 2],
+            seed=0,
+            steps=25,
+            cfg=1.0,
+            sampler_name="euler",
+            scheduler="simple",
+            denoise=1.0,
+        )
+        decoded = add("VAEDecode", "VAE Decode", samples=[sampled, 0], vae=[vae, 0])
+        # Its VAE decodes RGBA; the paste-back needs RGB.
+        decoded = add("SplitImageWithAlpha", "Drop alpha", image=[decoded, 0])
+    else:
+        text = add("CLIPTextEncode", "Prompt", clip=[clip, 0], text=prompt)
+        latent = add("VAEEncode", "Encode canvas", pixels=[canvas, 0], vae=[vae, 0])
+        positive = add(
+            "ReferenceLatent",
+            "ReferenceLatent",
+            conditioning=[text, 0],
+            latent=[latent, 0],
+        )
+        negative = add("ConditioningZeroOut", "Negative", conditioning=[text, 0])
+        guider = add(
+            "CFGGuider",
+            "CFGGuider",
+            model=[unet, 0],
+            positive=[positive, 0],
+            negative=[negative, 0],
+            cfg=1.0,
+        )
+        sampler = add("KSamplerSelect", "KSamplerSelect", sampler_name="euler")
+        size = add("GetImageSize", "Canvas size", image=[canvas, 0])
+        sigmas = add(
+            "Flux2Scheduler",
+            "Flux2Scheduler",
+            steps=4,
+            width=[size, 0],
+            height=[size, 1],
+        )
+        noise = add("RandomNoise", "RandomNoise", noise_seed=0)
+        # The canvas's own latent at full denoise: no noise mask, which left a
+        # rectangle and a tone step at the seam in four steps.
+        sampled = add(
+            "SamplerCustomAdvanced",
+            "SamplerCustomAdvanced",
+            noise=[noise, 0],
+            guider=[guider, 0],
+            sampler=[sampler, 0],
+            sigmas=[sigmas, 0],
+            latent_image=[latent, 0],
+        )
+        decoded = add("VAEDecode", "VAE Decode", samples=[sampled, 0], vae=[vae, 0])
+    padded = add("GetImageSize", "Padded size", image=[pad, 0])
+    back = add(
+        "ImageScale",
+        "Back to the padded size",
+        image=[decoded, 0],
+        upscale_method="lanczos",
+        width=[padded, 0],
+        height=[padded, 1],
+        crop="disabled",
+    )
+    # The edit redraws the whole canvas; the original's pixels go back on top.
+    kept = add(
+        "ImageCompositeMasked",
+        "Keep the original",
+        destination=[pad, 0],
+        source=[back, 0],
+        x=0,
+        y=0,
+        resize_source=False,
+        mask=[pad, 1],
+    )
+    add("SaveImage", "Save Image", images=[kept, 0], filename_prefix=SAVE_PREFIX)
+    return graph
 
 
 def _positive_prompt(graph: dict, encoders: tuple[str, ...]) -> str:

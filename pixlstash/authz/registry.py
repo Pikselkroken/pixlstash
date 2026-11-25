@@ -2145,7 +2145,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("POST", "/api/v1/workflows/{workflow_id}/outpaint-copy"): RoutePolicy(
         _OWNER,
-        justification="Store a FLUX.1 Fill outpaint copy of a workflow's graph; POST blocked for READ tokens; owner only",
+        justification="Store an outpaint copy of a workflow's graph; POST blocked for READ tokens; owner only",
     ),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"): RoutePolicy(
         _OWNER,

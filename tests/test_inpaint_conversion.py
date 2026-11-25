@@ -15,10 +15,13 @@ from pixlstash.services.inpaint_conversion import (
     convert_to_inpaint,
 )
 from pixlstash.services.outpaint_conversion import (
+    EDIT_PROMPT,
     FILL_MODEL,
     convert_to_outpaint,
     fill_outpaint_graph,
 )
+from pixlstash.services.workflow_hash import reduce_api_graph
+from pixlstash.services.workflow_identity import reduced_workflow_type
 from pixlstash.services.workflow_io import detect_workflow_io
 
 BUILT_IN = (
@@ -467,11 +470,11 @@ def test_each_shape_it_cannot_convert_is_refused_with_a_reason(graph, says):
 # --- Convert to Outpainting: the FLUX.1 Fill graph (#2812) ------------------
 
 
-def test_outpainting_builds_the_fill_graph_whatever_the_source_runs():
+def test_outpainting_builds_the_fill_graph_for_any_other_family():
     """The smoke test's chain. Wrong if the source's model survives (#2551
     rewrote the edit model's own graph, which re-frames instead of
     extending), or if the original is not pasted back over the decode."""
-    source = _built_in("FLUX.2 Klein 9B Edit.json")
+    source = _moss_edit()
     before = copy.deepcopy(source)
     out = convert_to_outpaint(source)
     assert source == before
@@ -513,6 +516,67 @@ def test_outpainting_carries_the_source_prompt_into_the_one_it_reads():
     [found] = detect_workflow_io(out).positive_prompt_nodes
     assert out[found]["inputs"]["text"] == "a lighthouse at dusk"
     assert fill_outpaint_graph()[found]["inputs"]["text"] == ""
+
+
+@pytest.mark.parametrize(
+    "source, built_in",
+    [
+        ("FLUX.2 Klein 9B Edit.json", "FLUX.2 Klein 9B Inpaint.json"),
+        (
+            "Qwen-Image 2.1 Sheet from Reference.json",
+            "Qwen-Image 2.1 Inpaint.json",
+        ),
+    ],
+    ids=["klein", "qwen_image_21"],
+)
+def test_a_klein_or_qwen_21_source_outpaints_on_its_own_edit_model(source, built_in):
+    """#2812's probes: white pad, the whole canvas as the only reference and
+    sampled at its own size, the original pasted back. Wrong if the Fill model
+    loads (the owner has this family's files), if the sampler starts from a
+    latent of another size than the reference (#2551 re-framed), or if the
+    decode is saved without the paste-back (the edit redraws everything)."""
+    out = convert_to_outpaint(_built_in(source))
+    model_files = {
+        n["class_type"]: n["inputs"]
+        for n in _built_in(built_in).values()
+        if n["class_type"]
+        in ("UNETLoader", "PixlStashCLIPLoader", "PixlStashVAELoader")
+    }
+    assert {cls: out[_one(out, cls)]["inputs"] for cls in model_files} == model_files
+    pad = _one(out, "ImagePadForOutpaint")
+    assert out[pad]["inputs"]["image"] == [_one(out, "LoadImage"), 0]
+    new_area = _one(out, "ThresholdMask")
+    assert out[new_area]["inputs"]["mask"] == [pad, 1]
+    white, kept = sorted(
+        _of(out, "ImageCompositeMasked"),
+        key=lambda i: out[i]["inputs"]["source"] == [_one(out, "ImageScale"), 0],
+    )
+    assert out[white]["inputs"]["destination"] == [pad, 0]
+    assert out[white]["inputs"]["source"] == [_one(out, "MaskToImage"), 0]
+    canvas = _one(out, "ImageScaleToTotalPixels")
+    assert out[canvas]["inputs"]["image"] == [white, 0]
+    if "Klein" in source:
+        encode = _one(out, "VAEEncode")
+        assert out[encode]["inputs"]["pixels"] == [canvas, 0]
+        assert out[_one(out, "ReferenceLatent")]["inputs"]["latent"] == [encode, 0]
+        sampler = out[_one(out, "SamplerCustomAdvanced")]["inputs"]
+        assert sampler["latent_image"] == [encode, 0]
+        decoded = _one(out, "VAEDecode")
+    else:
+        encode = _one(out, "TextEncodeQwenImage21")
+        assert out[encode]["inputs"]["images.image_1"] == [canvas, 0]
+        assert out[encode]["inputs"]["resolution"] == 0
+        assert out[_one(out, "KSampler")]["inputs"]["latent_image"] == [encode, 2]
+        decoded = _one(out, "SplitImageWithAlpha")
+    assert "SetLatentNoiseMask" not in {n["class_type"] for n in out.values()}
+    assert out[_one(out, "ImageScale")]["inputs"]["image"] == [decoded, 0]
+    assert out[kept]["inputs"]["destination"] == [pad, 0]
+    assert out[kept]["inputs"]["mask"] == [pad, 1]
+    assert out[_one(out, "SaveImage")]["inputs"]["images"] == [kept, 0]
+    # A run's prompt and the Extend tool find it as an outpaint workflow.
+    [found] = detect_workflow_io(out).positive_prompt_nodes
+    assert EDIT_PROMPT in out[found]["inputs"].values()
+    assert reduced_workflow_type(reduce_api_graph(out)) == "outpaint"
 
 
 @pytest.mark.parametrize(
