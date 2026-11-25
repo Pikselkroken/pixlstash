@@ -17,6 +17,17 @@ runs:
       with:
         python-version: '3.12'
 
+    # The video tests run a real ffmpeg with an H.264 encoder (PixlStash's
+    # backend finds it on PATH, or via PIXLSTASH_FFMPEG). CI is not
+    # distribution, so Ubuntu's own build (libx264) is fine here.
+    - name: Install ffmpeg
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update -q
+        sudo apt-get install -y -q --no-install-recommends ffmpeg
+        ffmpeg -hide_banner -encoders | grep libx264 >/dev/null
+
     - name: Cache pip packages
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:

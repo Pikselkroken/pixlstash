@@ -1,3 +1,12 @@
+# ── ffmpeg: the pinned LGPL build from our mirror release ────────────────────
+# Fails the build while packaging/ffmpeg/ffmpeg_pin.json is a placeholder.
+FROM python:3.12-slim AS ffmpeg-fetch
+ARG TARGETARCH
+COPY packaging/ffmpeg/ /packaging/
+RUN case "$TARGETARCH" in amd64) p=linux-x64;; arm64) p=linux-arm64;; *) echo "no ffmpeg for $TARGETARCH" >&2; exit 1;; esac \
+    && python /packaging/fetch_ffmpeg.py --platform "$p" --out /out/ffmpeg --notices-dir /notices
+
+
 # ── Stage 1: Build the Vue frontend ──────────────────────────────────────────
 FROM node:24-slim AS frontend-builder
 
@@ -81,6 +90,12 @@ RUN python -c "import pixlstash.server; from pixlstash.services.comfyui_pack_ser
 # Copy the pre-built frontend into the package's expected location.
 # Vite outDir is ../pixlstash/frontend/dist relative to /build/frontend.
 COPY --chown=pixlstash:pixlstash --from=frontend-builder /build/pixlstash/frontend/dist pixlstash/frontend/dist/
+
+# ffmpeg (LGPL, run as a separate program) plus its licence and source notice.
+COPY --from=ffmpeg-fetch /out/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-fetch /notices/ /usr/share/doc/ffmpeg-lgpl/
+# By absolute path, so a console script in /opt/venv/bin cannot shadow it.
+ENV PIXLSTASH_FFMPEG=/usr/local/bin/ffmpeg
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

@@ -2156,6 +2156,50 @@ boxes are not six, not inside the sheet, inverted, under 32 px a side on the
 sheet, or keyed by a picture not among `picture_ids`. Both routes are
 owner-only. Backend: §25.29 of the backend document.
 
+### 2.12 Playable video copies and the waveform (#2807)
+
+A video the browser refuses (`<video>` error `MEDIA_ERR_SRC_NOT_SUPPORTED`
+while showing the original) can be played from an H.264/AAC MP4 copy made by
+an ffmpeg found at run time (backend §3). Every copy route except the `.mp4` answers one status
+object:
+
+```json
+{"state": "none" | "offered" | "preparing" | "ready" | "failed" | "unavailable",
+ "format": "ProRes" | "MKV" | ... | null,
+ "estimate_seconds": 3.2 | null, "remaining_seconds": 1.4 | null,
+ "duration_seconds": 252.0 | null, "detail": "..." | null}
+```
+
+| Route | Does |
+|---|---|
+| `GET /pictures/video-copies/{id}/status` | The status. Never starts anything. |
+| `POST /pictures/video-copies/{id}` `{"confirm": bool}` | `confirm: false` starts a copy estimated at 10 s or less (`preparing`) and only offers a longer one (`offered`, nothing started); `confirm: true` starts it regardless. A copy already made or being made is answered, not restarted. |
+| `GET /pictures/video-copies/{id}.mp4` | The copy (`FileResponse`, so Range and seeking work); 404 when there is none. |
+| `GET /library/video-copies` | Owner only: `{"count", "bytes"}` of the open library's copies. |
+| `DELETE /library/video-copies` | Owner only: removes every finished copy, `{"deleted", "bytes"}`. |
+
+`none` carries `estimate_seconds` when OpenCV can read the frame count;
+`preparing` carries `estimate_seconds` and `remaining_seconds` (the estimate
+minus the time ffmpeg has run). `failed` is answered once and then forgotten,
+so the next POST retries; `detail` says why in user words. `unavailable` means
+no ffmpeg on this install, an ffmpeg with no H.264 encoder, a picture that is
+not a video, or an original that is missing (`detail` says which, except for a
+picture that is not a video). `format` names the original's codec when it
+is one browsers rarely play (ProRes, HEVC, MPEG-4, ...), else its container
+(MOV, MKV, AVI), else null. The picture routes are picture-scoped; **a READ
+share token is refused the POST** by the read-only middleware (POST is not in
+`READ_SAFE_POST_PATHS`), so a share viewer can watch an existing copy through
+the status and `.mp4` routes but cannot start one: the frontend treats a 403
+from the POST like `unavailable`, or reads the status instead.
+
+`GET /pictures/waveforms/{id}.json` answers `{"duration", "peaks"}`: 512 peaks
+in [0, 1] of the first audio track, `duration` being the audio's length in
+seconds, or both null for a clip with no sound (cached too). 404 for a still,
+503 with no ffmpeg; it reads the original, so a refused clip still has one.
+The frontend draws no lane for any non-200 or null peaks, and spans the peaks
+over `audio duration / video duration` of the lane, clamped to 1. Backend:
+§13 Caches of the backend document.
+
 ---
 
 
@@ -2491,6 +2535,8 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 | `GET /api/v1/pictures/thumbnails/{id}.webp` | Cached WebP thumbnail, made on demand under a per-picture async lock and kept on disk in `<library root>/.pixlstash-thumbnails/`. |
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
 | `GET /api/v1/pictures/storyboards/{id}.webp` | A video's 11 evenly spaced frames, first to last, left to right in one WebP (#2147). Made on demand and cached beside the thumbnail; picture-scoped; the thumbnail's cache headers; 404 for a still or a clip whose frames cannot all be read. |
+| `GET /api/v1/pictures/waveforms/{id}.json` | A video's audio peaks as JSON (§2.12). Made on demand and cached beside the thumbnail; picture-scoped. |
+| `GET /api/v1/pictures/video-copies/{id}.mp4` | A browser-playable copy of a video the browser refuses (§2.12); 404 until one is made. Build the URL with `appendShareToken` like any other media URL. |
 | `GET /api/v1/pictures/{id}.{ext}` | Original file (optionally watermarked). |
 
 ### Generated thumbnails: the URL is stable, so the *response* carries the freshness contract

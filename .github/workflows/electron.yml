@@ -215,6 +215,21 @@ jobs:
             --wheel "$WHEEL" \
             --os "$TARGET_OS" --arch "$TARGET_ARCH" --accel "$TARGET_ACCEL" \
             --output-dir electron/resources
+      # The LGPL ffmpeg from our mirror release (ffmpeg-mirror.yml), pinned by
+      # SHA256 in packaging/ffmpeg/ffmpeg_pin.json. Fails while the pin is a
+      # placeholder. electron-builder signs it on macOS like the bundled Python.
+      - name: Fetch bundled ffmpeg (${{ matrix.os }}/${{ matrix.arch }})
+        shell: bash
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          exe=ffmpeg
+          if [ "$TARGET_OS" = win ]; then exe=ffmpeg.exe; fi
+          python packaging/ffmpeg/fetch_ffmpeg.py \
+            --platform "$TARGET_OS-$TARGET_ARCH" \
+            --out "electron/resources/ffmpeg/$exe" \
+            --notices-dir electron/resources/ffmpeg
       # Install deps in a step WITHOUT the signing secrets in scope: npm ci runs
       # third-party dependency lifecycle scripts, which must never see the Apple
       # certificate or notarisation credentials.

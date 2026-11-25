@@ -341,6 +341,12 @@ function reveal(index, { centre = false } = {}) {
   transition: opacity var(--dur-2) var(--ease-standard);
 }
 
+/* A clip with sound adds its 16px waveform lane and the 4px above it under
+   the frames (#2807); a silent clip keeps the 72px band. */
+.lightbox-rail:has(.storyboard-lane) {
+  flex-basis: calc(72px + var(--space-2) + var(--space-5));
+}
+
 .lightbox-rail.hidden {
   opacity: 0;
   pointer-events: none;

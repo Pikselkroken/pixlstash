@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join, dirname, delimiter } from 'node:path';
 import { existsSync } from 'node:fs';
-import { bundledInterpreter, isDevBackend, serverConfigPath, serverLogPath } from '../config';
+import { bundledFfmpeg, bundledInterpreter, isDevBackend, serverConfigPath, serverLogPath } from '../config';
 import {
   parsePermissionRepairRequest,
   PermissionRepairRequiredError,
@@ -356,10 +356,13 @@ export class ServerProcess {
         ? [overlayDir, process.env.PYTHONPATH].filter(Boolean).join(delimiter)
         : process.env.PYTHONPATH;
 
+    const ffmpeg = bundledFfmpeg();
     const env = {
       ...process.env,
       PYTHONPATH: pythonPath,
       PIXLSTASH_HOST: '127.0.0.1',
+      // The installer's own LGPL ffmpeg, unless the user pointed at another.
+      ...(ffmpeg && !process.env.PIXLSTASH_FFMPEG ? { PIXLSTASH_FFMPEG: ffmpeg } : {}),
       PIXLSTASH_PORT: String(port),
       // Stays 'electron' even on a developer's machine: the backend reads this
       // exact value as a runtime switch, not just a telemetry label - it gates

@@ -1073,6 +1073,11 @@ class Server(
         if vault is None:
             return
         image_root = vault.image_root
+        # Cancels queued playable copies and stops the running ffmpeg, which is
+        # its own process and would outlive us.
+        clear_route_caches = getattr(self, "_clear_thumbnail_runtime_cache", None)
+        if clear_route_caches is not None:
+            clear_route_caches()
         try:
             vault.close()
         finally:
@@ -1459,6 +1464,7 @@ class Server(
             self._ws_loop = loop
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
+        await loop.run_in_executor(None, self._sweep_video_copies)
         # Thumbnail generation is NOT run here anymore. It used to block startup
         # (awaited before vault.start()), which on a large library - or after the
         # v1.8.0 upgrade reset thumbnails to NULL - held the server unusable for

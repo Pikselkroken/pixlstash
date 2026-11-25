@@ -74,6 +74,7 @@ from .import_folder import ImportFolder  # noqa: F401
 from .reference_folder import ReferenceFolder, ReferenceFolderStatus  # noqa: F401
 from .user import User  # noqa: F401
 from .user_token import UserToken  # noqa: F401
+from .video_copy import VideoCopy  # noqa: F401
 from .guest_session import GuestSession  # noqa: F401
 from .library_settings import LibrarySettings  # noqa: F401
 from .pending_score_invalidation import PendingScoreInvalidation  # noqa: F401

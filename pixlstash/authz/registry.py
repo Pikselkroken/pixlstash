@@ -348,6 +348,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # #2458: the Folders tree, read from where pictures are filed. Names
     # folders relative to the library root, never a host path.
     ("GET", "/api/v1/library/folders"): RoutePolicy(_OWNER),
+    # #2807: the open library's playable video copies, counted and cleared
+    # from Settings. Regenerable caches; no host path in either answer.
+    ("GET", "/api/v1/library/video-copies"): RoutePolicy(_OWNER),
+    ("DELETE", "/api/v1/library/video-copies"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/server-config/captions"): RoutePolicy(
         _LOCAL,
         justification=(
@@ -1013,6 +1017,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/pictures/{id}/mask"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/storyboards/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/waveforms/{id}.json"): RoutePolicy(_PIC, id_param="id"),
+    # #2807: a browser-playable copy of the picture's own video. The POST starts
+    # an ffmpeg job: one per picture (deduplicated), one at a time server-wide.
+    # READ tokens are refused the POST by the middleware (not in READ_SAFE).
+    ("GET", "/api/v1/pictures/video-copies/{id}/status"): RoutePolicy(
+        _PIC, id_param="id"
+    ),
+    ("POST", "/api/v1/pictures/video-copies/{id}"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/video-copies/{id}.mp4"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),
     ("DELETE", "/api/v1/pictures/{id}/face/{index}"): RoutePolicy(_PIC, id_param="id"),

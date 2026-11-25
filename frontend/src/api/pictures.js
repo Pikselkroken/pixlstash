@@ -60,6 +60,56 @@ export function pictureStoryboardUrl(id, { version } = {}) {
 }
 
 /**
+ * The URL a `<video>` plays a clip's playable copy from (#2807): an H.264 MP4
+ * the server makes for a file this browser refuses. 404 until one is ready.
+ *
+ * @param {number|string} id
+ * @returns {string}
+ */
+export function pictureVideoCopyUrl(id) {
+  return appendShareToken(`${API_BASE_URL}/pictures/video-copies/${id}.mp4`);
+}
+
+/**
+ * Read a video's audio waveform (#2807).
+ *
+ * @param {number|string} id
+ * @returns {Promise<{duration: number|null, peaks: number[]|null}>} 512 peaks
+ *   in [0, 1] over the AUDIO track's `duration` seconds; both null for a clip
+ *   with no audio. 404 for a non-video, 503 with no ffmpeg.
+ */
+export async function fetchWaveform(id) {
+  return unwrap(apiClient.get(`/pictures/waveforms/${id}.json`));
+}
+
+/**
+ * Where a clip's playable copy stands. Never starts one.
+ *
+ * @param {number|string} id
+ * @returns {Promise<Object>} `{ state, format, estimate_seconds,
+ *   remaining_seconds, duration_seconds, detail }`; `state` is one of
+ *   none | offered | preparing | ready | failed | unavailable.
+ */
+export async function fetchVideoCopyStatus(id) {
+  return unwrap(apiClient.get(`/pictures/video-copies/${id}/status`));
+}
+
+/**
+ * Ask for a clip's playable copy. Unconfirmed, the server starts it only when
+ * it is quick (and otherwise answers `offered`); confirmed, it starts anyway.
+ *
+ * @param {number|string} id
+ * @param {Object} options
+ * @param {boolean} options.confirm
+ * @returns {Promise<Object>} the status, as {@link fetchVideoCopyStatus}.
+ */
+export async function requestVideoCopy(id, { confirm }) {
+  return unwrap(
+    apiClient.post(`/pictures/video-copies/${id}`, { confirm: Boolean(confirm) }),
+  );
+}
+
+/**
  * The URL a browser loads a picture's own file from, by its format ("png",
  * "mp4"). Like the thumbnail URL, an `<img src>` or `<video src>`.
  *

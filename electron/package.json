@@ -58,6 +58,10 @@
       {
         "from": "resources/runtime.json",
         "to": "runtime.json"
+      },
+      {
+        "from": "resources/ffmpeg",
+        "to": "ffmpeg"
       }
     ],
     "win": {

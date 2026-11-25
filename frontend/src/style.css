@@ -295,6 +295,33 @@ body {
   --v-theme-dark-surface-favourite: var(--v-theme-favourite);
 }
 
+/* A list that scrolls inside its own box fades out at the edge where it is
+   cut, so it shows there is more (#2807). The fade shrinks to nothing as the
+   list reaches its end; a list with nothing to scroll has an inactive scroll
+   timeline, so the animation does not apply and there is no fade. A browser
+   without scroll timelines ends the animation at once: no fade either. */
+@property --scroll-fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-fade-out {
+  from {
+    --scroll-fade: var(--space-6);
+  }
+  to {
+    --scroll-fade: 0px;
+  }
+}
+
+.scroll-fade {
+  /* A mask reads only alpha, so its ink is no colour of the theme. */
+  mask-image: linear-gradient(black calc(100% - var(--scroll-fade)), transparent);
+  animation: scroll-fade-out linear both;
+  animation-timeline: scroll(self);
+}
+
 /* Screen-reader-only text. NEVER use `display: none` / `visibility: hidden` for
    this - those remove the node from the accessibility tree, so a live region
    built on them announces nothing. Clipping keeps it rendered and announced. */

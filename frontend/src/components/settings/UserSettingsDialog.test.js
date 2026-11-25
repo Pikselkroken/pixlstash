@@ -30,7 +30,14 @@ vi.mock("./ComputeSection.vue", () => ({
   default: { template: '<div class="compute-stub" />' },
 }));
 vi.mock("./LibrariesSection.vue", () => ({ default: sectionStub }));
-vi.mock("./ImportFoldersSection.vue", () => ({ default: sectionStub }));
+// The section carries its own deep-link anchor, on its heading (#2807).
+vi.mock("./ImportFoldersSection.vue", () => ({
+  default: {
+    template:
+      '<div class="section-stub"><div id="settings-anchor-import-folders" /></div>',
+  },
+}));
+vi.mock("./VideoCopiesSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./SharingSection.vue", () => ({ default: sectionStub }));

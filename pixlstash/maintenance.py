@@ -12,9 +12,14 @@ import os
 from PIL import Image
 from sqlmodel import select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, VideoCopy
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.ffmpeg_utils import COPY_TMP_PREFIX
+from pixlstash.utils.image_processing.image_utils import (
+    VIDEO_COPY_DIR,
+    VIDEO_COPY_NAME,
+    ImageUtils,
+)
 
 logger = get_logger(__name__)
 
@@ -157,3 +162,45 @@ class MaintenanceMixin:
             deleted_count,
             thumbnails_removed,
         )
+
+    def _sweep_video_copies(self):
+        """Remove unfinished copies and copy files no ``video_copy`` row owns.
+
+        A copy interrupted by a crash leaves its temp file, and a picture
+        deleted by any path other than the purge (missing-file cleanup, a
+        reference folder removed or rescanned, a full restore) loses its row by
+        cascade but not its file. Only those two name shapes are touched. A
+        failure is logged, never raised: start-up must not stop over a cache.
+        """
+        folder = os.path.join(self.vault.image_root, VIDEO_COPY_DIR)
+        try:
+            if not os.path.isdir(folder):
+                return
+            owned = {
+                f"{picture_id}.mp4"
+                for picture_id in self.vault.db.run_immediate_read_task(
+                    lambda session: session.exec(select(VideoCopy.picture_id)).all()
+                )
+            }
+            leftovers = [
+                name
+                for name in os.listdir(folder)
+                if name.startswith(COPY_TMP_PREFIX)
+                or (VIDEO_COPY_NAME.match(name) and name not in owned)
+            ]
+        except Exception as exc:
+            logger.warning(
+                "Could not sweep the video copies in %s; leftovers stay until the "
+                "next start: %s",
+                folder,
+                exc,
+                exc_info=True,
+            )
+            return
+        for name in leftovers:
+            path = os.path.join(folder, name)
+            try:
+                os.remove(path)
+                logger.info("Removed a leftover video copy file %s", path)
+            except OSError as exc:
+                logger.warning("Could not remove leftover video copy %s: %s", path, exc)

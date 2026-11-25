@@ -374,23 +374,59 @@
                     @loadedmetadata="updateLightboxDims"
                     @error="handleVideoError"
                   ></video>
-                  <div v-else class="lightbox-video-error">
-                    <v-icon size="48" color="grey-lighten-1"
+                  <!-- One box for every way a refused clip goes (#2807): a
+                       copy being made, a copy offered, or no copy at all. -->
+                  <div
+                    v-else
+                    ref="videoErrorRef"
+                    class="lightbox-video-error"
+                  >
+                    <v-progress-circular
+                      v-if="copyNotice?.wait"
+                      indeterminate
+                      size="28"
+                      width="3"
+                    />
+                    <v-icon v-else size="48" color="grey-lighten-1"
                       >mdi-video-off-outline</v-icon
                     >
-                    <p class="lightbox-video-error-msg">
+                    <template v-if="copyNotice">
+                      <p v-if="copyNotice.head" class="lightbox-video-error-head">
+                        {{ copyNotice.head }}
+                      </p>
+                      <p v-if="copyNotice.text" class="lightbox-video-error-msg">
+                        {{ copyNotice.text }}
+                      </p>
+                    </template>
+                    <p v-else class="lightbox-video-error-msg">
                       Your browser cannot play this video format ({{
                         getLightboxFormat(image).toUpperCase()
                       }}).
+                      <template v-if="videoCopy?.detail">{{
+                        videoCopy.detail
+                      }}</template>
                     </p>
-                    <a
-                      :href="videoSrc"
-                      download
-                      class="lightbox-video-download-btn"
-                    >
-                      <v-icon size="18">mdi-download</v-icon>
-                      Download video
-                    </a>
+                    <div class="lightbox-video-error-acts">
+                      <AppButton
+                        v-if="copyNotice?.offer"
+                        variant="primary"
+                        on-dark
+                        icon-left="play"
+                        @click.stop="askForCopy(true)"
+                      >
+                        Make a playable copy
+                      </AppButton>
+                      <AppButton
+                        ref="videoDownloadRef"
+                        class="lightbox-video-download-btn"
+                        variant="secondary"
+                        on-dark
+                        icon-left="download"
+                        @click.stop="downloadOriginalVideo"
+                      >
+                        Download video
+                      </AppButton>
+                    </div>
                   </div>
                 </template>
                 <template v-else>
@@ -688,6 +724,14 @@
             <Tooltip text="Next (→)" activator="parent" :describe="false" />
             <v-icon>mdi-chevron-right</v-icon>
           </button>
+          <!-- The frames below show, but cannot seek a clip that will not
+               play; they will once its copy does (#2807). -->
+          <span
+            v-if="copyNotice && storyboardShown && bandShows === 'clip'"
+            class="lightbox-copy-hint"
+            :class="{ hidden: chromeHidden }"
+            >Frames seek once the copy plays</span
+          >
           <!-- The signpost to the Edit tab, shown and hidden with the arrows.
                Gone while that tab is up (you are already there) and under a
                comparison, whose After tag holds this corner. -->
@@ -840,6 +884,8 @@
             :src="storyboardSrc"
             :duration="videoMeta.duration"
             :media="videoRef"
+            :waveform="waveform"
+            :clip-length="videoCopy?.duration_seconds ?? null"
             @unavailable="storyboardMissingId = image?.id"
           />
         </template>
@@ -1202,6 +1248,10 @@ import {
   downloadPicture,
   rotatePictures,
   pictureStoryboardUrl,
+  pictureVideoCopyUrl,
+  fetchWaveform,
+  fetchVideoCopyStatus,
+  requestVideoCopy,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -1257,6 +1307,7 @@ import RailPicture from "../panels/RailPicture.vue";
 import Segmented from "../widgets/Segmented.vue";
 import VideoStoryboard from "../widgets/VideoStoryboard.vue";
 import { isDescriptionSentinel } from "../../utils/descriptions";
+import { videoCopyNotice } from "../../utils/videoCopy";
 import { FAVOURITE_KEY } from "../../stores/useFavouritesStore";
 import Tooltip from "../widgets/Tooltip.vue";
 import ViewBackButton from "../widgets/ViewBackButton.vue";
@@ -4416,7 +4467,7 @@ watch(
 // so the URL stays stable across metadata merges (which would otherwise abort
 // the in-progress download). Returns '' while format is not yet known, which
 // also keeps the <video> element from being created prematurely via v-if.
-const videoSrc = computed(() => {
+const originalVideoSrc = computed(() => {
   const id = image.value?.id;
   const fmt = image.value?.format;
   if (!id || !fmt || !isSupportedVideoFile(`file.${fmt}`)) return "";
@@ -4424,6 +4475,105 @@ const videoSrc = computed(() => {
     `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`,
   );
 });
+const videoSrc = computed(() =>
+  originalVideoSrc.value && videoCopy.value?.state === "ready"
+    ? pictureVideoCopyUrl(image.value.id)
+    : originalVideoSrc.value,
+);
+
+// ── Playable copies and the waveform (#2807) ──────────────────────────────
+// The browser says it cannot play the original (MEDIA_ERR_SRC_NOT_SUPPORTED)
+// and only then is a copy asked for: made at once when it is quick, offered
+// with its estimate when not, polled while it is made. The copy carries on on
+// the server when the lightbox steps away; coming back asks again and is told
+// `preparing` or `ready`. A copy that will not play either ends at the plain
+// box: it never asks again.
+const COPY_POLL_MS = 2000;
+const videoCopy = ref(null);
+const videoErrorRef = ref(null);
+const videoDownloadRef = ref(null);
+const copyNotice = computed(() => videoCopyNotice(videoCopy.value));
+// Bumped whenever the clip's copy is no longer this lightbox's business
+// (stepped away, closed, asked afresh), so a late answer or tick is dropped.
+let copyRun = 0;
+let copyPollTimer = 0;
+
+function stopVideoCopy() {
+  copyRun += 1;
+  window.clearTimeout(copyPollTimer);
+  copyPollTimer = 0;
+  videoCopy.value = null;
+}
+
+async function askForCopy(confirm) {
+  const id = image.value?.id;
+  if (!id) return;
+  stopVideoCopy();
+  const run = copyRun;
+  videoCopy.value = { state: "asking" };
+  // The offer's button goes with the offer: keep the keyboard in the box.
+  if (confirm) nextTick(() => videoDownloadRef.value?.focus?.());
+  await settleVideoCopy(id, run, () =>
+    requestVideoCopy(id, { confirm }).catch((err) => {
+      // A read-only share token may not start a copy (the POST is refused),
+      // but it may watch one that exists or is being made.
+      if (err?.response?.status !== 403) throw err;
+      return fetchVideoCopyStatus(id);
+    }),
+  );
+}
+
+async function settleVideoCopy(id, run, read) {
+  let status;
+  try {
+    status = await read();
+  } catch (err) {
+    console.warn(`Could not get a playable copy of picture ${id}`, err);
+    status = { state: "failed" };
+  }
+  if (run !== copyRun) return;
+  videoCopy.value = status;
+  if (status?.state === "ready") {
+    // The box goes and the <video> comes back on the copy; focus that was in
+    // the box moves to the stage holding it rather than dropping to the page.
+    const hadFocus = videoErrorRef.value?.contains(document.activeElement);
+    videoError.value = null;
+    if (hadFocus) nextTick(() => lightboxCanvasRef.value?.focus());
+  } else if (status?.state === "preparing") {
+    copyPollTimer = window.setTimeout(
+      () => settleVideoCopy(id, run, () => fetchVideoCopyStatus(id)),
+      COPY_POLL_MS,
+    );
+  }
+}
+
+function downloadOriginalVideo() {
+  const link = document.createElement("a");
+  link.href = originalVideoSrc.value;
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+// Any answer but a 200 with peaks means no lane: never an error state.
+const waveform = ref(null);
+watch(
+  () => storyboardShown.value && image.value?.id,
+  async (id) => {
+    waveform.value = null;
+    if (!id) return;
+    try {
+      const data = await fetchWaveform(id);
+      if (image.value?.id === id && data?.peaks?.length) waveform.value = data;
+    } catch (err) {
+      console.info(
+        `No waveform for picture ${id} (${err?.response?.status ?? err})`,
+      );
+    }
+  },
+  { immediate: true },
+);
 // A cold overlay route initially knows only the picture id. An extension-less
 // `/pictures/{id}` is the JSON detail endpoint, not media: mounting it as an
 // <img> yields a successful HTTP response followed by a decode error. Wait for
@@ -5047,6 +5197,7 @@ function handleVideoError(event) {
   // support the container/codec (e.g. Firefox + .mov/ProRes).
   console.warn(`Video load error (code ${code}): ${msg}`);
   videoError.value = err ?? { code, message: msg };
+  if (code === 4 && !videoCopy.value) void askForCopy(false);
 }
 
 onMounted(() => {
@@ -5091,10 +5242,14 @@ onUnmounted(() => {
   }
   clearCharacterThumbnails();
   closeFallbackSaveDialog();
+  stopVideoCopy();
 });
 
 watch(open, (isOpen) => {
   if (!isOpen) {
+    // The <video> goes with the lightbox; reopened, it asks afresh.
+    videoError.value = null;
+    stopVideoCopy();
     swipeHintVisible.value = false;
     if (swipeHintTimer) {
       clearTimeout(swipeHintTimer);
@@ -5657,6 +5812,7 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
+      stopVideoCopy();
       fullImageErrorSrc.value = "";
       scheduleLightboxDimsUpdate();
       fetchFaceBboxes(newId);
@@ -5668,6 +5824,7 @@ watch(
       faceBboxes.value = [];
       detectionBboxes.value = [];
       videoError.value = null;
+      stopVideoCopy();
       fullImageErrorSrc.value = "";
       comfyMetadata.value = null;
       recipeTabShown.value = false;

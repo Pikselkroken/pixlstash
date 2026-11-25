@@ -1066,6 +1066,14 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # As setup-backend does on Linux: the video tests need a real ffmpeg with
+      # an H.264 encoder on PATH (gyan.dev's build via Chocolatey; CI only).
+      - name: Install ffmpeg
+        shell: bash
+        run: |
+          choco install ffmpeg --version 9.0.2 -y --no-progress
+          ffmpeg -hide_banner -encoders | grep -q libx264
+
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:

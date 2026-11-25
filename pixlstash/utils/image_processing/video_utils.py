@@ -25,6 +25,20 @@ VIDEO_EXTENSIONS = (".mp4", ".webm", ".avi", ".mov", ".mkv")
 # workflow in it. It is read once and walked through views, never copied.
 _MAX_TAG_BYTES = 64 * 1024 * 1024
 
+# What to call a video's format when the browser refuses it ("This browser
+# can't play ProRes"): its codec by the FOURCC OpenCV reports, lowercased, for
+# codecs browsers rarely play, else its container by extension.
+_CODEC_NAMES = {
+    **dict.fromkeys(("apch", "apcn", "apcs", "apco", "ap4h", "ap4x"), "ProRes"),
+    **dict.fromkeys(("hevc", "hvc1", "hev1"), "HEVC"),
+    **dict.fromkeys(("avdn", "avdh"), "DNxHD"),
+    **dict.fromkeys(("mp4v", "fmp4"), "MPEG-4"),
+    "xvid": "Xvid",
+    "divx": "DivX",
+    "mjpg": "Motion JPEG",
+}
+_CONTAINER_NAMES = {".mov": "MOV", ".mkv": "MKV", ".avi": "AVI"}
+
 _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 # Matroska element ids, as written (the length marker is part of an id).
 _MKV_SEGMENT = 0x18538067
@@ -312,6 +326,33 @@ class VideoUtils:
                 continue
             return _MP4_EPOCH + timedelta(seconds=ct_val)
         return None
+
+    @staticmethod
+    def describe(file_path: str) -> Optional[dict]:
+        """What OpenCV says about a video, or ``None`` if it cannot open it.
+
+        ``pixel_frames`` (frames x width x height, the size of a transcode),
+        ``duration`` in seconds (``None`` when the frame count or rate is not
+        reported) and ``format``, a human name or ``None``.
+        """
+        cap = cv2.VideoCapture(file_path)
+        try:
+            if not cap.isOpened():
+                return None
+            frames = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            code = int(cap.get(cv2.CAP_PROP_FOURCC))
+        finally:
+            cap.release()
+        fourcc = "".join(chr((code >> 8 * i) & 0xFF) for i in range(4)).lower()
+        ext = os.path.splitext(file_path)[1].lower()
+        return {
+            "pixel_frames": frames * width * height,
+            "duration": frames / fps if frames and fps > 0 else None,
+            "format": _CODEC_NAMES.get(fourcc) or _CONTAINER_NAMES.get(ext),
+        }
 
     @staticmethod
     def read_first_video_frame_bgr(file_path: str) -> Optional[np.ndarray]:

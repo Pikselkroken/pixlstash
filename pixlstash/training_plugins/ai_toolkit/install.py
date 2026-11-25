@@ -22,6 +22,7 @@ from typing import Callable, Iterable
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.training.presets import version_tuple
+from pixlstash.utils.system_utils import child_process_env
 
 logger = get_logger(__name__)
 
@@ -293,8 +294,8 @@ def trainer_env() -> dict[str, str]:
     """
     return {
         key: value
-        for key, value in os.environ.items()
-        if key not in _BACKEND_ONLY_ENV and not key.startswith("PIXLSTASH_")
+        for key, value in child_process_env().items()
+        if key not in _BACKEND_ONLY_ENV
     }
 
 

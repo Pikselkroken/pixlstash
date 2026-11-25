@@ -78,6 +78,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "certum-signer-image.yml",
         "docker-publish.yml",
         "electron.yml",
+        "ffmpeg-mirror.yml",
         "publish-pypi.yml",
         "rebuild-release.yml",
         "record-test-durations.yml",
