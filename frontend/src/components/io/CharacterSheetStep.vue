@@ -2524,8 +2524,9 @@ async function useItem(keep, boxes) {
         : {}),
     }));
   } catch (e) {
-    phase.value = "pick";
-    error.value = `Couldn't make the set ${itemName.value}. ${errorMessage(e, "Please try again.")} Edit the name and use the sheet again.`;
+    // The name field is on the form; the sheets wait behind "Back to the sheets".
+    phase.value = "describe";
+    error.value = `Couldn't make the set ${itemName.value}. ${errorMessage(e, "Please try again.")} Edit the name, then go back to the sheets and use them.`;
     working.value = false;
     return;
   }

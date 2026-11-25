@@ -280,9 +280,12 @@ describe("CharacterSheetStep: an outfit", () => {
     expect(api.createPictureSet).toHaveBeenCalledWith(
       expect.objectContaining({ name: "New outfit" }),
     );
-    // Nothing is cut, the sheets stay on show and say why.
+    // Nothing is cut: back on the form, where the name is, and the sheets one
+    // step away.
     expect(api.useItemSheets).not.toHaveBeenCalled();
-    expect(wrapper.vm.phase).toBe("pick");
+    expect(wrapper.vm.phase).toBe("describe");
+    expect(wrapper.find('[data-testid="cs-item-name"]').exists()).toBe(true);
+    expect(wrapper.vm.footer.back.label).toBe("Back to the sheets");
     expect(wrapper.vm.error).toContain("Couldn't make the set New outfit");
     expect(wrapper.emitted("cut")).toBeUndefined();
     wrapper.unmount();
