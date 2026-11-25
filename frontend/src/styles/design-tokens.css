@@ -54,6 +54,13 @@
                            exactly one level cost 24px per level and pushed
                            names off the end of a 240px rail. Rank is carried
                            by type, depth by this. */
+  --gutter-caret: 20px; /* the sidebar tree's disclosure caret box: section
+                           heads and their top-level rows. A 16px MDI chevron
+                           showed about 5px of thin stroke and was missed. */
+  --section-step: calc(var(--gutter-caret) + var(--space-2)); /* 24px: the
+                           sidebar's section level only. Each level's caret
+                           stands under its parent's label (design "Strict
+                           tree"); deeper levels keep --indent-step. */
   --entity-thumb: 24px; /* identity slot for a row carrying a picture; the
                            sidebar overrides it from its thumbnail slider,
                            the model list sets it to --space-8. */

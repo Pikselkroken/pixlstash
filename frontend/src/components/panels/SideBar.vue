@@ -24,6 +24,7 @@ import KeyCap from "../widgets/KeyCap.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewEndDialog from "../reviews/ReviewEndDialog.vue";
+import SidebarCaret from "./SidebarCaret.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
@@ -315,8 +316,9 @@ const dragOverSet = ref(null);
 const { expandedTreeKeys, toggleTreeKey, expandTreeKeys } =
   useSetTreeExpansion();
 
-// The People and Sets sections fold away under their heads, remembered across
+// Review, People and Sets fold away under their heads, remembered across
 // reloads like an inspector section.
+const reviewCollapsed = useSectionCollapse("review", { scope: "sidebar" });
 const peopleCollapsed = useSectionCollapse("people", { scope: "sidebar" });
 const setsCollapsed = useSectionCollapse("sets", { scope: "sidebar" });
 
@@ -2969,6 +2971,43 @@ const isFinding = computed(() => findQuery.value.trim() !== "");
 const peopleOpen = computed(() => !peopleCollapsed.value || isFinding.value);
 const setsOpen = computed(() => !setsCollapsed.value || isFinding.value);
 
+// A folded head that hides the open view keeps its selection rail, so the
+// user can still see where they are.
+const reviewHeadHoldsView = computed(
+  () =>
+    reviewCollapsed.value &&
+    (isInboxView.value ||
+      isDuplicatesView.value ||
+      isTagReviewView.value ||
+      isMovesView.value),
+);
+function isCharacterRowActive(branch, char) {
+  return (
+    (selectedCharacterIdSet.value.size > 0
+      ? selectedCharacterIdSet.value.has(char.id)
+      : selectionStore.selectedCharacter === char.id) &&
+    selectionOwnsHighlight.value &&
+    branchIsScope(branch.projectId, char)
+  );
+}
+function peopleHeadHoldsView(branch) {
+  return (
+    !peopleOpen.value &&
+    branch.characters.some((char) => isCharacterRowActive(branch, char))
+  );
+}
+function setsHeadHoldsView(branch) {
+  return (
+    !setsOpen.value &&
+    selectionOwnsHighlight.value &&
+    branch.sets.some(
+      (set) =>
+        selectedSetIdSet.value.has(set.id) &&
+        branchIsScope(branch.projectId, set),
+    )
+  );
+}
+
 /**
  * Does a Folders row stand for what the grid shows? In a project's scope, only
  * the rows under that project. With no scope (a deep link to a person, say),
@@ -5137,155 +5176,198 @@ defineExpose({
             }}</span>
           </button>
 
-          <!-- Review: the queues whose number goes down as you work. -->
-          <div class="sidebar-section-header" role="presentation">
-            <span class="sidebar-section-title">Review</span>
-          </div>
-          <!-- The Inbox: added within the chosen period, with no person and
-               no set. The count follows the period the toolbar picks; caught
-               up, it stays with a 0 as the other Review rows do. -->
-          <button
-            v-if="!isReadOnly"
-            type="button"
-            :class="['sidebar-list-item', { active: isInboxView }]"
-            :aria-current="isInboxView ? 'page' : undefined"
-            @click="emit('select-inbox')"
-          >
-            <span class="sidebar-list-icon"
-              ><v-icon size="16">mdi-inbox-arrow-down-outline</v-icon></span
-            >
-            <span class="sidebar-list-label">Inbox</span>
-            <span class="sidebar-list-count" data-testid="inbox-count">{{
-              inboxStore.count?.toLocaleString() ?? ""
-            }}</span>
-          </button>
-          <!-- `aria-disabled`, not `disabled`: a read-only session must still
-               be able to focus the row and read the title that explains why
-               it is inert. The click guard stays. -->
-          <button
-            type="button"
-            :class="[
-              'sidebar-list-item',
-              {
-                active: isDuplicatesView,
-                'sidebar-list-item--unavailable': isReadOnly,
-              },
-            ]"
-            :aria-current="isDuplicatesView ? 'page' : undefined"
-            :aria-disabled="isReadOnly || undefined"
-            @click="isReadOnly || emit('select-duplicates', {})"
-          >
-            <Tooltip
-              :text="isReadOnly ? READ_ONLY_DEDUP_HINT : ''"
-              activator="parent"
-            />
-            <span class="sidebar-list-icon"
-              ><v-icon size="16">mdi-content-duplicate</v-icon></span
-            >
-            <span class="sidebar-list-label">Duplicates</span>
-            <span v-if="dedupStore.isScanning" class="sidebar-dedup-scanning">
-              <Tooltip
-                text="Still looking for duplicates. Groups appear as they are found."
-                activator="parent"
-              />
-              <v-progress-circular indeterminate size="10" width="1.5" />
-            </span>
-            <!-- A presence DOT, not a count (owner call, 2026-07-29): the
-                 group count moves with the tier gate and the threshold, so it
-                 read as churn. The dot only says "there are duplicates to
-                 review"; the queue's own header carries the numbers. -->
-            <span v-if="dedupStore.hasDuplicates" class="sidebar-dedup-dot">
-              <Tooltip text="There are duplicates to review" activator="parent" />
-            </span>
-          </button>
-          <!-- Tags: a view like Duplicates, so it lights while it is
-               up. Its open reviews nest under it, each lit while it is the one
-               on screen, then "New review…". The list is the view's own data,
-               so the children show while the view is open. -->
-          <button
-            v-if="!isReadOnly"
-            ref="tagReviewRowEl"
-            type="button"
-            :class="['sidebar-list-item', { active: isTagReviewView }]"
-            :aria-current="
-              isTagReviewView && reviewBoardShown ? 'page' : undefined
-            "
-            @click="openTagReviewBoard"
-          >
-            <span class="sidebar-list-icon"
-              ><v-icon size="16">mdi-tag-check-outline</v-icon></span
-            >
-            <span class="sidebar-list-label">Tags</span>
-          </button>
-          <template v-if="!isReadOnly && isTagReviewView">
-            <button
-              v-for="review in reviewSessionsStore.sessions"
-              :key="review.id"
-              type="button"
+          <!-- Review: the queues whose number goes down as you work. It folds
+               like People and Sets; folded, its head says what it hides (the
+               Inbox count, the Duplicates dot) and keeps the selection rail
+               while the open view is one of its rows. -->
+          <div class="sidebar-section-block">
+            <div
               :class="[
-                'sidebar-list-item',
-                'sidebar-review-session',
-                { active: isReviewSessionShown(review.id) },
+                'sidebar-section-header',
+                'sidebar-section-header--collapsible',
+                { 'sidebar-section-header--holds-view': reviewHeadHoldsView },
               ]"
-              :aria-current="
-                isReviewSessionShown(review.id) ? 'page' : undefined
-              "
-              :aria-label="`Review “${review.tag}”, ${reviewProgressText(review)} decided`"
-              @click="reviewSessionsStore.openSession(review.id)"
-              @contextmenu.prevent="
-                openSidebarCtxMenu('review', review, $event)
-              "
-              @keydown="onReviewRowKey(review, $event)"
+              @click="reviewCollapsed = !reviewCollapsed"
             >
-              <span class="sidebar-list-icon"
-                ><v-icon size="14">mdi-tag-outline</v-icon></span
+              <button
+                type="button"
+                class="sidebar-tree-toggle sidebar-section-toggle"
+                :aria-expanded="String(!reviewCollapsed)"
+                aria-controls="sidebar-section-review"
+                :aria-label="`${reviewCollapsed ? 'Expand' : 'Collapse'} Review`"
+                @click.stop="reviewCollapsed = !reviewCollapsed"
               >
-              <span class="sidebar-list-label">
-                <span class="sidebar-list-label-text">{{ review.tag }}</span>
+                <SidebarCaret :open="!reviewCollapsed" />
+              </button>
+              <span class="sidebar-section-title">Review</span>
+              <span
+                v-if="reviewCollapsed"
+                class="sidebar-section-summary"
+                data-testid="review-summary"
+              >
+                <span v-if="!isReadOnly && inboxStore.count != null">{{
+                  inboxStore.count.toLocaleString()
+                }}</span>
+                <span v-if="dedupStore.hasDuplicates" class="sidebar-dedup-dot">
+                  <Tooltip
+                    text="There are duplicates to review"
+                    activator="parent"
+                  />
+                </span>
               </span>
-              <span class="sidebar-review-progress" aria-hidden="true"
-                ><span
-                  class="sidebar-review-progress-fill"
-                  :style="{ width: `${reviewProgressPct(review)}%` }"
-                ></span
-              ></span>
-              <span class="sidebar-list-count sidebar-review-session-count">{{
-                reviewProgressText(review)
-              }}</span>
-            </button>
-            <button
-              type="button"
-              class="sidebar-list-item sidebar-review-session sidebar-review-new"
-              @click="reviewSessionsStore.newReviewTick++"
+            </div>
+            <div
+              v-show="!reviewCollapsed"
+              id="sidebar-section-review"
+              class="sidebar-section-rows"
             >
-              <span class="sidebar-list-icon"
-                ><v-icon size="14">mdi-plus</v-icon></span
+              <!-- The Inbox: added within the chosen period, with no person and
+                   no set. The count follows the period the toolbar picks; caught
+                   up, it stays with a 0 as the other Review rows do. -->
+              <button
+                v-if="!isReadOnly"
+                type="button"
+                :class="['sidebar-list-item', { active: isInboxView }]"
+                :aria-current="isInboxView ? 'page' : undefined"
+                @click="emit('select-inbox')"
               >
-              <span class="sidebar-list-label">New review…</span>
-            </button>
-          </template>
-          <!-- Moves: a to-do queue, not a permanent destination, so it earns
-               its row while the queue holds anything at all - including an
-               off_layout-only backlog, which has nothing to decide but still
-               has to be reachable before its retention window expires it
-               unseen (see hasAnyPending's own comment). The count only ever
-               names what needs a DECISION; an off_layout-only queue shows the
-               row with no number, not a "0" that reads as empty. -->
-          <button
-            v-if="movesStore.hasAnyPending"
-            type="button"
-            :class="['sidebar-list-item', { active: isMovesView }]"
-            :aria-current="isMovesView ? 'page' : undefined"
-            @click="emit('select-moves')"
-          >
-            <span class="sidebar-list-icon"
-              ><v-icon size="16">mdi-folder-move-outline</v-icon></span
-            >
-            <span class="sidebar-list-label">Moves</span>
-            <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
-              movesStore.pendingCount
-            }}</span>
-          </button>
+                <span class="sidebar-list-icon"
+                  ><v-icon size="16">mdi-inbox-arrow-down-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Inbox</span>
+                <span class="sidebar-list-count" data-testid="inbox-count">{{
+                  inboxStore.count?.toLocaleString() ?? ""
+                }}</span>
+              </button>
+              <!-- `aria-disabled`, not `disabled`: a read-only session must still
+                   be able to focus the row and read the title that explains why
+                   it is inert. The click guard stays. -->
+              <button
+                type="button"
+                :class="[
+                  'sidebar-list-item',
+                  {
+                    active: isDuplicatesView,
+                    'sidebar-list-item--unavailable': isReadOnly,
+                  },
+                ]"
+                :aria-current="isDuplicatesView ? 'page' : undefined"
+                :aria-disabled="isReadOnly || undefined"
+                @click="isReadOnly || emit('select-duplicates', {})"
+              >
+                <Tooltip
+                  :text="isReadOnly ? READ_ONLY_DEDUP_HINT : ''"
+                  activator="parent"
+                />
+                <span class="sidebar-list-icon"
+                  ><v-icon size="16">mdi-content-duplicate</v-icon></span
+                >
+                <span class="sidebar-list-label">Duplicates</span>
+                <span v-if="dedupStore.isScanning" class="sidebar-dedup-scanning">
+                  <Tooltip
+                    text="Still looking for duplicates. Groups appear as they are found."
+                    activator="parent"
+                  />
+                  <v-progress-circular indeterminate size="10" width="1.5" />
+                </span>
+                <!-- A presence DOT, not a count (owner call, 2026-07-29): the
+                     group count moves with the tier gate and the threshold, so it
+                     read as churn. The dot only says "there are duplicates to
+                     review"; the queue's own header carries the numbers. -->
+                <span v-if="dedupStore.hasDuplicates" class="sidebar-dedup-dot">
+                  <Tooltip text="There are duplicates to review" activator="parent" />
+                </span>
+              </button>
+              <!-- Tags: a view like Duplicates, so it lights while it is
+                   up. Its open reviews nest under it, each lit while it is the one
+                   on screen, then "New review…". The list is the view's own data,
+                   so the children show while the view is open. -->
+              <button
+                v-if="!isReadOnly"
+                ref="tagReviewRowEl"
+                type="button"
+                :class="['sidebar-list-item', { active: isTagReviewView }]"
+                :aria-current="
+                  isTagReviewView && reviewBoardShown ? 'page' : undefined
+                "
+                @click="openTagReviewBoard"
+              >
+                <span class="sidebar-list-icon"
+                  ><v-icon size="16">mdi-tag-check-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Tags</span>
+              </button>
+              <template v-if="!isReadOnly && isTagReviewView">
+                <button
+                  v-for="review in reviewSessionsStore.sessions"
+                  :key="review.id"
+                  type="button"
+                  :class="[
+                    'sidebar-list-item',
+                    'sidebar-review-session',
+                    { active: isReviewSessionShown(review.id) },
+                  ]"
+                  :aria-current="
+                    isReviewSessionShown(review.id) ? 'page' : undefined
+                  "
+                  :aria-label="`Review “${review.tag}”, ${reviewProgressText(review)} decided`"
+                  @click="reviewSessionsStore.openSession(review.id)"
+                  @contextmenu.prevent="
+                    openSidebarCtxMenu('review', review, $event)
+                  "
+                  @keydown="onReviewRowKey(review, $event)"
+                >
+                  <span class="sidebar-list-icon"
+                    ><v-icon size="14">mdi-tag-outline</v-icon></span
+                  >
+                  <span class="sidebar-list-label">
+                    <span class="sidebar-list-label-text">{{ review.tag }}</span>
+                  </span>
+                  <span class="sidebar-review-progress" aria-hidden="true"
+                    ><span
+                      class="sidebar-review-progress-fill"
+                      :style="{ width: `${reviewProgressPct(review)}%` }"
+                    ></span
+                  ></span>
+                  <span class="sidebar-list-count sidebar-review-session-count">{{
+                    reviewProgressText(review)
+                  }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="sidebar-list-item sidebar-review-session sidebar-review-new"
+                  @click="reviewSessionsStore.newReviewTick++"
+                >
+                  <span class="sidebar-list-icon"
+                    ><v-icon size="14">mdi-plus</v-icon></span
+                  >
+                  <span class="sidebar-list-label">New review…</span>
+                </button>
+              </template>
+              <!-- Moves: a to-do queue, not a permanent destination, so it earns
+                   its row while the queue holds anything at all - including an
+                   off_layout-only backlog, which has nothing to decide but still
+                   has to be reachable before its retention window expires it
+                   unseen (see hasAnyPending's own comment). The count only ever
+                   names what needs a DECISION; an off_layout-only queue shows the
+                   row with no number, not a "0" that reads as empty. -->
+              <button
+                v-if="movesStore.hasAnyPending"
+                type="button"
+                :class="['sidebar-list-item', { active: isMovesView }]"
+                :aria-current="isMovesView ? 'page' : undefined"
+                @click="emit('select-moves')"
+              >
+                <span class="sidebar-list-icon"
+                  ><v-icon size="16">mdi-folder-move-outline</v-icon></span
+                >
+                <span class="sidebar-list-label">Moves</span>
+                <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
+                  movesStore.pendingCount
+                }}</span>
+              </button>
+            </div>
+          </div>
 
           <!-- Below Review, one switch chooses how the rest is drawn (#2448):
                Library is PixlStash's own structure, Folders the tree as the
@@ -5411,7 +5493,11 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  :class="[
+                    'sidebar-section-header',
+                    'sidebar-section-header--collapsible',
+                    { 'sidebar-section-header--holds-view': peopleHeadHoldsView(branch) },
+                  ]"
                   @click="isFinding || (peopleCollapsed = peopleOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'people', $event)
@@ -5426,11 +5512,12 @@ defineExpose({
                     :aria-label="`${peopleOpen ? 'Collapse' : 'Expand'} People`"
                     @click.stop="isFinding || (peopleCollapsed = peopleOpen)"
                   >
-                    <v-icon size="16">{{
-                      peopleOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-                    }}</v-icon>
+                    <SidebarCaret :open="peopleOpen" />
                   </button>
                   <span class="sidebar-section-title">People</span>
+                  <span v-if="!peopleOpen" class="sidebar-section-summary">{{
+                    branch.characters.length
+                  }}</span>
                   <span
                     v-if="!isReadOnly"
                     class="sidebar-header-actions sidebar-move-to-project-wrap"
@@ -5549,11 +5636,7 @@ defineExpose({
                         :aria-label="`${isTreeOpen(`c:${char.id}`) ? 'Hide' : 'Show'} the sets in ${char.name}`"
                         @click.stop="toggleTreeKey(`c:${char.id}`)"
                       >
-                        <v-icon size="16">{{
-                          isTreeOpen(`c:${char.id}`)
-                            ? "mdi-chevron-down"
-                            : "mdi-chevron-right"
-                        }}</v-icon>
+                        <SidebarCaret :open="isTreeOpen(`c:${char.id}`)" />
                       </button>
                       <span
                         v-if="
@@ -5688,9 +5771,7 @@ defineExpose({
                         :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
                         @click.stop="toggleTreeKey(`s:${row.set.id}`)"
                       >
-                        <v-icon size="16">{{
-                          row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
-                        }}</v-icon>
+                        <SidebarCaret :open="row.expanded" />
                       </button>
                       <span
                         v-if="row.level > 0"
@@ -5846,7 +5927,11 @@ defineExpose({
                 class="sidebar-section-block"
               >
                 <div
-                  class="sidebar-section-header sidebar-section-header--collapsible"
+                  :class="[
+                    'sidebar-section-header',
+                    'sidebar-section-header--collapsible',
+                    { 'sidebar-section-header--holds-view': setsHeadHoldsView(branch) },
+                  ]"
                   @click="isFinding || (setsCollapsed = setsOpen)"
                   @contextmenu.prevent.stop="
                     openSidebarCtxMenu('header', 'sets', $event)
@@ -5861,11 +5946,12 @@ defineExpose({
                     :aria-label="`${setsOpen ? 'Collapse' : 'Expand'} Sets`"
                     @click.stop="isFinding || (setsCollapsed = setsOpen)"
                   >
-                    <v-icon size="16">{{
-                      setsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
-                    }}</v-icon>
+                    <SidebarCaret :open="setsOpen" />
                   </button>
                   <span class="sidebar-section-title">Sets</span>
+                  <span v-if="!setsOpen" class="sidebar-section-summary">{{
+                    branch.sets.length
+                  }}</span>
                   <span
                     v-if="!isReadOnly"
                     class="sidebar-header-actions sidebar-move-to-project-wrap"
@@ -5970,9 +6056,7 @@ defineExpose({
                         :aria-label="`${row.expanded ? 'Hide' : 'Show'} the sets in ${row.set.name}`"
                         @click.stop="toggleTreeKey(`s:${row.set.id}`)"
                       >
-                        <v-icon size="16">{{
-                          row.expanded ? "mdi-chevron-down" : "mdi-chevron-right"
-                        }}</v-icon>
+                        <SidebarCaret :open="row.expanded" />
                       </button>
                       <span
                         v-if="row.level > 0"
