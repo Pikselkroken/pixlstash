@@ -3,7 +3,7 @@
        aspect ratios, the one on screen ringed in olive and the rest dimmed. -->
   <div
     class="lightbox-rail"
-    :class="{ hidden: hidden, 'lightbox-rail--lane': lane }"
+    :class="{ hidden: hidden, 'lightbox-rail--clip': !!$slots.clip }"
   >
     <!-- On a video, the switch between the set's pictures and the clip
          (#2147); the clip's frames then stand in for the thumbs, which stay
@@ -152,8 +152,6 @@ const props = defineProps({
   offsets: { type: Array, default: () => [] },
   widths: { type: Array, default: () => [] },
   hidden: { type: Boolean, default: false },
-  // A clip's waveform lane is under its frames: the band grows to hold it.
-  lane: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
   // Ids Ctrl/Cmd-clicked for Compare, in the order picked.
   pickedIds: { type: Array, default: () => [] },
@@ -351,10 +349,12 @@ function reveal(index, { centre = false } = {}) {
   pointer-events: none;
 }
 
-/* The frames' 56px, the 4px gap and the 16px lane, with the band's 8px either
-   side: 20px taller than a band of pictures (#2807). */
-.lightbox-rail.lightbox-rail--lane {
-  flex-basis: 92px;
+/* A clip's frames keep their own shape, so the band grows to hold them and
+   the waveform lane, but is never shorter than a band of pictures. */
+.lightbox-rail.lightbox-rail--clip {
+  flex-basis: auto;
+  min-height: 72px;
+  padding-block: var(--space-3);
 }
 
 /* Dark in both themes: the Segmented track and its icons read on the dark

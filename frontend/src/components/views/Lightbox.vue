@@ -862,7 +862,6 @@
       </div>
       <LightboxFilmstrip
         ref="filmstripRef"
-        :lane="Boolean(storyboardShown && bandShows === 'clip' && waveform)"
         :items="filmstripCanvasWindow"
         :offsets="filmstripLayout.offsets"
         :widths="filmstripLayout.widths"

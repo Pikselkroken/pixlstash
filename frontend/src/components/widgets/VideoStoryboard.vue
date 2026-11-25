@@ -178,6 +178,8 @@ function clock(seconds) {
   --active-wash: rgba(var(--v-theme-dark-surface-primary), 0.2);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --tile-gap: var(--space-1);
+  /* The tallest a tile gets. The sprite is 160px tall, 2x for 80. */
+  --tile-h-max: 96px;
   /* One tile's width, from the strip's: 11 tiles and 10 gaps. */
   --tile-w: calc((100% - 10 * var(--tile-gap)) / 11);
   /* The preview's frame: 192px wide at most, 144px tall at most; the panel
@@ -185,9 +187,20 @@ function clock(seconds) {
   --preview-frame-w: min(192px, calc(144px * var(--frame-aspect, 1)));
   --preview-w: max(var(--preview-frame-w), 128px);
 
+  /* Every tile takes the frame's own shape: the strip is as wide as eleven
+     tiles of the tallest height, or the band's width when that is less, and
+     the tiles' height follows from their width. Centred in the band. */
   position: relative;
-  flex: 1;
+  flex: 0 1 auto;
+  width: min(
+    100%,
+    calc(
+      11 * var(--tile-h-max) * var(--frame-aspect, 1.7778) + 10 *
+        var(--tile-gap)
+    )
+  );
   min-width: 0;
+  margin-inline: auto;
 }
 
 .storyboard-probe {
@@ -200,15 +213,15 @@ function clock(seconds) {
 
 .storyboard-tiles {
   display: flex;
+  align-items: flex-start;
   gap: var(--tile-gap);
-  height: var(--filmstrip-thumb-h);
 }
 
 .storyboard-tile {
   position: relative;
   flex: 1 1 0;
   min-width: 0;
-  height: 100%;
+  aspect-ratio: var(--frame-aspect, 1.7778);
   padding: 0;
   overflow: hidden;
   border: 1px solid transparent;
@@ -221,13 +234,13 @@ function clock(seconds) {
   cursor: default;
 }
 
-/* The frame keeps its own shape and covers the tile: as wide as the tile, or
-   as wide as the tile's height needs, whichever is more. */
+/* The frame in its own shape, as wide as the tile; the tile has that shape
+   too, so at most its 1px border is cut. */
 .storyboard-frame {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: max(100%, calc(var(--filmstrip-thumb-h) * var(--frame-aspect)));
+  width: 100%;
   aspect-ratio: var(--frame-aspect);
   transform: translate(-50%, -50%);
   background-image: var(--sprite);
