@@ -213,7 +213,11 @@ from pixlstash.services.comfyui_service import (
     swap_pixlstash_savers,
 )
 from pixlstash.services.inpaint_conversion import convert_to_inpaint
-from pixlstash.services.outpaint_conversion import FILL_MODEL, convert_to_outpaint
+from pixlstash.services.outpaint_conversion import (
+    FILL_MODEL,
+    convert_to_outpaint,
+    fill_outpaint_graph,
+)
 from pixlstash.services.model_shelf_service import people_who_fit, shelf_uuid
 from pixlstash.hub import workflow_group_writes
 
@@ -17990,18 +17994,39 @@ def test_converting_to_outpainting_stores_the_fill_graph(i2i):
 
 def test_an_extension_on_the_fill_copy_reaches_its_pad(i2i):
     """The converted copy's pad reads the picture's loader directly, so a
-    run's extension is written into it rather than refused."""
+    run's extension is written into it rather than refused or dropped."""
     i2i.graph = _full_i2i_graph()
     copy = i2i.owner.post(f"{API}/workflows/{RUN_WF}/outpaint-copy").json()
+    # This ComfyUI has every node the Fill graph runs and its four files.
+    info = json.loads(json.dumps(I2I_OBJECT_INFO))
+    for node in fill_outpaint_graph().values():
+        info.setdefault(node["class_type"], {"input": {"required": {}}})
+    models = {
+        ("UNETLoader", "unet_name"): FILL_MODEL,
+        ("DualCLIPLoader", "clip_name1"): "clip_l.safetensors",
+        ("DualCLIPLoader", "clip_name2"): "t5xxl_fp16.safetensors",
+        ("VAELoader", "vae_name"): "ae.safetensors",
+    }
+    for (class_type, field), name in models.items():
+        info[class_type]["input"]["required"][field] = [[name], {}]
+    i2i.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
     picture = _real_picture(i2i.server, i2i.tmp_path, "fill-copy.png")
-    group = _preflight(
-        i2i.owner,
-        picture_ids=[picture],
-        target=copy["workflow_id"],
-        extend={"bottom": 8},
-    )["groups"][0]
-    codes = [reason["code"] for reason in group["reasons"]]
-    assert "extend_not_read" not in codes, codes
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "picture_ids": [picture],
+            "target": copy["workflow_id"],
+            "extend": {"bottom": 8, "left": 16, "feather": 12},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()["groups"][0]["reasons"]
+    sent = i2i.submitted[-1]["graph"]
+    [pad] = [n for n in sent.values() if n.get("class_type") == "ImagePadForOutpaint"]
+    sides = [pad["inputs"][k] for k in ("left", "top", "right", "bottom")]
+    assert (sides, pad["inputs"]["feathering"]) == ([16, 0, 0, 8], 12)
 
 
 def test_converting_an_outpaint_workflow_to_outpainting_is_refused(i2i):

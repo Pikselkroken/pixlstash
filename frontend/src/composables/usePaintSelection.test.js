@@ -272,6 +272,11 @@ describe("usePaintSelection", () => {
       paint.setExtension("bottom", 99999);
       // 64 Mi / 8192 wide = 8192 tall: no room below at all.
       expect(paint.extension.bottom).toBe(0);
+      // A long thin picture: ComfyUI pads at most 16384 px a side.
+      dims.value = { naturalWidth: 6000, naturalHeight: 100 };
+      const thin = make();
+      thin.setExtension("right", 99999);
+      expect(thin.extension.right).toBe(16384);
     });
 
     it("is never held with a selection: each drops the other", () => {

@@ -44,11 +44,13 @@ MAX_GROW = 100
 MAX_FEATHER = 100
 MAX_EXTEND_FEATHER = 200
 # An extension adds up to this many times the picture's own size on each side
-# (#2812: one picture's size was not far enough). The Fill graph samples the
-# canvas at its own size and scales the result up, so the bound is memory: the
-# full-size canvas is held as float pixels, hence the cap on its area too.
+# (#2812: one picture's size was not far enough). The Fill graph samples a
+# 2 MP copy of the canvas, but pads and pastes the original back at full size,
+# so ComfyUI holds the whole canvas as float pixels: hence the cap on its area.
+# ComfyUI's pad takes at most MAX_PAD_SIDE on a side (its MAX_RESOLUTION).
 MAX_EXTEND_FACTOR = 3
 MAX_EXTENDED_PIXELS = 64 * 1024 * 1024
+MAX_PAD_SIDE = 16384
 MAX_FILL_HOLES = 200
 
 # A coordinate, as a fraction of the picture. A gesture may run a little past
@@ -240,8 +242,9 @@ class Extension(BaseModel):
 
     def past_cap(self, width: int, height: int) -> str | None:
         """Why this extension of a *width* x *height* picture is too large, if
-        it is: a side past :data:`MAX_EXTEND_FACTOR` times the picture on its
-        axis, or a canvas past :data:`MAX_EXTENDED_PIXELS`."""
+        it is: a side past :data:`MAX_PAD_SIDE` or :data:`MAX_EXTEND_FACTOR`
+        times the picture on its axis, or a canvas past
+        :data:`MAX_EXTENDED_PIXELS`."""
         for side, size, measure in (
             ("left", width, "wide"),
             ("right", width, "wide"),
@@ -249,6 +252,11 @@ class Extension(BaseModel):
             ("bottom", height, "tall"),
         ):
             grow = getattr(self, side)
+            if grow > MAX_PAD_SIDE:
+                return (
+                    f"{side.capitalize()} adds {grow} px; ComfyUI pads a side "
+                    f"by at most {MAX_PAD_SIDE} px."
+                )
             if grow > MAX_EXTEND_FACTOR * size:
                 return (
                     f"{side.capitalize()} adds {grow} px to a {size} px {measure} "

@@ -540,3 +540,5 @@ def test_an_extension_is_capped_at_three_pictures_a_side_and_64_megapixels():
     # 4096 x 8192 is 32 MP; doubling the height reaches 64 MP exactly.
     assert Extension(bottom=8192).past_cap(4096, 8192) is None
     assert "megapixels" in Extension(bottom=8200).past_cap(4096, 8192)
+    # ComfyUI's pad: a long thin picture is held to 16384 px a side.
+    assert "16384" in Extension(right=16392).past_cap(6000, 100)

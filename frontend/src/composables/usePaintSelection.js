@@ -51,6 +51,8 @@ export const EXTEND_FEATHER_MAX = 200;
 export const EXTEND_FACTOR = 3;
 /** The extended canvas's largest area, in pixels. */
 export const EXTENDED_PIXELS_MAX = 64 * 1024 * 1024;
+/** ComfyUI's pad takes at most this on a side. */
+export const EXTEND_SIDE_MAX = 16384;
 
 /**
  * The sides of an extension a press at `p` takes hold of: an edge of the
@@ -423,6 +425,7 @@ export function usePaintSelection({ pictureId, dims }) {
     const cap = Math.min(
       horizontal ? extendCap.value.width : extendCap.value.height,
       areaRoom,
+      EXTEND_SIDE_MAX,
     );
     // Up, as the server rounds: a typed 4 is 8, never 0. The cap is already
     // a multiple of 8, so clamping to it after keeps it on the grid.

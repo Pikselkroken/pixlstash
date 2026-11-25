@@ -33,6 +33,9 @@ from pixlstash.services.inpaint_conversion import InpaintConversionRefused
 from pixlstash.services.workflow_hash import WorkflowGraphError, reduce_api_graph
 from pixlstash.services.workflow_identity import reduced_workflow_type
 from pixlstash.services.workflow_io import detect_workflow_io, prompt_field
+from pixlstash.pixl_logging import get_logger
+
+logger = get_logger(__name__)
 
 PAD_CLASS = "ImagePadForOutpaint"
 FILL_MODEL = "flux1-fill-dev.safetensors"
@@ -182,4 +185,9 @@ def _positive_prompt(graph: dict, encoders: tuple[str, ...]) -> str:
         text = inputs.get(prompt_field(inputs) or "")
         if isinstance(text, str):
             return text
+    logger.info(
+        "Outpaint conversion: the source's positive prompt (%s) is not one "
+        "literal text, so the copy starts with an empty prompt.",
+        ", ".join(encoders) or "none found",
+    )
     return ""
