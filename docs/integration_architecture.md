@@ -795,7 +795,8 @@ each side rounded up to a multiple of 8 and `feather` 0-200 (default 40). One
 picture, at least one side above 0, and never together with `selection` (422
 for each: a run either inpaints or outpaints). A side past three times the
 picture's size on its axis or past 16384 px, or a canvas past 64 megapixels,
-is a 422 saying which. The sides
+is a 422 saying which; a picture whose file is not on disk, which the caps
+cannot measure, is a 404. The sides
 and the feather are written into every `ImagePadForOutpaint` whose `image` is
 output 0 of a loader the picture feeds, so the submitted graph, and the recipe
 recorded from it, carry the padding. A card with no such pad, including a pad

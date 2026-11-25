@@ -7288,9 +7288,8 @@ def create_router(server) -> APIRouter:
     def _apply_extension(graph: dict, feeds: list[Feed], body: RunRequest) -> list:
         """Write *body*'s extension into the pads the open picture feeds.
 
-        Refusals instead when nothing would read it, or when it is past
-        ``Extension.past_cap`` (a picture with no file is refused later, by
-        the upload).
+        Refusals instead when nothing would read it, when it is past
+        ``Extension.past_cap``, or when the picture has no file to measure.
         """
         extend, picture_id = body.extend, body.picture_ids[0]
         pads = _extend_pads(graph, feeds, picture_id)
@@ -7314,22 +7313,36 @@ def create_router(server) -> APIRouter:
             if picture_id in kept
             else None
         )
-        if path and os.path.isfile(path):
-            try:
-                past = extend.past_cap(*upright_size(path))
-            except UNREADABLE_PICTURE as exc:
-                logger.warning(
-                    "Picture %s (%s) cannot be measured for an extension: %s",
-                    picture_id,
-                    path,
-                    exc,
-                )
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Picture {picture_id} cannot be read, so it cannot be extended.",
-                ) from exc
-            if past:
-                raise HTTPException(status_code=422, detail=past)
+        if not path or not os.path.isfile(path):
+            # Fail closed: a picture the caps cannot measure is never padded
+            # unchecked, whichever loader would fetch it.
+            logger.warning(
+                "Picture %s cannot be extended: its file (resolved %r) is not on disk.",
+                picture_id,
+                path,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Picture {picture_id}'s file is not on disk, so it cannot "
+                    "be extended."
+                ),
+            )
+        try:
+            past = extend.past_cap(*upright_size(path))
+        except UNREADABLE_PICTURE as exc:
+            logger.warning(
+                "Picture %s (%s) cannot be measured for an extension: %s",
+                picture_id,
+                path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Picture {picture_id} cannot be read, so it cannot be extended.",
+            ) from exc
+        if past:
+            raise HTTPException(status_code=422, detail=past)
         for node_id in pads:
             graph[node_id]["inputs"].update(
                 left=extend.left,

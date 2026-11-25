@@ -13525,6 +13525,19 @@ def test_a_pad_behind_a_resize_does_not_read_the_extension(i2i):
     assert "extend_not_read" in codes, codes
 
 
+def test_an_extension_of_a_picture_with_no_file_is_refused(i2i):
+    """The caps cannot measure it, so it is never padded unchecked."""
+    _padded(i2i)
+    picture = _real_picture(i2i.server, i2i.tmp_path, "gone.png")
+    (i2i.tmp_path / "gone.png").unlink()
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json=_extend_run(picture, extend={"bottom": 8})
+    )
+    assert r.status_code == 404, r.text
+    assert "cannot be extended" in r.json()["detail"], r.json()
+    assert i2i.submitted == []
+
+
 def test_a_side_past_three_times_the_picture_is_refused(i2i):
     """The picture is 20 x 10. Each side takes up to three times the
     picture's size on its axis (#2812: one picture's size was not far enough):
