@@ -481,6 +481,15 @@ describe("SearchTokenField", () => {
       await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
       const root = document.documentElement;
       expect(root.classList.contains("colour-picking")).toBe(true);
+      // Other keys reach nothing while picking, and do not end it.
+      const pressed = vi.fn();
+      document.body.addEventListener("keydown", pressed);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      document.body.removeEventListener("keydown", pressed);
+      expect(pressed).not.toHaveBeenCalled();
+      expect(root.classList.contains("colour-picking")).toBe(true);
 
       // Esc leaves picking without a colour.
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));

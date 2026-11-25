@@ -41,7 +41,7 @@ export async function pickScreenColour() {
  * The next click in the window is the sample. Until then the whole page
  * ignores the pointer (`.colour-picking` in App.css), so hover tints stay off
  * the pixel and the click opens nothing, and every press is swallowed here
- * first, so an open list or menu stays open.
+ * first, keys included, so an open list or menu stays open.
  */
 function pickInWindow(samplePixel) {
   return new Promise((resolve) => {
@@ -78,10 +78,11 @@ function pickInWindow(samplePixel) {
       ["contextmenu", (e) => (swallow(e), finish(null))],
       [
         "keydown",
+        // Every key too: Space or Enter on the still-focused eyedropper
+        // would otherwise start a second pick under this one.
         (e) => {
-          if (e.key !== "Escape") return;
           swallow(e);
-          finish(null);
+          if (e.key === "Escape") finish(null);
         },
       ],
     ];
