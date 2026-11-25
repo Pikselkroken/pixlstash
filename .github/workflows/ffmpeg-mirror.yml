@@ -25,6 +25,9 @@ permissions:
   contents: read
 
 env:
+  # Boots no PixlStash; declared because every workflow must
+  # (tests/test_install_type_buckets.py).
+  PIXLSTASH_TELEMETRY_DEV: '1'
   BTBN_TAG: ${{ inputs.btbn_tag }}
   SERIES: ${{ inputs.series }}
 

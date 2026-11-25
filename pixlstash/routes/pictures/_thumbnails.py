@@ -476,6 +476,7 @@ def register_routes(router, server):
             "clip the browser cannot play still has one. Cached on demand; 404 "
             "for a picture that is not a video, 503 with no ffmpeg."
         ),
+        response_model=dict,
     )
     async def get_waveform(id: int):
         if not ffmpeg_executable():
@@ -717,6 +718,7 @@ def register_routes(router, server):
             "Whether a browser-playable MP4 copy of this video exists, is being "
             "made, or could be made, with an estimate. Never starts one."
         ),
+        response_model=dict,
     )
     def get_video_copy_status(id: int):
         return copy_status(id)[0]
@@ -731,6 +733,7 @@ def register_routes(router, server):
             "`confirm: true` starts it regardless. One copy runs at a time; a "
             "copy already made or being made is answered, not restarted."
         ),
+        response_model=dict,
     )
     def start_video_copy(id: int, confirm: bool = Body(False, embed=True)):
         vault = server.vault
@@ -790,6 +793,7 @@ def register_routes(router, server):
         "/library/video-copies",
         summary="Count the playable video copies",
         description="How many playable video copies the open library keeps, and their size.",
+        response_model=dict,
     )
     def get_video_copies():
         files = copy_files(server.vault)
@@ -805,6 +809,7 @@ def register_routes(router, server):
             "Removes every finished playable copy of the open library, file "
             "and row. A deleted copy is made again when its clip is next opened."
         ),
+        response_model=dict,
     )
     def delete_video_copies():
         vault = server.vault
