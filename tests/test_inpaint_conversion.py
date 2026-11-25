@@ -12,7 +12,10 @@ import pytest
 from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
+    convert_to_outpaint,
 )
+from pixlstash.services.workflow_hash import reduce_api_graph
+from pixlstash.services.workflow_identity import reduced_workflow_type
 
 BUILT_IN = (
     Path(__file__).resolve().parent.parent
@@ -370,6 +373,13 @@ def _no_picture() -> dict:
     return graph
 
 
+def _no_picture_no_empty_latent() -> dict:
+    """No loader, and not txt2img either: it starts from a saved latent."""
+    graph = _no_picture()
+    graph["9"] = {"class_type": "LoadLatent", "inputs": {"latent": "a.latent"}}
+    return graph
+
+
 def _two_pictures() -> dict:
     graph = _sdxl_img2img()
     graph["9"] = {"class_type": "LoadImage", "inputs": {"image": "reference.png"}}
@@ -435,7 +445,7 @@ def _no_save() -> dict:
 @pytest.mark.parametrize(
     "graph, says",
     [
-        (_no_picture, "does not start from a picture"),
+        (_no_picture_no_empty_latent, "does not start from a picture"),
         (_two_pictures, "loads 2 pictures"),
         (_two_passes, "2 passes"),
         (_already_inpaint, "already inpaints"),
@@ -453,5 +463,202 @@ def test_each_shape_it_cannot_convert_is_refused_with_a_reason(graph, says):
     before = copy.deepcopy(source)
     with pytest.raises(InpaintConversionRefused) as refused:
         convert_to_inpaint(source)
+    assert says in refused.value.reason
+    assert source == before
+
+
+# --- Convert to Outpainting, and txt2img for both -------------------------
+
+
+@pytest.mark.parametrize("convert", [convert_to_inpaint, convert_to_outpaint])
+def test_txt2img_gets_a_load_image_and_starts_from_its_crop(convert):
+    converted = convert(_no_picture())
+    loader = _one(converted, "LoadImage")
+    assert int(loader) > max(int(i) for i in _no_picture())
+    assert not _of(converted, "EmptyLatentImage")
+    crop = _one(converted, "InpaintCropImproved")
+    sampler = converted["6"]["inputs"]
+    assert sampler["denoise"] == 1.0
+    masked = converted[sampler["latent_image"][0]]
+    encode = converted[masked["inputs"]["samples"][0]]
+    assert encode["class_type"] == "VAEEncode"
+    assert encode["inputs"]["pixels"] == [crop, 1]
+    image = converted[crop]["inputs"]["image"]
+    reads = image if convert is convert_to_inpaint else None
+    if convert is convert_to_outpaint:
+        pad = converted[image[0]]
+        assert pad["class_type"] == "ImagePadForOutpaint"
+        reads = pad["inputs"]["image"]
+    assert reads == [loader, 0]
+
+
+def _outpaint_img2img() -> dict:
+    return convert_to_outpaint(_sdxl_img2img())
+
+
+def test_an_img2img_outpaint_pads_between_the_loader_and_the_crop():
+    converted = _outpaint_img2img()
+    pad = _one(converted, "ImagePadForOutpaint")
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted[pad]["inputs"] == {
+        "image": ["4", 0],
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "feathering": 40,
+    }
+    assert converted[crop]["inputs"]["image"] == [pad, 0]
+    assert converted[crop]["inputs"]["mask"] == [pad, 1]
+    assert converted[crop]["inputs"]["extend_for_outpainting"] is False
+    # Every edge that carried the picture carries the crop; only the pad
+    # reads the loader.
+    assert converted["5"]["inputs"]["pixels"] == [crop, 1]
+    assert _edges(converted)[("LoadImage", 0, "ImagePadForOutpaint", "image")] == 1
+    assert (
+        sum(n for (src, *_), n in _edges(converted).items() if src == "LoadImage") == 1
+    )
+    stitch = converted[converted["8"]["inputs"]["images"][0]]
+    assert stitch["inputs"]["stitcher"] == [crop, 0]
+    assert converted["8"]["inputs"]["filename_prefix"] == "Outpaint-Inpaint-sdxl"
+    assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
+    # From noise: under the graph's 0.6 the pad would stay grey.
+    assert converted["6"]["inputs"]["denoise"] == 1.0
+
+
+def test_only_an_edit_graph_outpaint_is_painted_green():
+    img2img = convert_to_outpaint(_sdxl_img2img())
+    for green in ("EmptyImage", "ThresholdMask", "ImageCompositeMasked"):
+        assert not _of(img2img, green)
+    klein = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
+    assert _of(klein, "EmptyImage") and _of(klein, "ThresholdMask")
+
+
+def _painted(converted: dict) -> tuple[str, str]:
+    """The pad and the green-painted canvas made of it."""
+    pad = _one(converted, "ImagePadForOutpaint")
+    [painted] = [
+        i
+        for i in _of(converted, "ImageCompositeMasked")
+        if converted[i]["inputs"]["destination"] == [pad, 0]
+    ]
+    inputs = converted[painted]["inputs"]
+    green = converted[inputs["source"][0]]
+    assert (green["class_type"], green["inputs"]["color"]) == ("EmptyImage", 0x00FF00)
+    threshold = converted[inputs["mask"][0]]
+    assert threshold["inputs"] == {"mask": [pad, 1], "value": 0.99}
+    return pad, painted
+
+
+def test_a_klein_edit_outpaint_redraws_the_green_canvas_and_keeps_the_redraw():
+    """No crop and no noise mask: on Klein those came back a grey wash. The
+    reference is the green-padded picture, lined up with the canvas the sampler
+    draws from noise; the save reads the redraw at the padded size, with no
+    paste-back (the model re-frames, so the original laid over it put a big
+    head on a small body). Wrong if the reference reads the unpadded picture
+    (the original lands in the middle of a blank card), or the original is
+    composited back."""
+    converted = convert_to_outpaint(_built_in("Flux2-Klein-Image-Edit.json"))
+    for gone in (
+        "InpaintCropImproved",
+        "InpaintStitchImproved",
+        "SetLatentNoiseMask",
+        "DifferentialDiffusion",
+    ):
+        assert not _of(converted, gone)
+    pad, painted = _painted(converted)
+    assert converted[pad]["inputs"]["image"] == ["76", 0]
+    for reference in _of(converted, "ReferenceLatent"):
+        encode = converted[converted[reference]["inputs"]["latent"][0]]
+        assert encode["inputs"]["pixels"] == [painted, 0]
+    # The latent and the scheduler are sized by the painted canvas.
+    assert converted["75:81"]["inputs"]["image"] == [painted, 0]
+    assert _of(converted, "EmptyFlux2LatentImage")
+    save = converted["9"]["inputs"]
+    scale = converted[save["images"][0]]
+    assert scale["class_type"] == "ImageScale"
+    assert scale["inputs"]["image"] == ["75:65", 0]
+    size = scale["inputs"]["width"][0]
+    assert converted[size]["inputs"]["image"] == [pad, 0]
+    assert not _of(converted, "InvertMask")
+    assert save["filename_prefix"] == "Outpaint-Flux2-Klein"
+    assert reduced_workflow_type(reduce_api_graph(converted)) == "outpaint"
+
+
+def test_a_moss_edit_outpaint_scales_the_green_canvas_its_own_way():
+    """The graph's own resize now scales the painted canvas, and the sampler
+    starts from noise."""
+    converted = convert_to_outpaint(_moss_edit())
+    _pad_id, painted = _painted(converted)
+    assert converted["7"]["inputs"]["image"] == [painted, 0]
+    for encoder in ("8", "9"):
+        assert converted[encoder]["inputs"]["images.image_0"] == ["7", 0]
+    assert converted["10"]["inputs"]["image"] == ["7", 0]
+    assert converted["11"]["inputs"]["width"] == ["10", 0]
+    assert converted["12"]["inputs"]["denoise"] == 1.0
+
+
+def test_an_edit_outpaint_sizes_a_literal_latent_by_the_canvas():
+    """A literal 832 x 1216 would draw the extended canvas at the wrong aspect."""
+    graph = _moss_edit()
+    graph["8"]["inputs"]["images.image_0"] = ["6", 0]
+    graph["9"]["inputs"]["images.image_0"] = ["6", 0]
+    del graph["7"], graph["10"]
+    graph["11"]["inputs"].update(width=832, height=1216)
+    converted = convert_to_outpaint(graph)
+    _pad_id, painted = _painted(converted)
+    latent = converted["11"]["inputs"]
+    sized = converted[latent["width"][0]]
+    assert sized["class_type"] == "GetImageSize"
+    assert sized["inputs"]["image"] == [painted, 0]
+    assert latent["height"] == [latent["width"][0], 1]
+
+
+def test_a_controlnet_on_the_picture_takes_the_padded_crop():
+    """A ControlNet is not an edit encoder: like every other edge that carried
+    the picture, it reads the crop."""
+    graph = _sdxl_img2img()
+    graph["9"] = {
+        "class_type": "ControlNetLoader",
+        "inputs": {"control_net_name": "canny.safetensors"},
+    }
+    graph["10"] = {
+        "class_type": "ControlNetApply",
+        "inputs": {
+            "conditioning": ["2", 0],
+            "control_net": ["9", 0],
+            "image": ["4", 0],
+            "strength": 1.0,
+        },
+    }
+    graph["6"]["inputs"]["positive"] = ["10", 0]
+    converted = convert_to_outpaint(graph)
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted["10"]["inputs"]["image"] == [crop, 1]
+
+
+def test_inpainting_an_edit_graph_still_hands_the_crop_to_its_reference():
+    converted = convert_to_inpaint(_moss_edit())
+    crop = _one(converted, "InpaintCropImproved")
+    assert converted["8"]["inputs"]["images.image_0"] == [crop, 1]
+
+
+@pytest.mark.parametrize(
+    "graph, says",
+    [
+        (_already_inpaint, "already inpaints"),
+        (_outpaint, "already outpaints"),
+        (_video, "converted to outpainting"),
+        (_upscale, "no sampler to outpaint with"),
+        (_no_picture_no_empty_latent, "does not start from a picture"),
+        (_two_pictures, "loads 2 pictures"),
+    ],
+    ids=lambda v: getattr(v, "__name__", v),
+)
+def test_each_shape_outpainting_cannot_convert_is_refused(graph, says):
+    source = graph()
+    before = copy.deepcopy(source)
+    with pytest.raises(InpaintConversionRefused) as refused:
+        convert_to_outpaint(source)
     assert says in refused.value.reason
     assert source == before

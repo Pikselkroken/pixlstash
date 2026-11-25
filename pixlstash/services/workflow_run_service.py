@@ -123,6 +123,7 @@ NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
 STAGE_NOT_SKIPPABLE = "stage_not_skippable"
 MASK_NOT_READ = "mask_not_read"
+EXTEND_NOT_READ = "extend_not_read"
 MISSING_CHOICES = "missing_choices"
 # A node input ComfyUI requires a link on, with nothing connected: ComfyUI
 # refuses the whole prompt for it, naming a node number and nothing else.
