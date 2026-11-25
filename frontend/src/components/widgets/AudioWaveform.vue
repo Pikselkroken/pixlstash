@@ -126,12 +126,6 @@ function clock(seconds) {
   cursor: default;
 }
 
-.audio-waveform:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 var(--focus-width)
-    rgb(var(--v-theme-dark-surface-primary));
-}
-
 .audio-waveform-svg {
   display: block;
   width: 100%;

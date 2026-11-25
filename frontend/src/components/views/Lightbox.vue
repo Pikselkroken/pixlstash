@@ -4514,6 +4514,8 @@ function stopProxyPoll() {
 function failProxy(err, pictureId) {
   console.warn(`Playable copy request failed for picture ${pictureId}:`, err);
   stopProxyPoll();
+  // A "preparing" status left in place would keep its box over the error box.
+  proxyStatus.value = null;
   videoError.value = { code: 4, message: String(err?.message || err) };
 }
 // Act on a status body for the picture it was asked for. Ignored once the

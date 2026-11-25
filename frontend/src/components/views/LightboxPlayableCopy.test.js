@@ -226,6 +226,22 @@ describe("a playable copy of a refused video", () => {
     expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(3);
   });
 
+  it("drops the preparing box for the error box when polling gives up", async () => {
+    proxy.fetchProxyStatus
+      .mockResolvedValueOnce(statusOf("preparing"))
+      .mockRejectedValue(new Error("down"));
+    const w = await openOn(9);
+    await refuseVideo(w);
+    expect(w.find(".lightbox-proxy-title").exists()).toBe(true);
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(2000);
+      await flush();
+    }
+    expect(proxy.fetchProxyStatus).toHaveBeenCalledTimes(4);
+    expect(w.find(".lightbox-proxy-title").exists()).toBe(false);
+    expect(w.find(".lightbox-video-error-msg").text()).toContain("cannot play this video format");
+  });
+
   it("says nothing about time when the server has no estimate", async () => {
     proxy.fetchProxyStatus.mockResolvedValue(
       statusOf("preparing", { estimate_seconds: null }),

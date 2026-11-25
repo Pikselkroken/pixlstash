@@ -699,7 +699,24 @@ def register_routes(router, server):
             "that answer is cached too. 503 when no ffmpeg is available."
         ),
         response_class=Response,
-        responses={200: {"content": {"application/json": {}}}},
+        responses={
+            200: {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "duration": {"type": ["number", "null"]},
+                                "peaks": {
+                                    "type": ["array", "null"],
+                                    "items": {"type": "number"},
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+        },
     )
     async def get_waveform(request: Request, id: int):
         vault = server.vault
