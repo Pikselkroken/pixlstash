@@ -579,6 +579,20 @@ def test_a_klein_or_qwen_21_source_outpaints_on_its_own_edit_model(source, built
     assert reduced_workflow_type(reduce_api_graph(out)) == "outpaint"
 
 
+@pytest.mark.parametrize("clip_type", ["flux", "sd3", None])
+def test_a_text_encoder_of_another_type_keeps_the_fill_graph(clip_type):
+    """Only a ``flux2`` text encoder makes a graph Klein. Wrong if FLUX.1
+    (``flux``) or an untyped loader reaches the Klein outpainter."""
+    source = _built_in("FLUX.2 Klein 9B Edit.json")
+    for node in source.values():
+        if "CLIPLoader" in node["class_type"]:
+            node["inputs"].pop("type")
+            if clip_type:
+                node["inputs"]["type"] = clip_type
+    out = convert_to_outpaint(source)
+    assert out[_one(out, "UNETLoader")]["inputs"]["unet_name"] == FILL_MODEL
+
+
 @pytest.mark.parametrize(
     "graph, says",
     [
