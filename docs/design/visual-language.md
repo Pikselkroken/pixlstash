@@ -644,6 +644,34 @@ because it is the only way out of the empty state.
 
 **Child rows (#2124).** The sidebar's child sets are the one tree whose levels differ in size, so three values carry "belongs to" together, each too weak alone in a column of faces: the indent (a child's caret slot and then its mark hang just past the centre of its parent's mark, so a child's caret sits where its parent's line meets it: under the parent's name, as the general rule above has it, cost a whole parent mark per level and was ruled too deep here), the smaller mark (0.6 of the parent's), and a guide line (`--tree-guide`, on-surface at 30%) that drops from the parent's mark, ticks into each child and ends in an elbow (`--radius-sm`) at the last. An open parent and its children sit on one group (`--group-surface`, on-surface at 4.5%, with a `--group-border` of 10% and `--radius-md`), with no rule between the parent and its children: one crossed the parent's line where it leaves the mark. Closed rows get no separators: the open group's box is the grouping. Rows inside a group take its inset off through `--row-pad`, never a per-type `padding-left`, so every column outside it continues through it. The guide is decorative, not a meaningful graphical object: the indent and the size still say it with the line gone, so it need not reach 3:1. Every size follows the thumbnail-size setting in one proportion; nothing in the tree has a fixed pixel size of its own.
 
+**Sidebar sections: a strict tree (design "Strict tree").** Review, People and Sets
+each fold under a head, through `useSectionCollapse` (scope `sidebar`). The head's
+caret has its own column at the rail edge, and every level's caret stands under its
+parent's label, so a head and the rows it folds never share a caret column. Three
+values carry it, all in the sidebar only:
+
+- `--gutter-caret` (20px): the caret box of a section head and its top-level rows,
+  holding a stroked chevron (`SidebarCaret.vue`, 2.6 on a 24 grid) at its row's ink.
+  The 16px MDI chevron showed about 5px of thin stroke and was missed. Child sets keep
+  `--gutter-glyph`.
+- `--section-step` (24px = `--gutter-caret` + `--space-2`): the section level's indent,
+  set as `--indent-step` on `.sidebar-section-block`. It is the glyph-arithmetic step
+  the paragraph above retired, confined to the section level: child sets and the
+  Folders tree keep the 16px step.
+- A **glyph row** (a 16px icon that never folds: All media, Favourites, Scrapheap and
+  Review's rows) puts its icon in its level's caret column and its label `--space-2`
+  past it, so columns 1 and 2 merge for that row. A **picture row** (People, Sets)
+  keeps both columns. This is the one exception to "columns 1 and 2 are never
+  conditional": a row that can never fold has nothing to reserve the gutter for.
+
+Measured inside the rail: section caret 8, section label 32 (also the places' labels),
+Review's icons 32 and labels 56, a person's caret 32 and mark 56, an open tag review's
+icon 56 and label 80. A folded head says what it hides (Review: the Inbox count and the
+Duplicates dot; People and Sets: their totals), and while the open view or selection
+is inside it the head keeps the olive rail at full ink, so the user can still see where
+they are. The whole head toggles and answers hover; the caret is the real button
+(`aria-expanded`), and its focus ring is drawn on the whole head.
+
 **Scoped CSS does not cross a component boundary.** A row rendered by a child
 component gets none of the parent's scoped rules, so a recursive tree component must
 consume these tokens itself rather than keep a private copy. Two copies of a row
