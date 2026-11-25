@@ -2,7 +2,11 @@
   <div class="cs-split">
     <div ref="mainPane" class="cs-pane" data-testid="cs-main">
       <template v-if="phase === 'describe'">
-        <div class="cs-step-h">
+        <div v-if="item" class="cs-step-h">
+          <h3>{{ item.describe(name) }}</h3>
+          <span>{{ item.intro(name) }}</span>
+        </div>
+        <div v-else class="cs-step-h">
           <h3>Describe {{ name }} and draw sheets</h3>
           <span
             >Each sheet is one person drawn six times: four passport photos
@@ -12,7 +16,7 @@
         </div>
 
         <p
-          v-if="likenessNotice && !fromReference"
+          v-if="likenessNotice && !fromReference && !item"
           class="cs-notice"
           data-testid="cs-likeness"
         >
@@ -31,7 +35,9 @@
             >{{
               fromReference
                 ? "Sheets from a reference need a Qwen-Image-Edit, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image sheet workflow, and the library has none."
-                : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
+                : item
+                  ? `${item.title} need a MiniMax H3 Image, Krea 2, Qwen-Image, FLUX.2 Klein or MiniMax H3 text-to-image workflow, and the library has none. Import one from Workflows, then come back.`
+                  : "Sheets need a MOSS-Image, Krea 2, Qwen-Image, FLUX.2 Klein, MiniMax H3 or MiniMax H3 Image text-to-image workflow, and the library has none. Import one from Workflows, then come back."
             }}</span
           >
         </p>
@@ -57,7 +63,7 @@
           >
         </p>
 
-        <div class="cs-lora">
+        <div v-if="!item" class="cs-lora">
           <AppSelect
             v-model="loraSha"
             label="Character LoRA · optional"
@@ -103,13 +109,38 @@
             v-model="form.description"
             label="Description"
             :rows="2"
-            placeholder="Adult woman, dark hair in a low bun, brown eyes, freckles, slim build"
+            :placeholder="
+              item
+                ? item.descriptionPlaceholder
+                : 'Adult woman, dark hair in a low bun, brown eyes, freckles, slim build'
+            "
             data-testid="cs-description"
           />
           <span class="cs-hint">{{ descriptionHint }}</span>
         </div>
+        <!-- An item's own fields, then its name: the set its panels go in. -->
+        <template v-if="item">
+          <div class="cs-grid2">
+            <RecentInput
+              v-for="field in item.fields"
+              :key="field.key"
+              v-model="form[field.key]"
+              :label="field.label"
+              :placeholder="field.placeholder"
+              :options="field.recent ? offered[field.key] : []"
+              :data-testid="`cs-item-${field.key}`"
+            />
+            <RecentInput
+              v-model="form.name"
+              label="Name"
+              :placeholder="item.newName"
+              data-testid="cs-item-name"
+            />
+          </div>
+        </template>
         <!-- Each offers what earlier sheets were drawn with, the last one
              filled in. -->
+        <template v-else>
         <div class="cs-grid2">
           <RecentInput
             v-model="form.top"
@@ -140,6 +171,7 @@
           placeholder="white sneakers"
           :options="offered.shoes"
         />
+        </template>
         <!-- Photo look, wherever the server offers it for sheets: it replaces
              the Natural/Off switch below. On, the run adds its lines and the
              sheet prompt none of its own; off, neither adds a look. -->
@@ -162,7 +194,7 @@
              them. -->
         <div class="cs-fld">
           <div class="cs-opts">
-            <div class="cs-opt">
+            <div v-if="!item" class="cs-opt">
               <FieldLabel>Body photos</FieldLabel>
               <Segmented
                 v-model="form.framing"
@@ -192,7 +224,16 @@
                 @update:model-value="picked.add('size')"
               />
             </div>
-            <div class="cs-opt">
+            <div v-if="kind === 'location'" class="cs-opt">
+              <FieldLabel>Drawn as</FieldLabel>
+              <Segmented
+                v-model="form.daylight"
+                aria-label="Drawn as"
+                :options="DRAWN_AS"
+                data-testid="cs-drawn-as"
+              />
+            </div>
+            <div v-if="!item" class="cs-opt">
               <FieldLabel>Proportions</FieldLabel>
               <Segmented
                 v-model="form.proportions"
@@ -221,9 +262,13 @@
               />
             </div>
           </div>
-          <span class="cs-hint" data-testid="cs-framing-hint">{{
+          <span v-if="!item" class="cs-hint" data-testid="cs-framing-hint">{{
             framingHint
           }}</span>
+          <span v-else-if="kind === 'location'" class="cs-hint"
+            >Plain daylight draws the place at midday with no weather, because
+            each scene sets its own.</span
+          >
           <span class="cs-hint"
             >About a minute a sheet. {{ sizeHint }}</span
           >
@@ -251,7 +296,12 @@
           data-testid="cs-none-hold"
         >
           <v-icon size="16">mdi-alert-outline</v-icon>
-          <span
+          <span v-if="item"
+            >None of the {{ ended.length }} sheets has four {{ item.views }}
+            that agree. Drawing more usually finds one. A shorter description
+            with fewer competing details helps too.</span
+          >
+          <span v-else
             >None of the {{ ended.length }} sheets shows one person in all six
             photos. Drawing more usually finds one. A shorter description with
             fewer competing details helps too.</span
@@ -434,7 +484,11 @@
             </button>
           </div>
           <span class="cs-hint">{{ referenceHint }}</span>
-          <p class="cs-notice cs-notice--warn" data-testid="cs-reference-warning">
+          <p
+            v-if="!item"
+            class="cs-notice cs-notice--warn"
+            data-testid="cs-reference-warning"
+          >
             <v-icon size="16">mdi-alert-outline</v-icon>
             <span
               >These sheets are drawn to look like the person in the picture.
@@ -463,7 +517,7 @@
         </button>
       </div>
       <div
-        v-if="phase === 'describe' && !fromReference && textSource"
+        v-if="phase === 'describe' && !fromReference && textSource && !item"
         class="cs-item"
         data-testid="cs-convert-text"
       >
@@ -519,7 +573,9 @@
           />
         </div>
       </template>
-      <h3 v-if="!railIsReference" class="cs-secl">{{ name }} so far</h3>
+      <h3 v-if="!railIsReference" class="cs-secl">
+        {{ item ? `This ${item.noun}` : `${name} so far` }}
+      </h3>
       <h3 v-else-if="keptSheets.length" class="cs-secl">Kept</h3>
       <div class="cs-rail">
         <ul
@@ -583,10 +639,23 @@
           <span v-if="phase === 'describe'"
             ><span class="cs-n">1</span
             ><span
-              ><b>Sheets</b> · 2–4 sheets of six photos, pick one</span
+              ><b>Sheets</b> ·
+              {{
+                item
+                  ? `2–4 sheets of four ${item.views}, keep one`
+                  : "2–4 sheets of six photos, pick one"
+              }}</span
             ></span
           >
-          <span
+          <span v-if="item"
+            ><span class="cs-n">2</span
+            ><span
+              ><b>The {{ item.noun }}</b> · its
+              {{ item.angles.slice(0, -1).join(", ") }} and
+              {{ item.angles.at(-1) }}, cut from the sheet</span
+            ></span
+          >
+          <span v-else
             ><span class="cs-n">2</span
             ><span
               ><b>Pick the set</b> · new and existing pictures, ranked
@@ -748,9 +817,12 @@ import { VIcon } from "vuetify/components";
 
 import {
   buildSheetPrompt,
+  rankItemSheets,
   rankSheets,
+  useItemSheets,
   useSheets,
 } from "../../api/characterSheets";
+import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
 import {
   getCharacter,
   getReferencePictures,
@@ -785,11 +857,20 @@ import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import { usePromptAssist } from "../../composables/usePromptAssist";
 import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
 import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
+import { DRAWN_AS, ITEM_KINDS, panelSize } from "../../utils/sheetKinds";
 import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
-  /** { id, name } of the character. */
-  character: { type: Object, required: true },
+  /** What the sheets draw: a character's six photos, or four angles of an
+   * outfit, a location or a prop (utils/sheetKinds.js). */
+  kind: {
+    type: String,
+    default: "character",
+    validator: (v) => v === "character" || v in ITEM_KINDS,
+  },
+  /** { id, name } of the character: whose sheets, or whose outfit. A
+   * location or a prop has none. */
+  character: { type: Object, default: null },
   /** How many pictures the character already has. */
   pictureCount: { type: Number, default: 0 },
   /** The step as `snapshot` last stored it, or null for a fresh one. */
@@ -808,12 +889,12 @@ const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
 // The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
 // photo each cuts to (a 600×768 cell of the large sheet, scaled).
 const SIZES = [
-  { id: "small", label: "Small", passport: "300×384" },
-  { id: "medium", label: "Medium", passport: "431×552" },
-  { id: "large", label: "Large", passport: "600×768" },
-  { id: "4k", label: "4K", passport: "900×1152" },
-  { id: "5k", label: "5K", passport: "1237×1584" },
-  { id: "6k", label: "6K", passport: "1462×1872" },
+  { id: "small", label: "Small", passport: "300×384", w: 1280, h: 768 },
+  { id: "medium", label: "Medium", passport: "431×552", w: 1840, h: 1104 },
+  { id: "large", label: "Large", passport: "600×768", w: 2560, h: 1536 },
+  { id: "4k", label: "4K", passport: "900×1152", w: 3840, h: 2304 },
+  { id: "5k", label: "5K", passport: "1237×1584", w: 5280, h: 3168 },
+  { id: "6k", label: "6K", passport: "1462×1872", w: 6240, h: 3744 },
 ];
 // The sizes a model draws well, and the one it starts at; the rest are greyed
 // out. MOSS-Image, Krea 2, Qwen and Klein are known good to ~4 MP; MiniMax H3
@@ -921,7 +1002,18 @@ const HEIGHT_WORDS = /\b(tall|short|petite|height|legs?|leggy|long-legged)\b/i;
 const RECENT_FIELDS = ["top", "trousers", "shoes", "background"];
 
 const tasks = useTasksStore();
+/** The item kind's words and fields, or null for a character's sheets. */
+const item = computed(() => ITEM_KINDS[props.kind] || null);
 const name = computed(() => props.character?.name || "");
+/** What an item's panels are filed as: the set it names. */
+const itemName = computed(
+  () => form.name.trim() || item.value?.newName || "",
+);
+/** Where a mode's last workflow is remembered: an item kind's apart from a
+ * character's, since items draw only in prose. */
+function choiceKey(mode) {
+  return item.value ? `${props.kind}:${mode}` : mode;
+}
 const phase = ref("describe"); // describe | drawing | pick | filing
 const form = reactive({
   description: "",
@@ -935,6 +1027,14 @@ const form = reactive({
   proportions: "typical",
   // An older saved form has none, and reads as on.
   photo_look: true,
+  // An item's: its name and the fields only it has (utils/sheetKinds.js).
+  name: "",
+  contents: "",
+  ground: "",
+  surroundings: "",
+  material: "",
+  scale: "",
+  daylight: true,
 });
 // A step with nothing saved starts from the choices last made.
 const remembered = props.saved ? null : readChoices();
@@ -1080,7 +1180,7 @@ const engine = computed(() => {
  * "regions" for a sheet copy, "prose" (one sentence) for every other engine
  * and for a draw from a reference. */
 const layout = computed(() => {
-  if (fromReference.value) return "prose";
+  if (fromReference.value || item.value) return "prose";
   if (engine.value.regions) return "regions";
   return engine.value === ENGINES.moss ? "" : "prose";
 });
@@ -1114,7 +1214,11 @@ const sheetLookPending = computed(() =>
  * every draw from a reference, and any text one but MOSS-Image's and a sheet
  * copy's regions. */
 function drawsProse(card) {
-  return fromReference.value || (!card.sheet_layout && cardEngine(card) !== ENGINES.moss);
+  return (
+    fromReference.value ||
+    !!item.value ||
+    (!card.sheet_layout && cardEngine(card) !== ENGINES.moss)
+  );
 }
 const sheetLook = usePromptAssist(sheetAssist, "sheet");
 /** Whether the chosen workflow offers the sampler choice (`prompt.sampler_choice`). */
@@ -1264,7 +1368,7 @@ function fittingLora() {
 
 // Each mode has its own workflows: the one last chosen in it, or its first.
 watch(mode, (now) => {
-  const last = readChoices().workflows?.[now];
+  const last = readChoices().workflows?.[choiceKey(now)];
   workflowId.value = usableCards.value.some((card) => card.id === last)
     ? last
     : usableCards.value[0]?.id || "";
@@ -1359,6 +1463,10 @@ const framingHint = computed(() => {
 
 const sizeHint = computed(() => {
   const size = SIZES.find((s) => s.id === form.size);
+  if (item.value) {
+    const [w, h] = panelSize(props.kind, size.w, size.h);
+    return `Each ${item.value.views === "views" ? "view" : "angle"} comes out about ${w}×${h}. Larger is slower to draw. MiniMax H3 Image draws items best; 4K and up is its own.`;
+  }
   const own = engine.value.sizes;
   const labels = (own || []).map((id) => SIZES.find((s) => s.id === id).label);
   const why = own
@@ -1368,6 +1476,11 @@ const sizeHint = computed(() => {
 });
 
 const descriptionHint = computed(() => {
+  if (item.value) {
+    return fromReference.value
+      ? `The picture shows the ${item.value.noun}; these words are sent with it.`
+      : item.value.descriptionHint;
+  }
   if (fromReference.value) {
     const from = savedDescription.value ? `From ${name.value}. ` : "";
     return `${from}In this mode the picture sets the face; these words are sent with it.`;
@@ -1425,8 +1538,12 @@ const sheets = computed(() => {
 });
 
 const holding = computed(() =>
-  sheets.value.filter(
-    (s) => s.faces_read && !s.broken && s.agreement_words !== "faces don't hold",
+  sheets.value.filter((s) =>
+    item.value
+      ? s.readable && (s.panels || []).every((p) => p.agrees)
+      : s.faces_read &&
+        !s.broken &&
+        s.agreement_words !== "faces don't hold",
   ),
 );
 
@@ -1448,6 +1565,7 @@ const noneHold = computed(
 /** Drawn from a picture, only a sheet close to it is kept for the user: why
  * none was, or "". */
 const noneClose = computed(() => {
+  if (item.value) return "";
   if (!drawnFrom.value || !allEnded.value || !holding.value.length) return "";
   if (holding.value.some((sheet) => sheet.close)) return "";
   if (!rankedAgainst.value) {
@@ -1578,6 +1696,11 @@ function toggleKeep(id) {
 }
 
 const pickIntro = computed(() => {
+  if (item.value) {
+    const views = item.value.views === "views" ? "view" : "angle";
+    const angles = item.value.angles;
+    return `Each ${views}'s number is how well its colours agree with the other three. Keep the sheet to use: its four panels become ${itemName.value}'s ${angles.slice(0, -1).join(", ")} and ${angles.at(-1)}, in a set of their own. Keeping more than one sheet keeps more than one version. Every sheet stays in the Scrapheap, used or not.`;
+  }
   if (drawnFrom.value) {
     // Sheets keep their run's place, so the closest is kept, not moved first.
     const against = toPicture.value
@@ -1619,6 +1742,8 @@ function photoScores(sheet) {
 
 /** The photos that drift, for the sheet's label: "" when none does. */
 function photoWords(sheet) {
+  // An item sheet's words already name the panel that drifts.
+  if (item.value) return "";
   const off = photoScores(sheet)
     .filter((photo) => !photo.ok)
     .map((photo) => photo.panel + 1);
@@ -1675,7 +1800,8 @@ function sheetEdited(sheet) {
 /** Write one photo's box. A new object each time, so the change is reactive. */
 function setBox(sheet, index, box) {
   const edits = [
-    ...(cutEdits.value[sheet.picture_id] || Array(PANEL_COUNT).fill(null)),
+    ...(cutEdits.value[sheet.picture_id] ||
+      Array(PANEL_COUNT.value).fill(null)),
   ];
   edits[index] = box;
   cutEdits.value = { ...cutEdits.value, [sheet.picture_id]: edits };
@@ -1714,13 +1840,14 @@ const zoomedEdited = computed(() => !!zoomed.value && sheetEdited(zoomed.value))
 // Boxes are drawn but not moved while the sheets are being cut.
 const cutLocked = computed(() => working.value || phase.value === "filing");
 const HANDLE_NAMES = Object.keys(HANDLES);
-const PANEL_COUNT = 6;
+const PANEL_COUNT = computed(() => (item.value ? 4 : 6));
 const CUT_HINT =
   "Drag a box's edge or corner to resize it, or its middle to move it. " +
   "Arrows move it; Shift or Alt with an arrow pushes or pulls that edge.";
 
 /** The photo a box is, for its label: the passports 1-4, then the bodies. */
 function panelName(index) {
+  if (item.value) return item.value.angles[index];
   return index < 4 ? `Passport photo ${index + 1}` : `Body photo ${index - 3}`;
 }
 
@@ -1951,7 +2078,9 @@ async function checkCards() {
       // what the workflow's check answered.
       checks: Object.fromEntries(all.map(([card], i) => [card.id, results[i]])),
       // Whether this character has faces to draw from: the mode rule's input.
-      faces: { ...faces, [props.character.id]: referenceIds.value.length > 0 },
+      ...(props.character
+        ? { faces: { ...faces, [props.character.id]: referenceIds.value.length > 0 } }
+        : { faces }),
     });
   }
   // Not configured is fixed in Settings and said so; only a ComfyUI that may
@@ -2053,6 +2182,19 @@ let rankRun = 0;
 
 async function rank() {
   const run = ++rankRun;
+  if (item.value) {
+    const answer = await rankItemSheets(props.kind, order.value);
+    if (run !== rankRun) return;
+    // An item sheet has no faces to wait for: it is ready once ranked, so
+    // it counts as read wherever a character sheet waits for its faces.
+    ranking.value = Object.fromEntries(
+      answer.sheets.map((sheet) => [
+        sheet.picture_id,
+        { ...sheet, faces_read: true },
+      ]),
+    );
+    return;
+  }
   // Drawn from a picture, the sheets are measured against that picture
   // unless compared with the character's reference cluster.
   const answer = toPicture.value
@@ -2089,7 +2231,8 @@ async function tick() {
     gaveUpOnFaces.value = true;
   }
   // Drawn from a picture, only a sheet close to it is kept for the user.
-  const best = drawnFrom.value
+  const best =
+    drawnFrom.value && !item.value
     ? holding.value.find((sheet) => sheet.close)
     : holding.value[0];
   if (!keptTouched.value && !kept.value.length && best) {
@@ -2145,10 +2288,19 @@ async function draw() {
   rememberRecent();
   try {
     const description = form.description.trim();
-    if (!savedDescription.value && description) {
+    if (!item.value && !savedDescription.value && description) {
       await patchCharacter(props.character.id, { description });
       savedDescription.value = description;
     }
+    const itemFields = item.value
+      ? {
+          kind: props.kind,
+          ...Object.fromEntries(
+            item.value.fields.map((f) => [f.key, form[f.key] || ""]),
+          ),
+          ...(props.kind === "location" ? { daylight: form.daylight } : {}),
+        }
+      : {};
     const sheet = await buildSheetPrompt({
       description,
       top: form.top,
@@ -2166,6 +2318,9 @@ async function draw() {
       // From a reference, the sentence names the person in the picture.
       ...(reference ? { reference: true } : {}),
       ...(sheetLayout ? { layout: sheetLayout } : {}),
+      // An item's kind and fields over the character's; the route ignores
+      // the character's for an item.
+      ...itemFields,
     });
     const drawing = JSON.stringify([
       sheet.prompt,
@@ -2209,7 +2364,9 @@ async function draw() {
       character_ids: [],
       // Not the library's until kept: imported straight to the Scrapheap.
       hold: true,
-      label: `Character sheet · ${name.value}`,
+      label: item.value
+        ? `${item.value.title.replace(/s$/, "")} · ${itemName.value}`
+        : `Character sheet · ${name.value}`,
       ...(assist ? { prompt_assist: assist } : {}),
       ...(euler ? { sampler: "euler" } : {}),
     });
@@ -2336,6 +2493,10 @@ async function use() {
       .filter((sheet) => sheetEdited(sheet))
       .map((sheet) => [sheet.picture_id, cellsOf(sheet)]),
   );
+  if (item.value) {
+    await useItem(keep, boxes);
+    return;
+  }
   let ids;
   try {
     ({ picture_ids: ids } = await useSheets(props.character.id, keep, boxes));
@@ -2367,6 +2528,44 @@ async function use() {
   startOver();
   phase.value = "describe";
   emit("done", ids);
+}
+
+/** Cut the kept item sheets and put their panels in a new set named for the
+ * item: an outfit's under its person. The set is the item until the Studio
+ * keeps outfits, locations and props of its own. */
+async function useItem(keep, boxes) {
+  let ids;
+  try {
+    ({ picture_ids: ids } = await useItemSheets(props.kind, keep, boxes));
+  } catch (e) {
+    phase.value = "pick";
+    error.value = `Couldn't use the sheets. ${errorMessage(e, "Please try again.")}`;
+    working.value = false;
+    return;
+  }
+  cutDone.value = true;
+  emit("cut", ids);
+  let set = null;
+  try {
+    ({ picture_set: set } = await createPictureSet({
+      name: itemName.value,
+      description: form.description.trim(),
+      ...(props.kind === "outfit" && props.character
+        ? { parent_character_id: props.character.id }
+        : {}),
+    }));
+    await bulkAddPicturesToSet(set.id, ids);
+  } catch (e) {
+    // The pictures are in the library either way; only the set is missing.
+    console.warn("Couldn't file the sheet pictures in a set", ids, e);
+    error.value = `The pictures were made but couldn't be put in a set. ${errorMessage(e, "Add them to one by hand.")}`;
+    set = null;
+  }
+  working.value = false;
+  if (!alive) return;
+  startOver();
+  phase.value = "describe";
+  emit("done", ids, set);
 }
 
 const canDraw = computed(
@@ -2420,7 +2619,9 @@ const footer = computed(() => {
   const n = form.count;
   if (phase.value === "describe") {
     return {
-      lead: `Pictures are filed on ${name.value}`,
+      lead: item.value
+        ? `The ${item.value.noun}'s pictures go in a new set, ${itemName.value}`
+        : `Pictures are filed on ${name.value}`,
       back: order.value.length
         ? { label: "Back to the sheets", run: () => (phase.value = "pick") }
         : null,
@@ -2434,7 +2635,9 @@ const footer = computed(() => {
   }
   if (phase.value === "filing") {
     return {
-      lead: "Cutting the sheets into pictures and reading their faces…",
+      lead: item.value
+        ? "Cutting the sheets into pictures…"
+        : "Cutting the sheets into pictures and reading their faces…",
       primary: { label: keepLabel.value, enabled: false, run: use },
     };
   }
@@ -2447,7 +2650,7 @@ const footer = computed(() => {
       (waiting
         ? `Drawing ${waiting} more, about a minute each.`
         : keptSheets.value.length
-          ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${name.value}'s pictures; the sheets stay in the Scrapheap.`
+          ? `${keptWords.value} ${keptSheets.value.length === 1 ? "becomes" : "become"} ${item.value ? `${itemName.value}'s ${item.value.angles.join(", ")}` : `${name.value}'s pictures`}; the sheets stay in the Scrapheap.`
           : "Keep the sheets to use. Every sheet stays in the Scrapheap."),
     // The rail's Edit goes back to the form too; the footer offers it only
     // when no sheet is worth using.
@@ -2506,14 +2709,24 @@ function sortCards(cards) {
   const recent = (a, b) =>
     String(b.last_used || "").localeCompare(String(a.last_used || ""));
   cardRows = cards;
+  // An item sheet is prose only, and MiniMax H3 Image draws it best: first.
+  const itemFirst = (a, b) =>
+    item.value
+      ? Number(cardEngine(b) === ENGINES.minimaxImage) -
+        Number(cardEngine(a) === ENGINES.minimaxImage)
+      : 0;
   workflows.value = cards
     .filter(
       (card) =>
         card.type === "txt2img" &&
         !card.reference_inputs &&
-        (card.sheet_layout || cardEngine(card)),
+        (item.value
+          ? !card.sheet_layout &&
+            !!cardEngine(card) &&
+            cardEngine(card) !== ENGINES.moss
+          : card.sheet_layout || cardEngine(card)),
     )
-    .sort(recent);
+    .sort((a, b) => itemFirst(a, b) || recent(a, b));
   textConvertibles.value = cards
     .filter(
       (card) =>
@@ -2525,7 +2738,7 @@ function sortCards(cards) {
     .sort(recent);
   referenceCards.value = cards
     .filter((card) => card.reference_inputs > 0 && referenceEngine(card))
-    .sort(recent);
+    .sort((a, b) => itemFirst(a, b) || recent(a, b));
   // An edit workflow that draws on its picture's own canvas: a sheet copy of
   // it is what the reference mode runs.
   convertible.value = referenceCards.value.length
@@ -2546,7 +2759,7 @@ function restoreCardCache() {
   workflowsLoaded.value = true;
   // The mode rule `load` applies once the references are read, from the last
   // read of this character's faces.
-  const faces = remembered.faces?.[props.character.id] === true;
+  const faces = !!props.character && remembered.faces?.[props.character.id] === true;
   mode.value =
     referenceCards.value.length && (faces || !workflows.value.length)
       ? "reference"
@@ -2555,15 +2768,17 @@ function restoreCardCache() {
 }
 
 async function load() {
-  const id = props.character.id;
+  // An item reads no character: no description, LoRA or reference faces.
+  const id = item.value ? null : props.character.id;
+  const none = Promise.resolve(null);
   restoreCardCache();
   const [character, adapters, cards, references] = await Promise.allSettled([
-    getCharacter(id),
-    listAdapters({ characterId: id }),
+    id == null ? none : getCharacter(id),
+    id == null ? Promise.resolve([]) : listAdapters({ characterId: id }),
     // The shipped sheet workflows are cards already: start-up lists every
     // built-in the owner has not removed.
     listWorkflowCards(),
-    getReferencePictures(id),
+    id == null ? none : getReferencePictures(id),
   ]);
   if (!alive) return;
   if (character.status === "fulfilled") {
@@ -2577,7 +2792,9 @@ async function load() {
     // The newest LoRA that loads into the sheet workflow is preselected.
     loraSha.value = fittingLora();
   }
-  if (references.status === "fulfilled") showReferences(references.value);
+  if (references.status === "fulfilled" && references.value) {
+    showReferences(references.value);
+  }
   if (cards.status === "fulfilled") {
     sortCards(cards.value.cards);
     // A character with a face is drawn from it where a workflow can; one
@@ -2696,10 +2913,10 @@ function recalled() {
       (referenceIds.value.length || !workflows.value.length),
   };
   const pick = usable[remembered.mode] ? remembered.mode : mode.value;
-  const lora = remembered.loras?.[props.character.id];
+  const lora = props.character ? remembered.loras?.[props.character.id] : null;
   return {
     mode: pick,
-    workflow_id: remembered.workflows?.[pick],
+    workflow_id: remembered.workflows?.[choiceKey(pick)],
     lora_sha: lora?.sha,
     strength: lora?.strength,
   };
@@ -2722,8 +2939,13 @@ function readRecent(choices) {
 /** Put what this draw wears and stands in front of first in each field's
  * list. Shoes only at full body, the one framing that shows them. */
 function rememberRecent() {
-  const fields = RECENT_FIELDS.filter(
-    (field) => field !== "shoes" || form.framing === "full_body",
+  // An item remembers only the shared fields it shows; an outfit always
+  // shows its shoes.
+  const shown = item.value
+    ? item.value.fields.filter((f) => f.recent).map((f) => f.key)
+    : RECENT_FIELDS;
+  const fields = shown.filter(
+    (field) => item.value || field !== "shoes" || form.framing === "full_body",
   );
   remember((all) => {
     const lists = readRecent(all);
@@ -2751,7 +2973,7 @@ watch(mode, (now) =>
 watch(workflowId, (id) => {
   if (!id) return;
   remember((all) => {
-    all.workflows = { ...all.workflows, [mode.value]: id };
+    all.workflows = { ...all.workflows, [choiceKey(mode.value)]: id };
   });
 });
 watch(
@@ -2779,6 +3001,8 @@ watch(
 // Per person. A LoRA left at the default is forgotten, so a newer LoRA of the
 // person is still the one taken.
 watch([loraSha, strength], ([sha, value]) =>
+  props.character &&
+  !item.value &&
   remember((all) => {
     const loras = { ...all.loras };
     if (sha === fittingLora() && value === 0.8) delete loras[props.character.id];

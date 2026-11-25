@@ -612,6 +612,147 @@ def sheet_prompt(
     return json.dumps(document)
 
 
+# Outfits, locations and props are drawn the way characters are: described
+# once, every angle on one 5:3 sheet so the angles agree, and the best sheet
+# kept and cut. Four panels each: an outfit's four tall ones side by side, a
+# location's and a prop's two by two, numbered row by row.
+ItemKind = Literal["outfit", "location", "prop"]
+Kind = Literal["character", ItemKind]
+ITEM_GRIDS: dict[str, tuple[int, int]] = {
+    "outfit": (1, 4),
+    "location": (2, 2),
+    "prop": (2, 2),
+}
+ITEM_ANGLES: dict[str, tuple[str, ...]] = {
+    "outfit": ("Front", "¾", "Side", "Back"),
+    "location": ("Wide", "Reverse", "Left", "Right"),
+    "prop": ("Front", "¾", "Side", "Back"),
+}
+_ITEM_VIEWS = {
+    "outfit": (
+        "front view",
+        "three-quarter view turned to the left",
+        "side view facing right",
+        "back view",
+    ),
+    "location": (
+        "top left, a wide establishing view",
+        "top right, the reverse view, looking back the other way",
+        "bottom left, looking to the left",
+        "bottom right, looking to the right",
+    ),
+    "prop": (
+        "top left, front view",
+        "top right, three-quarter view",
+        "bottom left, side view",
+        "bottom right, back view",
+    ),
+}
+_ITEM_NOUN = {"outfit": "outfit", "location": "place", "prop": "object"}
+# The prose item sheet as plain product or location photographs. ponytail:
+# written beside PHOTO_LOOK, not probed; re-probe on MiniMax H3 Image.
+ITEM_PHOTO_LOOK = (
+    "The photos look like plain unedited camera photos: natural colour, "
+    "true-to-life materials, nothing retouched or sharpened."
+)
+
+
+def item_sheet_prompt(
+    *,
+    kind: ItemKind,
+    description: str,
+    top: str = "",
+    trousers: str = "",
+    shoes: str = "",
+    background: str = "",
+    contents: str = "",
+    ground: str = "",
+    surroundings: str = "",
+    material: str = "",
+    scale: str = "",
+    daylight: bool = True,
+    reference: bool = False,
+    photo_look: bool = True,
+    look_added_by_run: bool = False,
+) -> str:
+    """The prose prompt for one sheet of an outfit, a location or a prop.
+
+    Prose only: the layouts MOSS-Image reads are probed for a character's six
+    panels. Every view is named by its place on the sheet, and the whole item
+    is said once for all four, so every panel draws the same one. An outfit is
+    worn, chin to feet, so no face competes with it; a location is always
+    empty, in plain daylight unless *daylight* is off (each scene sets its own
+    time and weather); a prop stands alone. *reference* says the item is the
+    one in the reference picture. *photo_look* and *look_added_by_run* work as
+    in :func:`sheet_prompt`, with :data:`ITEM_PHOTO_LOOK` as the look.
+    """
+    noun = _ITEM_NOUN[kind]
+    described = _phrase(description)
+    if reference:
+        same = f"the same {noun} as in the reference picture"
+        if kind == "location":
+            same = f"{same}, without any people in it"
+        described = f"{same}, {described}" if described else same
+    described = described or f"an everyday {noun}"
+    views = ", ".join(f"({n}) {view}" for n, view in enumerate(_ITEM_VIEWS[kind], 1))
+    unrendered = photo_look or look_added_by_run
+    photos = "photographs" if unrendered else "photorealistic photographs"
+    backdrop = _phrase(background)
+    setting = (
+        f"with the background: {backdrop}"
+        if backdrop
+        else "on a plain light-grey studio background, soft even studio lighting"
+    )
+    if kind == "outfit":
+        parts = [
+            _phrase(top),
+            _phrase(trousers),
+            _phrase(shoes),
+        ]
+        pieces = "; ".join(part for part in parts if part)
+        text = (
+            f"Outfit reference sheet {setting}, {photos}: one and the same "
+            "outfit worn by the same adult, in four tall photos of equal size "
+            "side by side, each spanning the full height of the sheet, "
+            "separated by thin white borders. Every photo is cropped at the "
+            "chin, so no face shows, and runs down to the feet: "
+            f"{views}. The outfit is {described}"
+            f"{f': {pieces}' if pieces else ''}. Identical garments, colours, "
+            "fabric, fit and details in every photo."
+        )
+    elif kind == "location":
+        details = [
+            f"In it: {_phrase(contents)}." if _phrase(contents) else "",
+            f"The ground: {_phrase(ground)}." if _phrase(ground) else "",
+            f"Around it: {_phrase(surroundings)}." if _phrase(surroundings) else "",
+            "Plain daylight at midday, clear weather." if daylight else "",
+        ]
+        text = (
+            f"Location reference sheet, {photos} of one and the same place, "
+            f"{described}, in four photos of equal size, two by two, "
+            f"separated by thin white borders: {views}. "
+            f"{' '.join(d for d in details if d)} The place is empty: no "
+            "people and no animals. Identical place, layout, materials and "
+            "details in every photo."
+        )
+    else:
+        details = [
+            f"Material: {_phrase(material)}." if _phrase(material) else "",
+            f"Size: {_phrase(scale)}." if _phrase(scale) else "",
+        ]
+        text = (
+            f"Prop reference sheet {setting}, {photos} of one and the same "
+            f"object, {described}, on its own in four photos of equal size, "
+            f"two by two, separated by thin white borders: {views}. "
+            f"{' '.join(d for d in details if d)} Nothing else is in the "
+            "photos: no people and no hands. Identical shape, colours, "
+            "material and details in every photo."
+        )
+    text = " ".join(text.split())
+    look = photo_look and not look_added_by_run
+    return f"{text} {ITEM_PHOTO_LOOK}" if look else text
+
+
 class SheetConversionRefused(ValueError):
     """The graph is not one :func:`convert_to_sheet` can rewrite; ``reason`` says why."""
 
@@ -1449,6 +1590,195 @@ def split_sheet(
     return [image.crop(box) for box in sheet_cells(image, faces)[0]]
 
 
+def _grid_alike(cells: list[Box], width: int, height: int) -> bool:
+    """Whether *cells* are one size each (within the passports' share), on
+    the sheet and none overlapping: an item sheet's layout."""
+    if any(
+        not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height)
+        for x0, y0, x1, y1 in cells
+    ):
+        return False
+    if any(
+        a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+        for a, b in combinations(cells, 2)
+    ):
+        return False
+    return all(
+        max(sizes) <= min(sizes) * (1 + SAME_SIZE["passport"])
+        for sizes in (
+            [box[2] - box[0] for box in cells],
+            [box[3] - box[1] for box in cells],
+        )
+    )
+
+
+def item_sheet_cells(image: Image.Image, kind: ItemKind) -> tuple[list[Box], bool]:
+    """The four panels' boxes on an item sheet, row by row, and whether the
+    cut is clean.
+
+    The cuts are searched as a character sheet's are (:func:`_find_cut`:
+    gutters, white frame, seams), each from the grid line a quarter of the
+    span it splits either side: the columns first over the whole height, then
+    each column's rows over that column, so a model that draws the rows'
+    borders apart is followed in each. With no faces nothing fences a cut. A
+    cut that does not land on the grid's layout (:func:`_grid_alike`) falls
+    back to the grid itself, never clean. White frame and colour gutter are
+    trimmed as on a character sheet.
+    """
+    rows, cols = ITEM_GRIDS[kind]
+    width, height = image.size
+    sx = width / SHEET_WIDTH
+    rgb = np.asarray(image.convert("RGB"))
+    gray = np.asarray(image.convert("L"), dtype=np.int16)
+    gutter = _gutter_mask(rgb)
+    if gutter is not None:
+        gray = np.where(gutter, 255, gray).astype(np.int16)
+    limit, bleed = round(64 * sx), max(1, round(2 * sx))
+    # Read at the layout's own size, as sheet_cells reads seams.
+    factor = max(1.0, width / SHEET_WIDTH)
+    small = gray
+    if factor > 1:
+        small = np.asarray(
+            Image.fromarray(gray.astype(np.uint8)).resize(
+                (round(width / factor), round(height / factor)), Image.BOX
+            ),
+            dtype=np.int16,
+        )
+    s_height, s_width = small.shape
+    left, top, right, bottom = _content(small)
+
+    def splits(start: int, end: int, n: int, span, vertical: bool):
+        cuts, scale = (
+            [],
+            (s_width / SHEET_WIDTH if vertical else s_height / SHEET_HEIGHT),
+        )
+        reach = (end - start) // (4 * n)
+        for i in range(1, n):
+            nominal = start + (end - start) * i // n
+            cuts.append(
+                _find_cut(
+                    small,
+                    nominal,
+                    (nominal - reach, nominal + reach),
+                    span,
+                    vertical,
+                    [],
+                    scale,
+                )
+            )
+        return cuts
+
+    column_cuts = splits(left, right, cols, (top, bottom), True)
+    edges = [(left, left), *[(c[1], c[0]) for c in column_cuts], (right, right)]
+    columns = [(edges[i][0], edges[i + 1][1]) for i in range(cols)]
+    found: list[list[Box]] = [[] for _ in range(rows)]
+    cuts = list(column_cuts)
+    for x0, x1 in columns:
+        row_cuts = splits(top, bottom, rows, (x0, x1), False)
+        cuts.extend(row_cuts)
+        lines = [(top, top), *[(c[1], c[0]) for c in row_cuts], (bottom, bottom)]
+        for r in range(rows):
+            found[r].append((x0, lines[r][0], x1, lines[r + 1][1]))
+    cells = [
+        (
+            min(round(x0 * factor), width),
+            min(round(y0 * factor), height),
+            min(round(x1 * factor), width),
+            min(round(y1 * factor), height),
+        )
+        for row in found
+        for x0, y0, x1, y1 in row
+    ]
+    sure = all(cut[2] for cut in cuts)
+    if not _grid_alike(cells, width, height):
+        sure = False
+        x0, y0, x1, y1 = (round(v * factor) for v in (left, top, right, bottom))
+        cells = [
+            (
+                x0 + (x1 - x0) * c // cols,
+                y0 + (y1 - y0) * row // rows,
+                x0 + (x1 - x0) * (c + 1) // cols,
+                y0 + (y1 - y0) * (row + 1) // rows,
+            )
+            for row in range(rows)
+            for c in range(cols)
+        ]
+    cells = [_inside_frame(gray, cell, limit, bleed) for cell in cells]
+    if gutter is not None:
+        cells = [_off_gutter(cell, gutter, bleed) for cell in cells]
+    (logger.info if sure else logger.warning)(
+        "%s sheet %dx%d cut (clean=%s).", kind.capitalize(), width, height, sure
+    )
+    return cells, sure
+
+
+# A panel agrees with the others when their colours overlap this much
+# (histogram intersection, 0..1). ponytail: no outfit, location or prop sheet
+# has been drawn yet to read it off; probe MiniMax H3 Image sheets and tune.
+ITEM_AGREEMENT = 0.5
+# Colour histogram bins per channel: coarse, so the light turning with the
+# view moves few pixels across a bin.
+_COLOUR_BINS = 4
+# A panel's edge is its backdrop when every channel of it varies less than
+# this; pixels within _BACKDROP_REACH grey levels of its colour are left out.
+_BACKDROP_SPREAD = 12
+_BACKDROP_REACH = 24
+
+
+def _colours(panel: Image.Image) -> np.ndarray:
+    """*panel*'s colour histogram, its backdrop left out, summing to 1."""
+    small = panel.convert("RGB")
+    small.thumbnail((96, 96))
+    pixels = np.asarray(small, dtype=np.int16)
+    edge = np.concatenate([pixels[0], pixels[-1], pixels[:, 0], pixels[:, -1]], axis=0)
+    flat = pixels.reshape(-1, 3)
+    if (edge.std(axis=0) < _BACKDROP_SPREAD).all():
+        backdrop = np.median(edge, axis=0)
+        subject = np.abs(flat - backdrop).max(axis=1) > _BACKDROP_REACH
+        # A panel that is nearly all backdrop is judged on all of it.
+        if subject.mean() >= 0.05:
+            flat = flat[subject]
+    bins = (flat * _COLOUR_BINS // 256).clip(0, _COLOUR_BINS - 1)
+    index = (bins[:, 0] * _COLOUR_BINS + bins[:, 1]) * _COLOUR_BINS + bins[:, 2]
+    counts = np.bincount(index, minlength=_COLOUR_BINS**3).astype(np.float64)
+    return counts / max(1.0, counts.sum())
+
+
+def colour_agreement(panels: list[Image.Image]) -> list[float]:
+    """Each panel's mean colour overlap with the other panels (0..1).
+
+    Item sheets have no face to rank by; within one sheet the same coat or
+    street keeps its colours from every angle, and a panel that drifts (a back
+    drawn in another colour) overlaps the others less.
+    """
+    hists = [_colours(panel) for panel in panels]
+    if len(hists) < 2:
+        return [1.0] * len(hists)
+    return [
+        float(
+            np.mean(
+                [np.minimum(h, other).sum() for j, other in enumerate(hists) if j != i]
+            )
+        )
+        for i, h in enumerate(hists)
+    ]
+
+
+def item_agreement_words(kind: ItemKind, agreements: list[float]) -> str:
+    """An item sheet's agreement as the dialog says it."""
+    views = "views" if kind == "location" else "angles"
+    off = [
+        ITEM_ANGLES[kind][i].lower()
+        for i, value in enumerate(agreements)
+        if value < ITEM_AGREEMENT
+    ]
+    if not off:
+        return f"the four {views} agree"
+    if len(off) == 1:
+        return f"the {off[0]} drifts in colour"
+    return f"{len(off)} {views} drift in colour"
+
+
 def _unit(vectors: list[np.ndarray] | np.ndarray) -> np.ndarray:
     """*vectors* as rows of unit length; a 2-D array is taken as that already."""
     if isinstance(vectors, np.ndarray) and vectors.ndim == 2:
@@ -1806,17 +2136,20 @@ def file_on_character_in_session(
     session.commit()
 
 
-def _hand_cut_panels(image: Image.Image, boxes: list[list[float]]) -> list[Image.Image]:
-    """The six photos a person cut by hand, each cropped exactly as drawn.
+def _hand_cut_panels(
+    image: Image.Image, boxes: list[list[float]], count: int = PANEL_COUNT
+) -> list[Image.Image]:
+    """The photos a person cut by hand, each cropped exactly as drawn.
 
     Each box is `[left, top, right, bottom]` as fractions of the sheet, in
     panel order. Raises :class:`SheetBoxesInvalid` for anything that is not
-    six boxes inside the sheet, inverted, or under :data:`MIN_EDITED_PX` a side.
+    *count* boxes (six on a character sheet, four on an item sheet) inside the
+    sheet, inverted, or under :data:`MIN_EDITED_PX` a side.
     """
     width, height = image.size
-    if len(boxes) != PANEL_COUNT:
+    if len(boxes) != count:
         raise SheetBoxesInvalid(
-            f"A sheet is cut into {PANEL_COUNT} photos, not {len(boxes)} boxes."
+            f"A sheet is cut into {count} photos, not {len(boxes)} boxes."
         )
     panels = []
     for box in boxes:
@@ -1852,10 +2185,13 @@ def _cut(
     sheet: Picture,
     faces: list[list[int]],
     boxes: list[list[float]] | None = None,
+    kind: Kind = "character",
 ) -> list[tuple[bytes, str]]:
-    """The sheet's six panels as PNG bytes, ready to import.
+    """The sheet's panels as PNG bytes, ready to import.
 
-    Cut round *faces*, or where a person drew them, at *boxes*.
+    A character sheet's six, cut round *faces*; an item sheet's four
+    (:func:`item_sheet_cells`). Either cut where a person drew them, at
+    *boxes*, instead.
     """
     path = ImageUtils.resolve_picture_path(server.vault.image_root, sheet.file_path)
     if not path or not os.path.isfile(path):
@@ -1865,11 +2201,13 @@ def _cut(
     try:
         with Image.open(path) as image:
             rgb = image.convert("RGB")
-            panels = (
-                split_sheet(rgb, faces)
-                if boxes is None
-                else _hand_cut_panels(rgb, boxes)
-            )
+            if boxes is not None:
+                count = PANEL_COUNT if kind == "character" else 4
+                panels = _hand_cut_panels(rgb, boxes, count)
+            elif kind == "character":
+                panels = split_sheet(rgb, faces)
+            else:
+                panels = [rgb.crop(box) for box in item_sheet_cells(rgb, kind)[0]]
     except OSError as exc:
         logger.warning(
             "Couldn't read character sheet %s at %s to cut it: %s", sheet.id, path, exc
@@ -1932,4 +2270,137 @@ def use_sheets(
         panel_ids,
         character_id,
     )
+    return panel_ids
+
+
+def pictures_in_session(
+    session: Session, picture_ids: list[int]
+) -> list[Picture] | None:
+    """The pictures, in the order asked; ``None`` when any does not exist. A
+    held sheet (soft-deleted on import) counts."""
+    pictures = [session.get(Picture, pid) for pid in picture_ids]
+    return None if any(picture is None for picture in pictures) else pictures
+
+
+@lru_cache(maxsize=64)
+def _item_rank_of_file(
+    path: str, stamp: int, kind: str
+) -> tuple[tuple[tuple[float, ...], ...], bool, tuple[float, ...]]:
+    """:func:`item_sheet_cells` of the file at *path* as fractions, whether it
+    cuts cleanly, and each panel's :func:`colour_agreement`. Keyed by *stamp*
+    (its mtime) as :func:`_cut_of_file` is."""
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+    cells, clean = item_sheet_cells(image, kind)
+    width, height = image.size
+    fractions = tuple(
+        (left / width, top / height, right / width, bottom / height)
+        for left, top, right, bottom in cells
+    )
+    agreements = tuple(colour_agreement([image.crop(cell) for cell in cells]))
+    return fractions, clean, agreements
+
+
+def rank_item_sheets(vault, kind: ItemKind, picture_ids: list[int]) -> list[dict]:
+    """Score each outfit, location or prop sheet by how its panels agree.
+
+    There are no faces to wait for: a sheet is ranked from its file as soon
+    as it is imported. Each panel scores its :func:`colour_agreement` with the
+    other three; the sheet, their mean. One dict per sheet, in the order
+    asked. A sheet whose file cannot be read comes back unscored. Raises
+    :class:`SheetNotFound` when a picture does not exist.
+    """
+    ids = list(dict.fromkeys(picture_ids))
+    pictures = vault.db.run_immediate_read_task(pictures_in_session, ids)
+    if pictures is None:
+        raise SheetNotFound(f"No picture among {ids}.")
+    out = []
+    for picture in pictures:
+        path = ImageUtils.resolve_picture_path(vault.image_root, picture.file_path)
+        ranked = None
+        try:
+            if not path:
+                raise FileNotFoundError(picture.file_path)
+            ranked = _item_rank_of_file(path, os.stat(path).st_mtime_ns, kind)
+        except (OSError, Image.DecompressionBombError) as exc:
+            logger.warning(
+                "Couldn't read %s sheet %s at %s to rank it: %s",
+                kind,
+                picture.id,
+                path,
+                exc,
+            )
+        cells, clean, agreements = ranked or ((), None, ())
+        out.append(
+            {
+                "picture_id": picture.id,
+                "format": (picture.format or "").lower() or None,
+                "readable": ranked is not None,
+                "agreement": float(np.mean(agreements)) if agreements else None,
+                "agreement_words": (
+                    item_agreement_words(kind, list(agreements))
+                    if agreements
+                    else "can't be read"
+                ),
+                "cuts_cleanly": clean,
+                "cells": [list(cell) for cell in cells],
+                "panels": [
+                    {
+                        "panel": index,
+                        "box": list(cell),
+                        "agreement": value,
+                        "agrees": value >= ITEM_AGREEMENT,
+                    }
+                    for index, (cell, value) in enumerate(zip(cells, agreements))
+                ],
+            }
+        )
+    return out
+
+
+def unlink_from_sheet_in_session(session: Session, picture_ids: list[int]) -> None:
+    """Drop each panel's link to its sheet: the sheet stays in the Scrapheap,
+    and a picture naming it as source would fail its purge on the foreign key."""
+    for picture in session.exec(
+        select(Picture).where(Picture.id.in_(picture_ids))
+    ).all():
+        picture.source_picture_id = None
+        session.add(picture)
+    session.commit()
+
+
+def use_item_sheets(
+    server,
+    kind: ItemKind,
+    picture_ids: list[int],
+    boxes: dict[int, list[list[float]]] | None = None,
+) -> list[int]:
+    """Cut each outfit, location or prop sheet into its four panels.
+
+    As :func:`use_sheets`, without the character: the panels are imported as
+    pictures made from their sheet, in panel order sheet by sheet, and filed on
+    nobody (the dialog puts them in a set of their own). A sheet in *boxes* is
+    cut at its four boxes, exactly. Every sheet is read and every box checked
+    before anything is imported. Raises :class:`SheetNotFound`,
+    :class:`SheetUnreadable` and :class:`SheetBoxesInvalid`.
+    """
+    ids = list(dict.fromkeys(picture_ids))
+    sheets = server.vault.db.run_immediate_read_task(pictures_in_session, ids)
+    if sheets is None:
+        raise SheetNotFound(f"No picture among {ids}.")
+    boxes = boxes or {}
+    stray = sorted(set(boxes) - set(ids))
+    if stray:
+        raise SheetBoxesInvalid(f"Boxes given for pictures {stray}, not among {ids}.")
+    cuts = [
+        (sheet, _cut(server, sheet, [], boxes.get(sheet.id), kind)) for sheet in sheets
+    ]
+    panel_ids: list[int] = []
+    for sheet, entries in cuts:
+        _new, _duplicates, made = import_derived_outputs(
+            server, [sheet] * len(entries), entries, stack=False
+        )
+        server.vault.db.run_task(unlink_from_sheet_in_session, made)
+        panel_ids.extend(made)
+    logger.info("%s sheets %s cut into pictures %s", kind.capitalize(), ids, panel_ids)
     return panel_ids

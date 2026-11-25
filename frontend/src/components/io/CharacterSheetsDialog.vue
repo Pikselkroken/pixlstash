@@ -1,8 +1,8 @@
 <template>
   <AppDialog
     :open="open"
-    :title="`Character sheets for ${name}`"
-    :subtitle="step?.loraName ? `with ${step.loraName}` : ''"
+    :title="title"
+    :subtitle="subtitle"
     fullscreen
     :pad-body="false"
     :persistent="held"
@@ -22,12 +22,14 @@
     </template>
 
     <CharacterSheetStep
-      v-if="open && character"
+      v-if="open && (character || item)"
       ref="step"
+      :kind="kind"
       :character="character"
-      :picture-count="character.image_count ?? 0"
-      :saved="savedFor(character)"
+      :picture-count="character?.image_count ?? 0"
+      :saved="savedFor()"
       @cut="onCut"
+      @done="onItemDone"
       @faces="openFaces"
     />
 
@@ -77,6 +79,7 @@
     </template>
   </AppDialog>
   <FaceClustersDialog
+    v-if="!item"
     :open="facesOpen"
     :character="character"
     :return-focus-to="facesOpener"
@@ -95,6 +98,10 @@
  * Closing mid-draw keeps the step's `snapshot` per person, so reopening the
  * dialog finds the sheets and the runs still going. Cancel instead stops the
  * runs and forgets the draw.
+ *
+ * With a `kind` other than `character` it draws an outfit (for `character`,
+ * who wears it), a location or a prop instead: the same step, four angles a
+ * sheet (utils/sheetKinds.js), and `done` carries the set the panels went in.
  */
 import { computed, nextTick, ref } from "vue";
 import { VIcon } from "vuetify/components";
@@ -102,12 +109,16 @@ import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import { ITEM_KINDS } from "../../utils/sheetKinds";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
 import FaceClustersDialog from "./FaceClustersDialog.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  /** `{ id, name, image_count? }` of the person. */
+  /** `character`, `outfit`, `location` or `prop`. */
+  kind: { type: String, default: "character" },
+  /** `{ id, name, image_count? }` of the person: whose sheets, or whose
+   * outfit; none for a location or a prop. */
   character: { type: Object, default: null },
   returnFocusTo: { type: Object, default: null },
 });
@@ -118,6 +129,20 @@ const step = ref(null);
 const facesOpen = ref(false);
 const facesOpener = ref(null);
 const name = computed(() => props.character?.name || "");
+const item = computed(() => ITEM_KINDS[props.kind] || null);
+const title = computed(() => {
+  if (!item.value) return `Character sheets for ${name.value}`;
+  return name.value ? `${item.value.title} for ${name.value}` : item.value.title;
+});
+const subtitle = computed(() => {
+  if (item.value) return `a new ${item.value.noun}`;
+  return step.value?.loraName ? `with ${step.value.loraName}` : "";
+});
+/** Where a closed draw is kept: per person for their sheets and outfits, one
+ * each for a location and a prop. */
+const savedKey = computed(() =>
+  item.value ? `${props.kind}:${props.character?.id ?? ""}` : props.character?.id,
+);
 // Mid-cut the sheets are still on show: closing then would offer them again.
 // A zoom or the faces dialog over this one takes Escape and the close itself.
 // AppDialog's X ignores `persistent`, so close() checks this too.
@@ -127,16 +152,16 @@ const held = computed(
 
 /** The draw kept for this person, if it is theirs: a deleted person's id can
  * come back on a new one, so the name has to match too. */
-function savedFor(character) {
-  const entry = saved.get(character.id);
-  return entry?.name === character.name ? entry.snapshot : null;
+function savedFor() {
+  const entry = saved.get(savedKey.value);
+  return entry?.name === name.value ? entry.snapshot : null;
 }
 
 function close() {
   if (held.value) return;
   const snapshot = step.value?.snapshot;
-  if (props.character && snapshot) {
-    saved.set(props.character.id, { name: props.character.name, snapshot });
+  if ((props.character || item.value) && snapshot) {
+    saved.set(savedKey.value, { name: name.value, snapshot });
   }
   leave();
 }
@@ -146,7 +171,7 @@ function close() {
 function cancel() {
   if (held.value) return;
   step.value?.stopAll?.();
-  if (props.character) saved.delete(props.character.id);
+  saved.delete(savedKey.value);
   leave();
 }
 
@@ -162,9 +187,21 @@ function leave() {
  * The build screen then waits for their faces for its picker; nothing here
  * reads them, so the dialog closes at once. */
 function onCut(ids) {
-  saved.delete(props.character.id);
+  saved.delete(savedKey.value);
+  // An item's step goes on to make its set and says so with `done`.
+  if (item.value) return;
   emit("done", { character: props.character, pictureIds: ids });
   leave();
+}
+
+/** An item's panels are in their set (or, if that failed, only in the
+ * library, and the step says so before it is closed). */
+function onItemDone(ids, set) {
+  // A character's step says done once its faces are read; the dialog left
+  // on its cut.
+  if (!item.value) return;
+  emit("done", { kind: props.kind, character: props.character, pictureIds: ids, set });
+  if (set) leave();
 }
 
 function openFaces(event) {
@@ -180,7 +217,8 @@ function onFacesClosed() {
 </script>
 
 <script>
-/** person id -> `{name, snapshot}`: the sheet step's last `snapshot`,
+/** person id (or `kind:person id` for an item) -> `{name, snapshot}`: the
+ * sheet step's last `snapshot`,
  * shared by every mount.
  * ponytail: held for the app session only; a reload forgets an unfinished
  * draw (its sheets stay in the Scrapheap). Store it on the character if that

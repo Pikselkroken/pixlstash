@@ -34,8 +34,16 @@ _TEXT = 2000
 
 
 class SheetPromptRequest(BaseModel):
-    """What the sheet shows: the character, the build, the outfit and the framing."""
+    """What the sheet shows: the character, the build, the outfit and the
+    framing; or, with another `kind`, the outfit, location or prop."""
 
+    kind: character_sheet.Kind = Field(
+        "character",
+        description="`character` is a person's six-photo sheet; `outfit`, "
+        "`location` and `prop` are four angles of one item, always as prose "
+        "(`layout`, `framing`, `subject`, `proportions` and `trigger` are "
+        "ignored for them).",
+    )
     description: str = Field("", max_length=_TEXT)
     body: str = Field("", max_length=_TEXT)
     top: str = Field("", max_length=_TEXT)
@@ -74,6 +82,22 @@ class SheetPromptRequest(BaseModel):
         description="With `layout: prose`, the photos read as a model agency's "
         'unedited digitals rather than renders, and "photorealistic" is '
         "left out. The `moss` and `regions` layouts ignore it.",
+    )
+    contents: str = Field(
+        "", max_length=_TEXT, description="A location's: what is in it."
+    )
+    ground: str = Field("", max_length=_TEXT, description="A location's ground.")
+    surroundings: str = Field(
+        "", max_length=_TEXT, description="A location's: what is around it."
+    )
+    material: str = Field("", max_length=_TEXT, description="A prop's material.")
+    scale: str = Field(
+        "", max_length=200, description="A prop's size, in words ('about 1 m')."
+    )
+    daylight: bool = Field(
+        True,
+        description="A location is drawn in plain midday daylight, since each "
+        "scene sets its own time and weather; off, as described.",
     )
     look_added_by_run: bool = Field(
         False,
@@ -201,6 +225,54 @@ class SheetIds(BaseModel):
     )
 
 
+class ItemSheetRankRequest(BaseModel):
+    kind: character_sheet.ItemKind
+    picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+
+
+class ItemPanelScore(BaseModel):
+    """One panel of an item sheet, scored against the other three."""
+
+    panel: int = Field(description="Which panel, 0-3, row by row.")
+    box: list[float] = Field(
+        description="The panel's cut, `[left, top, right, bottom]` fractions."
+    )
+    agreement: float = Field(
+        description="Mean colour overlap with the other panels, 0..1."
+    )
+    agrees: bool
+
+
+class RankedItemSheet(BaseModel):
+    """One drawn outfit, location or prop sheet, scored by its panels."""
+
+    picture_id: int
+    format: str | None
+    readable: bool = Field(
+        description="The file could be read; an unreadable one is unscored."
+    )
+    agreement: float | None
+    agreement_words: str
+    cuts_cleanly: bool | None
+    cells: list[list[float]] = Field(default_factory=list)
+    panels: list[ItemPanelScore] = Field(default_factory=list)
+
+
+class ItemSheetRanking(BaseModel):
+    sheets: list[RankedItemSheet]
+
+
+class ItemSheetIds(BaseModel):
+    kind: character_sheet.ItemKind
+    picture_ids: list[int] = Field(min_length=1, max_length=MAX_SHEETS)
+    boxes: dict[int, list[list[float]]] | None = Field(
+        None,
+        description="Cuts drawn by hand, keyed by sheet picture id: four "
+        "`[left, top, right, bottom]` fractions of the sheet, row by row. A "
+        "sheet with no entry is cut automatically.",
+    )
+
+
 class UsedSheets(BaseModel):
     """The panels the chosen sheets became: six a sheet, passport photos first."""
 
@@ -223,8 +295,36 @@ def create_router(server) -> APIRouter:
         response_model=SheetPrompt,
     )
     def sheet_prompt(payload: SheetPromptRequest):
+        fields = payload.model_dump()
+        kind = fields.pop("kind")
+        item = {
+            key: fields.pop(key)
+            for key in (
+                "contents",
+                "ground",
+                "surroundings",
+                "material",
+                "scale",
+                "daylight",
+            )
+        }
+        if kind == "character":
+            prompt = character_sheet.sheet_prompt(**fields)
+        else:
+            prompt = character_sheet.item_sheet_prompt(
+                kind=kind,
+                description=fields["description"],
+                top=fields["top"],
+                trousers=fields["trousers"],
+                shoes=fields["shoes"],
+                background=fields["background"],
+                reference=fields["reference"],
+                photo_look=fields["photo_look"],
+                look_added_by_run=fields["look_added_by_run"],
+                **item,
+            )
         return SheetPrompt(
-            prompt=character_sheet.sheet_prompt(**payload.model_dump()),
+            prompt=prompt,
             negative=character_sheet.NEGATIVE_PROMPT,
             width=character_sheet.SIZES[payload.size][0],
             height=character_sheet.SIZES[payload.size][1],
@@ -292,6 +392,59 @@ def create_router(server) -> APIRouter:
         )
         server.vault.notify(
             EventType.CHANGED_CHARACTERS, {"origin_client_id": origin_client_id}
+        )
+        return UsedSheets(picture_ids=panel_ids)
+
+    @router.post(
+        "/item-sheets/rank",
+        summary="Rank drawn outfit, location or prop sheets",
+        description=(
+            "Scores each sheet by how its four panels agree in colour, each "
+            "panel against the other three, and returns where it cuts. Item "
+            "sheets have no faces, so nothing is waited for."
+        ),
+        response_model=ItemSheetRanking,
+    )
+    def rank_item_sheets(payload: ItemSheetRankRequest):
+        try:
+            sheets = character_sheet.rank_item_sheets(
+                server.vault, payload.kind, payload.picture_ids
+            )
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ItemSheetRanking(sheets=sheets)
+
+    @router.post(
+        "/item-sheets/use",
+        summary="Use outfit, location or prop sheets",
+        description=(
+            "Cuts each sheet into its four panels (an outfit's side by side, "
+            "a location's or prop's two by two, row by row) and imports each "
+            "as a picture made from its sheet, filed on nobody. A sheet in "
+            "`boxes` is cut at the four boxes given for it. 422 for a bad box "
+            "as with character sheets."
+        ),
+        response_model=UsedSheets,
+    )
+    def use_item_sheets(request: Request, payload: ItemSheetIds):
+        try:
+            panel_ids = character_sheet.use_item_sheets(
+                server, payload.kind, payload.picture_ids, payload.boxes
+            )
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except character_sheet.SheetBoxesInvalid as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except character_sheet.SheetUnreadable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": panel_ids,
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "added",
+            },
         )
         return UsedSheets(picture_ids=panel_ids)
 

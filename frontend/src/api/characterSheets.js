@@ -62,3 +62,35 @@ export async function useSheets(characterId, pictureIds, boxes = {}) {
     }),
   );
 }
+
+/**
+ * Score drawn outfit, location or prop sheets by how their four panels agree.
+ * No faces to wait for: a sheet is scored as soon as it is imported.
+ *
+ * @param {"outfit"|"location"|"prop"} kind
+ * @param {number[]} pictureIds
+ * @returns {Promise<{sheets: Array<Object>}>}
+ */
+export async function rankItemSheets(kind, pictureIds) {
+  return unwrap(
+    apiClient.post("/item-sheets/rank", { kind, picture_ids: pictureIds }),
+  );
+}
+
+/**
+ * Cut the chosen item sheets into their four panels each, filed on nobody.
+ *
+ * @param {"outfit"|"location"|"prop"} kind
+ * @param {number[]} pictureIds
+ * @param {Record<number, number[][]>} [boxes] four hand-drawn boxes a sheet.
+ * @returns {Promise<{picture_ids: number[]}>} sheet by sheet, row by row.
+ */
+export async function useItemSheets(kind, pictureIds, boxes = {}) {
+  return unwrap(
+    apiClient.post("/item-sheets/use", {
+      kind,
+      picture_ids: pictureIds,
+      ...(Object.keys(boxes).length ? { boxes } : {}),
+    }),
+  );
+}

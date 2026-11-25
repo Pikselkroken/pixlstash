@@ -20,7 +20,7 @@ const stepState = vi.hoisted(() => ({
 }));
 vi.mock("./CharacterSheetStep.vue", () => ({
   default: defineComponent({
-    props: { character: Object, pictureCount: Number, saved: Object },
+    props: { kind: String, character: Object, pictureCount: Number, saved: Object },
     emits: ["cut", "done", "faces"],
     setup(props, { expose }) {
       stepState.savedSeen.push(props.saved);
@@ -44,9 +44,9 @@ vi.mock("./FaceClustersDialog.vue", () => ({
 import CharacterSheetsDialog from "./CharacterSheetsDialog.vue";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
 
-function mountDialog(character) {
+function mountDialog(character, kind = "character") {
   return mount(CharacterSheetsDialog, {
-    props: { open: true, character },
+    props: { open: true, character, kind },
     global: { stubs: { teleport: true } },
     attachTo: document.body,
   });
@@ -138,5 +138,49 @@ describe("CharacterSheetsDialog", () => {
     expect(wrapper.emitted("close")).toBeUndefined();
     wrapper.unmount();
     Object.assign(stepState, { working: false, zooming: false });
+  });
+
+  it("draws a location with no person, and closes once its set is made", async () => {
+    stepState.working = false;
+    const wrapper = mountDialog(null, "location");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Location sheets");
+    const step = wrapper.findComponent(CharacterSheetStep);
+    expect(step.props("kind")).toBe("location");
+    // The cut alone does not close it: the set is made after.
+    step.vm.$emit("cut", [7, 8, 9, 10]);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    step.vm.$emit("done", [7, 8, 9, 10], { id: 4, name: "Pine trail" });
+    expect(wrapper.emitted("done")[0][0]).toEqual({
+      kind: "location",
+      character: null,
+      pictureIds: [7, 8, 9, 10],
+      set: { id: 4, name: "Pine trail" },
+    });
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("keeps a person's outfit draw apart from their character sheets", async () => {
+    stepState.working = false;
+    const outfit = mountDialog({ id: 11, name: "Mira" }, "outfit");
+    await flushPromises();
+    expect(outfit.text()).toContain("Outfit sheets for Mira");
+    await closeButton(outfit).trigger("click");
+    outfit.unmount();
+
+    const sheets = mountDialog({ id: 11, name: "Mira" });
+    await flushPromises();
+    expect(stepState.savedSeen.at(-1)).toBeNull();
+    // A character's step says done after its faces are read: the dialog
+    // already reported its cut and does not report it again.
+    sheets.findComponent(CharacterSheetStep).vm.$emit("done", [1]);
+    expect(sheets.emitted("done")).toBeUndefined();
+    sheets.unmount();
+
+    const again = mountDialog({ id: 11, name: "Mira" }, "outfit");
+    await flushPromises();
+    expect(stepState.savedSeen.at(-1)).toEqual({ phase: "pick", order: [41, 42] });
+    again.unmount();
   });
 });

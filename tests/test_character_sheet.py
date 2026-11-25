@@ -32,12 +32,18 @@ from pixlstash.services.workflow_parameters import BLANK_PICTURE_CLASSES
 from pixlstash.services.workflow_run_service import run_seed_targets
 from pixlstash.utils.insightface_model_utils import DEFAULT_MODEL_PACK
 from pixlstash.services.character_sheet import (
+    ITEM_AGREEMENT,
+    ITEM_PHOTO_LOOK,
     PHOTO_LOOK,
     SHEET_HEIGHT,
     SHEET_WIDTH,
     agreement,
     agreement_words,
     closeness,
+    colour_agreement,
+    item_agreement_words,
+    item_sheet_cells,
+    item_sheet_prompt,
     panel_of,
     panel_scores,
     sheet_cells,
@@ -1440,6 +1446,96 @@ def test_a_sheet_that_fails_to_import_leaves_the_earlier_panels_filed(monkeypatc
     assert filed == [([10, 11], 3)]
 
 
+def test_each_item_sheet_names_its_four_views_and_the_item_once():
+    outfit = item_sheet_prompt(
+        kind="outfit",
+        description="A mustard raincoat.",
+        top="a black roll-neck",
+        trousers="dark jeans",
+        shoes="rubber boots",
+    )
+    assert "four tall photos of equal size side by side" in outfit
+    assert "(4) back view" in outfit and "cropped at the chin" in outfit
+    assert "a mustard raincoat: a black roll-neck; dark jeans; rubber boots" in outfit
+    location = item_sheet_prompt(kind="location", description="a pine trail")
+    assert "two by two" in location and "(2) top right, the reverse view" in location
+    assert "no people" in location and "Plain daylight" in location
+    assert "Plain daylight" not in item_sheet_prompt(
+        kind="location", description="a pine trail", daylight=False
+    )
+    prop = item_sheet_prompt(
+        kind="prop", description="a red umbrella", material="nylon", scale="1 m"
+    )
+    assert "Material: nylon. Size: 1 m." in prop and "no hands" in prop
+
+
+def test_an_item_sheet_from_a_picture_and_its_look():
+    drawn = item_sheet_prompt(kind="location", description="x", reference=True)
+    assert "the same place as in the reference picture, without any people" in drawn
+    assert drawn.endswith(ITEM_PHOTO_LOOK) and "photorealistic" not in drawn
+    plain = item_sheet_prompt(kind="prop", description="x", photo_look=False)
+    assert ITEM_PHOTO_LOOK not in plain and "photorealistic" in plain
+    by_run = item_sheet_prompt(kind="prop", description="x", look_added_by_run=True)
+    assert ITEM_PHOTO_LOOK not in by_run and "photorealistic" not in by_run
+
+
+def test_an_outfit_sheet_is_cut_into_four_columns_on_its_dividers():
+    image = _sheet([("x", 660, 0, 1536), ("x", 1270, 0, 1536), ("x", 1930, 0, 1536)])
+    cells, clean = item_sheet_cells(image, "outfit")
+    assert clean
+    assert [(c[0], c[2]) for c in cells] == [
+        (0, 658),
+        (666, 1268),
+        (1276, 1928),
+        (1936, 2560),
+    ]
+    assert all((c[1], c[3]) == (0, 1536) for c in cells)
+
+
+def test_a_location_sheet_is_cut_two_by_two_each_column_on_its_own_row():
+    image = _sheet(
+        [
+            ("x", 1300, 0, 1536),
+            ("y", 740, 0, 1300),
+            ("y", 800, 1300, 2560),
+        ]
+    )
+    cells, clean = item_sheet_cells(image, "location")
+    assert clean
+    (a, b, c, d) = cells
+    assert a[2] < 1300 < b[0] and a[3] < 740 < c[1] and b[3] < 800 < d[1]
+    assert (a[0], c[0], b[2], d[2]) == (0, 0, 2560, 2560)
+
+
+def test_a_seamless_item_sheet_is_cut_on_the_grid_and_not_clean():
+    cells, clean = item_sheet_cells(_sheet(), "prop")
+    assert not clean
+    assert cells == [
+        (0, 0, 1280, 768),
+        (1280, 0, 2560, 768),
+        (0, 768, 1280, 1536),
+        (1280, 768, 2560, 1536),
+    ]
+
+
+def _panel(colour, backdrop=(220, 220, 220)) -> Image.Image:
+    image = Image.new("RGB", (120, 200), backdrop)
+    ImageDraw.Draw(image).rectangle([30, 30, 90, 170], fill=colour)
+    return image
+
+
+def test_a_panel_drawn_in_another_colour_drifts_from_the_other_three():
+    mustard = (200, 160, 40)
+    same = colour_agreement([_panel(mustard)] * 4)
+    assert all(value > 0.99 for value in same)
+    # The backdrop is left out: a grey studio shared by every panel does not
+    # make a blue coat agree with a mustard one.
+    drift = colour_agreement([_panel(mustard)] * 3 + [_panel((30, 60, 200))])
+    assert drift[3] < ITEM_AGREEMENT <= min(drift[:3])
+    assert item_agreement_words("outfit", drift) == "the back drifts in colour"
+    assert item_agreement_words("location", same) == "the four views agree"
+
+
 @pytest.fixture(scope="module")
 def client():
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -2207,3 +2303,63 @@ def test_a_reference_cluster_chooses_the_reference_faces(client):
         )
 
     assert client.server.vault.db.run_task(stored) == sorted(b_ids[1:])
+
+
+def test_item_sheets_are_prompted_ranked_and_cut_into_four_pictures(client):
+    prompt = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"kind": "prop", "description": "a brass lantern", "size": "4k"},
+    )
+    assert prompt.status_code == 200, prompt.text
+    body = prompt.json()
+    assert (body["width"], body["height"]) == (3840, 2304)
+    assert body["prompt"].startswith("Prop reference sheet")
+    assert (
+        client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"kind": "vehicle", "description": "x"},
+        ).status_code
+        == 422
+    )
+    sheet = _upload_sheet(client, [("x", 1300, 0, 1536), ("y", 760, 0, 2560)])
+    ranked = client.post(
+        f"{API_PREFIX}/item-sheets/rank",
+        json={"kind": "location", "picture_ids": [sheet]},
+    )
+    assert ranked.status_code == 200, ranked.text
+    (row,) = ranked.json()["sheets"]
+    assert row["readable"] and row["cuts_cleanly"] is True
+    assert len(row["cells"]) == 4 and [p["panel"] for p in row["panels"]] == [
+        0,
+        1,
+        2,
+        3,
+    ]
+    assert row["agreement_words"] == "the four views agree"
+    used = client.post(
+        f"{API_PREFIX}/item-sheets/use",
+        json={"kind": "location", "picture_ids": [sheet]},
+    )
+    assert used.status_code == 200, used.text
+    panel_ids = used.json()["picture_ids"]
+    assert len(panel_ids) == 4 and sheet not in panel_ids
+
+    def read(session):
+        return session.exec(select(Picture).where(Picture.id.in_(panel_ids))).all()
+
+    pictures = client.server.vault.db.run_task(read)
+    assert all(p.source_picture_id is None for p in pictures)
+    six = client.post(
+        f"{API_PREFIX}/item-sheets/use",
+        json={
+            "kind": "outfit",
+            "picture_ids": [sheet],
+            "boxes": {str(sheet): _HAND_BOXES},
+        },
+    )
+    assert six.status_code == 422
+    missing = client.post(
+        f"{API_PREFIX}/item-sheets/rank",
+        json={"kind": "prop", "picture_ids": [sheet, 999999]},
+    )
+    assert missing.status_code == 404

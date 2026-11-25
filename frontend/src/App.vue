@@ -580,11 +580,41 @@ async function handleTrainLora(scope) {
 // SideBar context-menu "Faces and reference cluster…".
 const faceClustersCharacter = ref(null);
 
-// SideBar context-menu "Generate character sheets…".
+// SideBar context-menu "Generate character sheets…", and the outfit,
+// location and prop sheets drawn in the same dialog.
 const sheetsCharacter = ref(null);
+const sheetsKind = ref("character");
 
-function onSheetsCut({ character, pictureIds }) {
+const sheetsOpen = ref(false);
+const sheetsReturnFocus = ref(null);
+
+function openSheets({ kind = "character", character = null, returnFocusTo = null }) {
+  sheetsKind.value = kind;
+  sheetsCharacter.value = character;
+  sheetsReturnFocus.value = returnFocusTo ?? character?.returnFocusTo ?? null;
+  sheetsOpen.value = true;
+}
+
+function closeSheets() {
+  sheetsOpen.value = false;
+  sheetsCharacter.value = null;
+}
+
+function onSheetsCut({ kind, character, pictureIds, set }) {
   const n = pictureIds.length;
+  if (kind && kind !== "character") {
+    if (!set) return;
+    noticeStore.push({
+      level: "success",
+      text: `Made ${set.name}: ${n} ${n === 1 ? "picture" : "pictures"} in a new set.`,
+      action: {
+        label: "Show them",
+        handler: () => handleSelectSet({ id: set.id, label: set.name }),
+      },
+      key: `item-sheets-cut-${set.id}`,
+    });
+    return;
+  }
   noticeStore.push({
     level: "success",
     text: `Added ${n} ${n === 1 ? "picture" : "pictures"} to ${character.name}.`,
@@ -1080,7 +1110,8 @@ defineExpose({
             @open-tag-review="reviewSessionsStore.overlayOpen = true"
             @train-lora="handleTrainLora"
             @create-training-set="handleCreateTrainingSet"
-            @character-sheets="sheetsCharacter = $event"
+            @character-sheets="openSheets({ character: $event })"
+            @item-sheets="openSheets($event)"
             @face-clusters="faceClustersCharacter = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
@@ -1352,10 +1383,11 @@ defineExpose({
     <ModelDropFolderDialog />
     <TrainLoraDialog />
     <CharacterSheetsDialog
-      :open="!!sheetsCharacter"
+      :open="sheetsOpen"
+      :kind="sheetsKind"
       :character="sheetsCharacter"
-      :return-focus-to="sheetsCharacter?.returnFocusTo ?? null"
-      @close="sheetsCharacter = null"
+      :return-focus-to="sheetsReturnFocus"
+      @close="closeSheets"
       @done="onSheetsCut"
     />
     <FaceClustersDialog
