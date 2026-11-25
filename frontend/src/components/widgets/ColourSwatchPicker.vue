@@ -13,6 +13,18 @@
     <div class="csp-head">
       <span class="tbm-label">Colour</span>
       <span class="csp-hint">{{ hint }}</span>
+      <!-- Chromium/Electron only: elsewhere there is no screen picker. -->
+      <AppButton
+        v-if="canPickFromScreen"
+        variant="ghost"
+        size="sm"
+        icon-only
+        icon-left="eyedropper"
+        tooltip="Pick a colour from the screen"
+        aria-label="Pick a colour from the screen"
+        data-testid="csp-eyedropper"
+        @click="pickFromScreen"
+      />
     </div>
     <div class="csp-row" role="group" aria-label="Colours">
       <button
@@ -74,8 +86,10 @@ import {
   COLOUR_AMOUNT_MAX,
   COLOUR_AMOUNT_MIN,
   COLOUR_SWATCHES,
+  nearestSwatch,
 } from "../../utils/colourSwatches";
 import { formatCount } from "../../utils/filterChips";
+import AppButton from "./AppButton.vue";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -108,6 +122,27 @@ function toggle(id) {
 
 function commit() {
   filters.colourAmountFilter = draft.value;
+}
+
+const canPickFromScreen = typeof window !== "undefined" && "EyeDropper" in window;
+
+/** Sample a pixel anywhere on screen and pick the swatch it counts toward. */
+async function pickFromScreen() {
+  let picked;
+  try {
+    picked = await new window.EyeDropper().open();
+  } catch (err) {
+    // Esc rejects with AbortError: the person changed their mind.
+    if (err?.name !== "AbortError") {
+      console.warn("[ColourSwatchPicker] screen colour pick failed:", err);
+    }
+    return;
+  }
+  const swatch = nearestSwatch(picked.sRGBHex);
+  const list = filters.colourFilter || [];
+  if (swatch && !list.includes(swatch.id)) {
+    filters.colourFilter = [...list, swatch.id];
+  }
 }
 
 /** The swatch's name, and for the one pointed at what picking it would show. */

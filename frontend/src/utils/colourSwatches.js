@@ -69,3 +69,38 @@ export function colourShareSegments(shares) {
     .sort((a, b) => b.share - a.share)
     .map((s) => ({ ...s, legend: s.share >= LEGEND_MIN_SHARE }));
 }
+
+// sRGB "#rrggbb" to CIELAB (D65), the same maths as the backend's
+// `_lab_of_hex`, so a picked colour lands in the swatch its pixels would.
+function labOfHex(hex) {
+  const lin = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const [r, g, b] = lin;
+  const xyz = [
+    (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047,
+    0.2126729 * r + 0.7151522 * g + 0.072175 * b,
+    (0.0193339 * r + 0.119192 * g + 0.9503041 * b) / 1.08883,
+  ];
+  const [fx, fy, fz] = xyz.map((t) =>
+    t > 0.008856 ? Math.cbrt(t) : (903.3 * t + 16) / 116,
+  );
+  return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+}
+
+/** The swatch a "#rrggbb" colour counts toward: the nearest centre in CIELAB. */
+export function nearestSwatch(hex) {
+  const lab = labOfHex(hex);
+  let best = null;
+  let bestDistance = Infinity;
+  for (const swatch of COLOUR_SWATCHES) {
+    const centre = labOfHex(swatch.fill);
+    const d = centre.reduce((sum, v, i) => sum + (v - lab[i]) ** 2, 0);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = swatch;
+    }
+  }
+  return best;
+}

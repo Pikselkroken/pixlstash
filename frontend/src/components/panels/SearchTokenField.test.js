@@ -448,4 +448,30 @@ describe("SearchTokenField", () => {
     expect(filters.colourFilter).toEqual([]);
     expect(wrapper.find(".stf-token").exists()).toBe(false);
   });
+
+  it("picks the swatch a colour sampled from the screen counts toward", async () => {
+    window.EyeDropper = class {
+      open() {
+        return Promise.resolve({ sRGBHex: "#1e90ff" });
+      }
+    };
+    try {
+      await mountField();
+      const filters = useFilterStore();
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      await flushPromises();
+      expect(filters.colourFilter).toEqual(["blue"]);
+      // Sampling it again does not take it back off.
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      await flushPromises();
+      expect(filters.colourFilter).toEqual(["blue"]);
+    } finally {
+      delete window.EyeDropper;
+    }
+  });
+
+  it("offers no screen picker where the browser has none", async () => {
+    await mountField();
+    expect(wrapper.find('[data-testid="csp-eyedropper"]').exists()).toBe(false);
+  });
 });
