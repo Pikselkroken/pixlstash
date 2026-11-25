@@ -7,13 +7,26 @@
   A click picks a swatch and a second click lets it go. The amount is a
   draft while the thumb moves and lands on release, so a drag refetches the
   grid once, not once per percent.
+
+  The eyedropper samples a colour from the screen (in the desktop app, from
+  its own window) and picks the swatch it counts toward; the small well beside
+  it shows the sampled colour itself while that swatch stays picked.
 -->
 <template>
   <div class="csp">
     <div class="csp-head">
       <span class="tbm-label">Colour</span>
       <span class="csp-hint">{{ hint }}</span>
-      <!-- Chromium/Electron only: elsewhere there is no screen picker. -->
+      <span
+        v-if="shownSample"
+        class="csp-sample"
+        :style="{ '--swatch': shownSample.hex }"
+        role="img"
+        :aria-label="sampleText"
+        data-testid="csp-sample"
+      >
+        <Tooltip :text="sampleText" activator="parent" />
+      </span>
       <AppButton
         v-if="canPickFromScreen"
         variant="ghost"
@@ -78,8 +91,16 @@
   </div>
 </template>
 
+<script>
+import { ref } from "vue";
+
+// The last colour sampled, shared by the search list's picker and the Filters
+// menu's, as the swatches themselves are.
+const colourSample = ref(null);
+</script>
+
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, watch } from "vue";
 
 import { useFilterStore } from "../../stores/useFilterStore";
 import {
@@ -89,6 +110,10 @@ import {
   nearestSwatch,
 } from "../../utils/colourSwatches";
 import { formatCount } from "../../utils/filterChips";
+import {
+  canPickScreenColour,
+  pickScreenColour,
+} from "../../utils/screenColour";
 import AppButton from "./AppButton.vue";
 import Tooltip from "./Tooltip.vue";
 
@@ -124,23 +149,29 @@ function commit() {
   filters.colourAmountFilter = draft.value;
 }
 
-const canPickFromScreen = typeof window !== "undefined" && "EyeDropper" in window;
+const canPickFromScreen = canPickScreenColour();
 
-/** Sample a pixel anywhere on screen and pick the swatch it counts toward. */
+// Shown only while the swatch it counts toward is still picked, so removing
+// that swatch, or Clear all, takes the well away with it.
+const shownSample = computed(() =>
+  colourSample.value && picked.value.has(colourSample.value.swatch.id)
+    ? colourSample.value
+    : null,
+);
+const sampleText = computed(() =>
+  shownSample.value
+    ? `Picked ${shownSample.value.hex} · searches as ${shownSample.value.swatch.label}`
+    : "",
+);
+
+/** Sample a colour from the screen and pick the swatch it counts toward. */
 async function pickFromScreen() {
-  let picked;
-  try {
-    picked = await new window.EyeDropper().open();
-  } catch (err) {
-    // Esc rejects with AbortError: the person changed their mind.
-    if (err?.name !== "AbortError") {
-      console.warn("[ColourSwatchPicker] screen colour pick failed:", err);
-    }
-    return;
-  }
-  const swatch = nearestSwatch(picked.sRGBHex);
+  const hex = await pickScreenColour();
+  const swatch = hex ? nearestSwatch(hex) : null;
+  if (!swatch) return;
+  colourSample.value = { hex, swatch };
   const list = filters.colourFilter || [];
-  if (swatch && !list.includes(swatch.id)) {
+  if (!list.includes(swatch.id)) {
     filters.colourFilter = [...list, swatch.id];
   }
 }
@@ -175,6 +206,15 @@ function tipText(swatch) {
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
+}
+/* The sampled colour itself: its own small well, a swatch's hairline. */
+.csp-sample {
+  flex-shrink: 0;
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-sm);
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-panel), 0.28);
 }
 .csp-swatch {
   position: relative;

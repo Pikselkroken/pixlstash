@@ -50,6 +50,10 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // Open in ComfyUI: main opens it in the OS browser, and only a ComfyUI
   // workflow link or a held run's (`comfyuiOpenTarget`).
   openComfyui: (url: string) => ipcRenderer.invoke('desktop:openComfyui', url),
+  // Search by colour's eyedropper: the colour of one pixel of this window, as
+  // "#rrggbb". Electron's own EyeDropper cancels itself at once, so the app
+  // samples what it is showing instead.
+  samplePixel: (x: number, y: number) => ipcRenderer.invoke('desktop:samplePixel', { x, y }),
   // Narrow media operations for the web-app lightbox. The renderer supplies
   // authenticated bytes; only main chooses a destination or touches clipboard.
   beginMediaSaveAs: (suggestedName: string) =>

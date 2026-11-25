@@ -470,6 +470,46 @@ describe("SearchTokenField", () => {
     }
   });
 
+  it("in the desktop app, samples the next click in the window", async () => {
+    const samplePixel = vi.fn().mockResolvedValue("#1e90ff");
+    window.pixlstashDesktop = { samplePixel };
+    const opened = vi.fn();
+    try {
+      await mountField();
+      const filters = useFilterStore();
+      document.body.addEventListener("click", opened);
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      const root = document.documentElement;
+      expect(root.classList.contains("colour-picking")).toBe(true);
+
+      // Esc leaves picking without a colour.
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await flushPromises();
+      expect(root.classList.contains("colour-picking")).toBe(false);
+      expect(filters.colourFilter).toEqual([]);
+
+      await wrapper.find('[data-testid="csp-eyedropper"]').trigger("click");
+      const at = { clientX: 40, clientY: 30, bubbles: true, button: 0 };
+      document.body.dispatchEvent(new MouseEvent("pointerdown", at));
+      document.body.dispatchEvent(new MouseEvent("click", at));
+      await flushPromises();
+      expect(samplePixel).toHaveBeenCalledWith(40, 30);
+      expect(opened).not.toHaveBeenCalled();
+      expect(root.classList.contains("colour-picking")).toBe(false);
+      expect(filters.colourFilter).toEqual(["blue"]);
+      // The sampled colour shows in its own well while Blue stays picked.
+      const well = wrapper.find('[data-testid="csp-sample"]');
+      expect(well.attributes("aria-label")).toBe(
+        "Picked #1e90ff · searches as Blue",
+      );
+      await wrapper.find('[data-swatch="blue"]').trigger("click");
+      expect(wrapper.find('[data-testid="csp-sample"]').exists()).toBe(false);
+    } finally {
+      document.body.removeEventListener("click", opened);
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("offers no screen picker where the browser has none", async () => {
     await mountField();
     expect(wrapper.find('[data-testid="csp-eyedropper"]').exists()).toBe(false);

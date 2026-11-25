@@ -863,6 +863,16 @@ kbd {
   box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-panel), 0.28);
 }
 
+/* Picking a colour from the window (utils/screenColour.js): the next click is
+   the sample, so nothing under the pointer reacts to it, not even a hover. */
+.colour-picking {
+  cursor: crosshair;
+}
+.colour-picking body,
+.colour-picking body * {
+  pointer-events: none !important;
+}
+
 /* ── Text input ───────────────────────────────────────────────────────────── */
 .tbm-input-wrap {
   position: relative;

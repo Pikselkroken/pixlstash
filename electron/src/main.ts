@@ -1990,6 +1990,24 @@ function registerIpc(): void {
     requireAppRenderer(event, 'desktop:showLogs');
     return showServerLogs();
   });
+  // Search by colour's eyedropper (#2151): one pixel of the asking window, in
+  // its own CSS pixels. capturePage returns BGRA at the display's scale, so a
+  // 1x1 rectangle comes back as scale x scale and its first pixel is the one.
+  ipcMain.handle('desktop:samplePixel', async (event, point: { x?: unknown; y?: unknown }) => {
+    requireAppRenderer(event, 'desktop:samplePixel');
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return null;
+    const image = await event.sender.capturePage({
+      x: Math.floor(x),
+      y: Math.floor(y),
+      width: 1,
+      height: 1,
+    });
+    const bgra = image.toBitmap();
+    if (bgra.length < 4) return null;
+    return `#${[bgra[2], bgra[1], bgra[0]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  });
   // The Workflow tab's and the Run popup's Open in ComfyUI. Its own channel
   // because ComfyUI is plain http:, which openExternalSafely refuses for every
   // other link; the app window only, and only a URL comfyuiOpenTarget accepts.
