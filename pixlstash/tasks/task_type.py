@@ -32,6 +32,7 @@ class TaskType(str, Enum):
     THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
     PIXEL_SHA = "PixelShaTask"
     ORIENTATION = "OrientationTask"
+    COLOUR_SHARES = "ColourSharesTask"
     DEDUP_SCAN = "DedupScanTask"
     STACK_COHESION = "StackCohesionTask"
     SNAPSHOT_IDENTITY_SCRUB = "SnapshotIdentityScrubTask"

@@ -865,12 +865,14 @@ def register_routes(router, server):
         # groups where at least one member satisfies all the criteria. The full
         # group is still returned - the filter just decides whether the group is
         # shown at all.
+        colour_filter = PredicateFilter.from_query_params(request).colour_filter
         has_extra_filters = any(
             [
                 min_score is not None,
                 max_score is not None,
                 unscored,
                 favourite,
+                colour_filter,
                 tag,
                 rejected_tag,
                 tag_confidence_above,
@@ -895,6 +897,7 @@ def register_routes(router, server):
                 comfyui_models_filter_value,
                 comfyui_loras_filter_value,
                 favourite_only_value=False,
+                colour_filter_value=None,
             ):
                 query = select(Picture.id).where(Picture.id.in_(candidate_ids_list))
                 # This post-filter narrows an already-id-bounded set; only the
@@ -906,6 +909,7 @@ def register_routes(router, server):
                     max_score=max_score_value,
                     unscored=unscored_value,
                     favourite_only=favourite_only_value,
+                    colour_filter=colour_filter_value,
                     comfyui_models_filter=comfyui_models_filter_value,
                     comfyui_loras_filter=comfyui_loras_filter_value,
                     tags_filter=tags_filter_value,
@@ -930,6 +934,7 @@ def register_routes(router, server):
                 comfyui_model or None,
                 comfyui_lora or None,
                 favourite_only_value=favourite,
+                colour_filter_value=colour_filter,
             )
             # Determine which group indices have at least one matching picture.
             matching_group_indices = {
@@ -1292,6 +1297,7 @@ def register_routes(router, server):
             max_score=max_score,
             unscored=_predicate_filter.unscored,
             favourite_only=_predicate_filter.favourite_only,
+            colour_filter=_predicate_filter.colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,

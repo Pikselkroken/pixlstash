@@ -175,6 +175,7 @@ def _scope_predicates_for_leaders(
     file_path_prefix: Optional[str] = None,
     face_filter: Optional[str] = None,
     favourite_only: bool = False,
+    colour_filter: Optional[List[str]] = None,
 ) -> list:
     """The intrinsic narrowings a stack-leader collapse has to know about.
 
@@ -203,6 +204,10 @@ def _scope_predicates_for_leaders(
         predicates += PredicateFilter(face_filter=face_filter).face_predicates()
     if favourite_only:
         predicates += PredicateFilter(favourite_only=True).favourite_predicates()
+    if colour_filter:
+        # The same kind as the heart: the blue picture of a stack is often a
+        # variant, and its stack must still show, represented by it (#2151).
+        predicates += PredicateFilter(colour_filter=colour_filter).colour_predicates()
     return predicates
 
 
@@ -298,6 +303,12 @@ class Picture(SQLModel, table=True):
     # of the picture as displayed (orientation applied). NULL whenever
     # ``ocr_text`` is.
     ocr_words: Optional[str] = Field(default=None)
+    # The colour summary (#2151): a JSON array of 12 percentages in the swatch
+    # order of ``pixlstash.utils.image_processing.colour_shares.SWATCHES``, each
+    # to one decimal, summing to 100. NULL = not computed yet (``MissingColourSharesFinder``);
+    # A thumbnail that cannot be read leaves it NULL and the picture in the
+    # unprocessable-image registry until that file changes.
+    colour_shares: Optional[str] = Field(default=None)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
     # When the picture was soft-deleted to the scrapheap (UTC). Stamped on the
@@ -678,6 +689,15 @@ class Picture(SQLModel, table=True):
                 "prompt_match IS NULL AND comfyui_positive_prompt IS NOT NULL"
             ),
         ),
+        # MissingColourSharesFinder: colour_shares IS NULL AND deleted IS 0. Same
+        # idle-probe shape and column order as the other ``*_missing`` indexes.
+        Index(
+            "ix_picture_colour_shares_missing",
+            "colour_shares",
+            "deleted",
+            "id",
+            sqlite_where=text("colour_shares IS NULL"),
+        ),
         # "Favourites only": a few hundred rows out of tens of thousands, so
         # only the favourites are in the index.
         Index(
@@ -764,6 +784,7 @@ class Picture(SQLModel, table=True):
         max_score: Optional[int] = None,
         unscored: bool = False,
         favourite_only: bool = False,
+        colour_filter: Optional[List[str]] = None,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         comfyui_models_filter: Optional[List[str]] = None,
@@ -927,6 +948,7 @@ class Picture(SQLModel, table=True):
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             comfyui_models_filter=comfyui_models_filter,
@@ -1071,6 +1093,7 @@ class Picture(SQLModel, table=True):
         max_score: Optional[int] = None,
         unscored: bool = False,
         favourite_only: bool = False,
+        colour_filter: Optional[List[str]] = None,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
@@ -1157,6 +1180,7 @@ class Picture(SQLModel, table=True):
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,
@@ -1221,6 +1245,7 @@ class Picture(SQLModel, table=True):
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
             )
 
             if not leader_scope:
@@ -1307,7 +1332,14 @@ class Picture(SQLModel, table=True):
         """
         Return a list of simple scalar fields
         """
-        return cls.scalar_fields() - cls.large_binary_fields() - cls.OCR_FIELDS
+        # colour_shares is left out for the same reason as the OCR columns: it is a
+        # raw JSON string here, and the metadata route serves it shaped as a list.
+        return (
+            cls.scalar_fields()
+            - cls.large_binary_fields()
+            - cls.OCR_FIELDS
+            - {"colour_shares"}
+        )
 
     @classmethod
     def grid_fields(cls):
@@ -1408,6 +1440,7 @@ class Picture(SQLModel, table=True):
         max_score: Optional[int] = None,
         unscored: bool = False,
         favourite_only: bool = False,
+        colour_filter: Optional[List[str]] = None,
         smart_score_bucket: Optional[str] = None,
         resolution_bucket: Optional[str] = None,
         project_id: Optional[int] = None,
@@ -1483,6 +1516,7 @@ class Picture(SQLModel, table=True):
             max_score=max_score,
             unscored=unscored,
             favourite_only=favourite_only,
+            colour_filter=colour_filter,
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             tags_filter=tags_filter,
@@ -1526,6 +1560,7 @@ class Picture(SQLModel, table=True):
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
                 favourite_only=favourite_only,
+                colour_filter=colour_filter,
             )
 
             if not leader_scope:

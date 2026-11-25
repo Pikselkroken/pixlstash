@@ -12,6 +12,7 @@ import {
   isGroupToken,
   useTagGroupsStore,
 } from "../stores/useTagGroupsStore";
+import { colourChipValue, colourSwatch } from "./colourSwatches";
 
 // Pick-one Picture kinds. "Any" is deliberately not a choice: removing the chip
 // is how you get back to any.
@@ -159,9 +160,9 @@ function without(list, value) {
  * @param {{ allPicturesView?: boolean }} [view] "No character" and "In no
  *   set" only exist in All Pictures, so a stale flag elsewhere is not shown
  *   as a filter.
- * @returns {Array<{ key: string, kind: string, value: string, term: ?string, remove: Function }>}
+ * @returns {Array<{ key: string, kind: string, value: string, term: ?string, swatch?: object, remove: Function }>}
  *   `term` is the raw tag filter value of a tag chip (a group term included),
- *   null for every other chip.
+ *   null for every other chip. A Colour chip carries its `swatch`.
  */
 /** The Workflows Filters panel's two Source answers (v1.12 F7). */
 export const WORKFLOW_SOURCE_LABELS = Object.freeze({
@@ -372,6 +373,21 @@ export function filterChips(store, { allPicturesView = true } = {}) {
       },
       tag,
     );
+  }
+  // One chip per picked swatch, each saying the shared amount: a chip that hid
+  // it would describe a different filter once the slider moved. `swatch` is
+  // the fill the strip and the search field draw beside the words.
+  for (const id of store.colourFilter || []) {
+    chips.push({
+      key: `colour:${id}`,
+      kind: "Colour",
+      value: colourChipValue(id, store.colourAmountFilter),
+      term: null,
+      swatch: colourSwatch(id),
+      remove: () => {
+        store.colourFilter = without(store.colourFilter, id);
+      },
+    });
   }
   for (const entry of store.tagConfidenceAboveFilter || []) {
     const { tag, threshold } = parseConfidenceEntry(entry);

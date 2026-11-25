@@ -1311,7 +1311,10 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { useFilterStore } from "../../stores/useFilterStore";
+import {
+  colourFilterParams,
+  useFilterStore,
+} from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import LibraryEmptyState from "./LibraryEmptyState.vue";
@@ -5546,6 +5549,7 @@ const selectedExpandedCount = computed(() => {
     filterStore.maxScoreFilter == null &&
     !filterStore.unscoredOnlyFilter &&
     !filterStore.favouriteOnlyFilter &&
+    (filterStore.colourFilter || []).length === 0 &&
     filterStore.smartScoreBucketFilter == null &&
     filterStore.resolutionBucketFilter == null;
 
@@ -7561,6 +7565,9 @@ watch(
     () => filterStore.tagRejectedFilter,
     () => filterStore.tagConfidenceAboveFilter,
     () => filterStore.tagConfidenceBelowFilter,
+    // The picked colours at the shared amount: the amount alone, with no
+    // swatch picked, narrows nothing and must not refetch (#2151).
+    () => new URLSearchParams(colourFilterParams(filterStore)).toString(),
     () => filterStore.faceBboxFilter,
     () => filterStore.impossibleSources,
     () => filterStore.stackStateFilter,

@@ -413,6 +413,7 @@
         <SearchTokenField
           ref="searchInputRef"
           :all-pictures-view="isAllPicturesView"
+          :count-base-query="props.filterCountBaseQuery"
           @update:open="gbSearchOpen = $event"
         />
         <!-- ── The app-wide tail: undo/redo + History and the rail toggle

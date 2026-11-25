@@ -991,6 +991,7 @@ class PreviewMixin:
             "text_score",
             "ocr_text",
             "ocr_words",
+            "colour_shares",
             "metadata_hash",
         }
         changed: list[str] = []
