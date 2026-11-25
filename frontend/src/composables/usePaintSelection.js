@@ -47,6 +47,10 @@ export const EXTEND_SIDES = ["left", "top", "right", "bottom"];
 export const EXTEND_STEP = 8;
 export const EXTEND_FEATHER = 40;
 export const EXTEND_FEATHER_MAX = 200;
+/** Each side adds at most this many times the picture's size on its axis. */
+export const EXTEND_FACTOR = 3;
+/** The extended canvas's largest area, in pixels. */
+export const EXTENDED_PIXELS_MAX = 64 * 1024 * 1024;
 
 /**
  * The sides of an extension a press at `p` takes hold of: an edge of the
@@ -201,11 +205,16 @@ export function usePaintSelection({ pictureId, dims }) {
     width: Math.max(1, dims.value?.naturalWidth || 1),
     height: Math.max(1, dims.value?.naturalHeight || 1),
   }));
-  // Each side grows by at most the picture's own size on its axis, on the
-  // 8 px grid the server rounds to, so nothing allowed here is refused there.
+  // Each side grows by at most EXTEND_FACTOR times the picture's size on its
+  // axis, on the 8 px grid the server rounds to, so nothing allowed here is
+  // refused there.
   const extendCap = computed(() => ({
-    width: Math.floor(natural.value.width / EXTEND_STEP) * EXTEND_STEP,
-    height: Math.floor(natural.value.height / EXTEND_STEP) * EXTEND_STEP,
+    width:
+      Math.floor((EXTEND_FACTOR * natural.value.width) / EXTEND_STEP) *
+      EXTEND_STEP,
+    height:
+      Math.floor((EXTEND_FACTOR * natural.value.height) / EXTEND_STEP) *
+      EXTEND_STEP,
   }));
   /** The size a run with this extension makes. */
   const extendedSize = computed(() => ({
@@ -394,11 +403,27 @@ export function usePaintSelection({ pictureId, dims }) {
 
   /**
    * One side of the extension, in the picture's pixels: snapped to the 8 px
-   * grid and held to the picture's own size on its axis.
+   * grid and held to EXTEND_FACTOR times the picture's size on its axis, and
+   * to what keeps the canvas within EXTENDED_PIXELS_MAX.
    */
   function setExtension(side, px) {
     const horizontal = side === "left" || side === "right";
-    const cap = horizontal ? extendCap.value.width : extendCap.value.height;
+    const opposite = { left: "right", right: "left", top: "bottom", bottom: "top" }[
+      side
+    ];
+    const size = horizontal ? natural.value.width : natural.value.height;
+    const across = horizontal
+      ? extendedSize.value.height
+      : extendedSize.value.width;
+    const areaRoom =
+      Math.floor(
+        (EXTENDED_PIXELS_MAX / across - size - extension[opposite]) /
+          EXTEND_STEP,
+      ) * EXTEND_STEP;
+    const cap = Math.min(
+      horizontal ? extendCap.value.width : extendCap.value.height,
+      areaRoom,
+    );
     // Up, as the server rounds: a typed 4 is 8, never 0. The cap is already
     // a multiple of 8, so clamping to it after keeps it on the grid.
     const snapped = Math.ceil((Number(px) || 0) / EXTEND_STEP) * EXTEND_STEP;

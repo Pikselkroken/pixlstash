@@ -675,7 +675,7 @@ const outpaintTitle = computed(() =>
   !single.value
     ? "Select one workflow to convert it to outpainting"
     : (outpaintRefusal.value ??
-      "Make a new manual workflow from this one that extends the picture past its edges"),
+      "Make a new manual FLUX.1 Fill workflow, with this one's prompt, that extends the picture past its edges"),
 );
 
 /**

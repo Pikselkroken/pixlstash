@@ -212,10 +212,8 @@ from pixlstash.services.comfyui_service import (
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
-from pixlstash.services.inpaint_conversion import (
-    convert_to_inpaint,
-    convert_to_outpaint,
-)
+from pixlstash.services.inpaint_conversion import convert_to_inpaint
+from pixlstash.services.outpaint_conversion import FILL_MODEL, convert_to_outpaint
 from pixlstash.services.model_shelf_service import people_who_fit, shelf_uuid
 from pixlstash.hub import workflow_group_writes
 
@@ -13523,55 +13521,25 @@ def test_a_pad_behind_a_resize_does_not_read_the_extension(i2i):
     assert "extend_not_read" in codes, codes
 
 
-def test_a_side_past_the_pictures_own_size_is_refused(i2i):
-    """The picture is 20 x 10. Each side takes up to the picture's own size on
-    its axis: bottom 16 is past its height; top 8 + bottom 8, and left 16 +
-    right 16, are not."""
+def test_a_side_past_three_times_the_picture_is_refused(i2i):
+    """The picture is 20 x 10. Each side takes up to three times the
+    picture's size on its axis (#2812: one picture's size was not far enough):
+    bottom 32 is past 30; top 24 + bottom 24, and left 56 + right 56, are
+    not."""
     _padded(i2i)
     picture = _real_picture(i2i.server, i2i.tmp_path, "capped.png")
     r = i2i.owner.post(
         f"{API}/workflows/run",
-        json=_extend_run(picture, extend={"bottom": 16}),
+        json=_extend_run(picture, extend={"bottom": 32}),
     )
     assert r.status_code == 422, r.text
     assert "10 px tall" in r.json()["detail"], r.json()
     assert i2i.submitted == []
-    for extend in ({"top": 8, "bottom": 8}, {"left": 16, "right": 16}):
+    for extend in ({"top": 24, "bottom": 24}, {"left": 56, "right": 56}):
         r = i2i.owner.post(
             f"{API}/workflows/run", json=_extend_run(picture, extend=extend)
         )
         assert r.status_code == 200 and r.json()["status"] == "success", r.text
-
-
-@pytest.mark.parametrize("kind", ["inpaint", "outpaint"])
-def test_a_converted_txt2img_with_bindings_feeds_its_inserted_loader(i2i, kind):
-    """A txt2img source's `pixlstash_bindings` (here the empty list, which
-    `run_targets` takes as the whole of what a run fills) cannot name the
-    `LoadImage` the conversion inserts, so the copy's bindings gain it.
-    Wrong if the copy has no picture input, or, outpainting, the extension
-    finds no pad the picture feeds."""
-    graph = _full_i2i_graph()
-    del graph["5"], graph["6"]
-    graph["8"] = {
-        "class_type": "EmptyLatentImage",
-        "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
-    }
-    graph["3"]["inputs"]["latent_image"] = ["8", 0]
-    i2i.graph = {**graph, "pixlstash_bindings": []}
-    r = i2i.owner.post(f"{API}/workflows/{RUN_WF}/{kind}-copy")
-    assert r.status_code == 201, r.text
-    copy = r.json()["workflow_id"]
-    picture = _real_picture(i2i.server, i2i.tmp_path, f"t2i-{kind}.png")
-    body = {"picture_ids": [picture], "target": copy}
-    if kind == "outpaint":
-        body["extend"] = {"bottom": 8}
-    else:
-        body["selection"] = LEFT_HALF
-    group = _preflight(i2i.owner, **body)["groups"][0]
-    codes = [reason["code"] for reason in group["reasons"]]
-    assert not {"extend_not_read", "mask_not_read"} & set(codes), codes
-    [fed] = group["picture_inputs"]
-    assert (fed["fill"], fed["title"]) == ("selection", "Load Image"), fed
 
 
 @pytest.mark.parametrize(
@@ -17992,8 +17960,11 @@ def test_a_sheet_copy_of_a_plain_img2img_workflow_is_refused(i2i):
     assert _manual_ids(i2i) == stored
 
 
-def test_converting_to_outpainting_stores_a_padded_copy(i2i):
-    """The copy pads nothing until a run sends an extension."""
+def test_converting_to_outpainting_stores_the_fill_graph(i2i):
+    """#2812: whatever the source runs, the copy is the FLUX.1 Fill graph,
+    padding nothing until a run sends an extension, and the original stands.
+    Wrong if the copy keeps the source's SDXL checkpoint (the edit-model
+    rewrite of #2551 kept the source's model)."""
     i2i.graph = _full_i2i_graph()
     owner = i2i.owner
     graph_before = owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
@@ -18002,14 +17973,35 @@ def test_converting_to_outpainting_stores_a_padded_copy(i2i):
     body = r.json()
     assert body["name"].endswith(" (outpaint)")
     written = _written(i2i, body)
+    classes = {n.get("class_type") for n in written.values() if isinstance(n, dict)}
+    assert "CheckpointLoaderSimple" not in classes, classes
+    [unet] = [n for n in written.values() if n.get("class_type") == "UNETLoader"]
+    assert unet["inputs"]["unet_name"] == FILL_MODEL
     [pad] = [
         n for n in written.values() if n.get("class_type") == "ImagePadForOutpaint"
     ]
-    assert pad["inputs"]["image"] == ["5", 0]
+    [loader] = [k for k, n in written.items() if n.get("class_type") == "LoadImage"]
+    assert pad["inputs"]["image"] == [loader, 0]
     assert [pad["inputs"][k] for k in ("left", "top", "right", "bottom")] == [0] * 4
     card = _by_key(_cards(owner, "?include_one_offs=true"))[body["workflow_id"]]
     assert (card["manual"], card["type"]) == (True, "outpaint")
     assert owner.get(f"{API}/workflows/{RUN_WF}/graph").json() == graph_before
+
+
+def test_an_extension_on_the_fill_copy_reaches_its_pad(i2i):
+    """The converted copy's pad reads the picture's loader directly, so a
+    run's extension is written into it rather than refused."""
+    i2i.graph = _full_i2i_graph()
+    copy = i2i.owner.post(f"{API}/workflows/{RUN_WF}/outpaint-copy").json()
+    picture = _real_picture(i2i.server, i2i.tmp_path, "fill-copy.png")
+    group = _preflight(
+        i2i.owner,
+        picture_ids=[picture],
+        target=copy["workflow_id"],
+        extend={"bottom": 8},
+    )["groups"][0]
+    codes = [reason["code"] for reason in group["reasons"]]
+    assert "extend_not_read" not in codes, codes
 
 
 def test_converting_an_outpaint_workflow_to_outpainting_is_refused(i2i):

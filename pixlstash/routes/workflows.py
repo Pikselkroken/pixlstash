@@ -215,8 +215,8 @@ from pixlstash.services.character_sheet import (
 from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
-    convert_to_outpaint,
 )
+from pixlstash.services.outpaint_conversion import convert_to_outpaint
 from pixlstash.services.model_downloads import live_sources
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
@@ -7288,8 +7288,8 @@ def create_router(server) -> APIRouter:
     def _apply_extension(graph: dict, feeds: list[Feed], body: RunRequest) -> list:
         """Write *body*'s extension into the pads the open picture feeds.
 
-        Refusals instead when nothing would read it, or when it is past twice
-        the picture on an axis (a picture with no file is refused later, by
+        Refusals instead when nothing would read it, or when it is past
+        ``Extension.past_cap`` (a picture with no file is refused later, by
         the upload).
         """
         extend, picture_id = body.extend, body.picture_ids[0]
@@ -10922,7 +10922,7 @@ def create_router(server) -> APIRouter:
             hub,
             f"{_file_stem(card, workflow.name)} (inpaint)",
             graph,
-            workflow_bindings.bind_new_loaders(source.bindings, source.graph, graph),
+            source.bindings,
             "duplicate",
             workflow,
             card,
@@ -10934,10 +10934,10 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_id}/outpaint-copy",
         summary="Convert a workflow to outpainting",
         description=(
-            "Store a new manual workflow made from this img2img, image-edit or "
-            "txt2img workflow that extends the picture: it pads the picture by "
-            "the extension a run sends and redraws only the new area with "
-            "Crop & Stitch. The original is not changed."
+            "Store a new manual workflow that extends the picture with FLUX.1 "
+            "Fill: it pads the picture by the extension a run sends, draws "
+            "only the new area and keeps the original's pixels. Only this "
+            "workflow's prompt is carried over; the original is not changed."
         ),
         response_model=WorkflowFile,
         status_code=201,
@@ -10975,7 +10975,8 @@ def create_router(server) -> APIRouter:
             hub,
             f"{_file_stem(card, workflow.name)} (outpaint)",
             graph,
-            workflow_bindings.bind_new_loaders(source.bindings, source.graph, graph),
+            # A new graph: the source's bindings name its nodes, not these.
+            None,
             "duplicate",
             workflow,
             card,

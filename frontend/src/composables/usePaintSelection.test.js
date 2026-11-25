@@ -243,21 +243,35 @@ describe("usePaintSelection", () => {
       expect(paint.draft.value).toBeNull();
     });
 
-    it("holds each side to the picture's own size on the 8 px grid", () => {
+    it("holds each side to three times the picture on the 8 px grid", () => {
       dims.value = { naturalWidth: 1003, naturalHeight: 600 };
       const paint = make();
-      paint.setExtension("left", 700);
-      paint.setExtension("right", 1500);
-      // Each side on its own: left keeps its 700 beside a full right.
-      expect(paint.extension.left).toBe(704);
-      // 1003 rounds down to 1000: the server rounds up, so 1008 would be refused.
-      expect(paint.extension.right).toBe(1000);
+      paint.setExtension("left", 2100);
+      paint.setExtension("right", 9999);
+      // Each side on its own: left keeps its 2100 beside a full right.
+      expect(paint.extension.left).toBe(2104);
+      // 3009 rounds down to 3008: the server rounds up, so 3016 is refused.
+      expect(paint.extension.right).toBe(3008);
       paint.setExtension("bottom", 9999);
-      expect(paint.extension.bottom).toBe(600);
+      expect(paint.extension.bottom).toBe(1800);
       paint.setExtension("top", -50);
       expect(paint.extension.top).toBe(0);
       paint.setExtendFeather(500);
       expect(paint.extension.feather).toBe(200);
+    });
+
+    it("holds the canvas to 64 megapixels", () => {
+      // 4096 x 8192 is 32 MP: the bottom may double it, and no more once a
+      // side has widened the canvas.
+      dims.value = { naturalWidth: 4096, naturalHeight: 8192 };
+      const paint = make();
+      paint.setExtension("bottom", 99999);
+      expect(paint.extension.bottom).toBe(8192);
+      paint.setExtension("bottom", 0);
+      paint.setExtension("left", 4096);
+      paint.setExtension("bottom", 99999);
+      // 64 Mi / 8192 wide = 8192 tall: no room below at all.
+      expect(paint.extension.bottom).toBe(0);
     });
 
     it("is never held with a selection: each drops the other", () => {

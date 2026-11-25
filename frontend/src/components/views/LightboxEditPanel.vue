@@ -317,8 +317,12 @@
           would change the whole picture. Choose an Inpaint workflow.
         </p>
         <p v-if="hasExtension && chosenCard && !usesExtend" class="edit-note">
-          {{ chosenCard.type_label }} workflows do not extend pictures. Choose
-          an Outpaint workflow.
+          {{ chosenCard.type_label }} workflows do not extend pictures.
+          <template v-if="hasExtendCard">Choose an Outpaint workflow.</template>
+          <template v-else>
+            Make one with Convert to Outpainting workflow in a workflow's menu
+            on the Workflows page.
+          </template>
         </p>
 
         <div class="section-label section-label--on-dark edit-sec">
@@ -643,7 +647,6 @@ const PROMPT_HELP = {
     placeholder: "The rest of the room, same light",
     tips: [
       "Describe what surrounds the picture, not the change: “the rest of the beach, the sea to the horizon”, not “make it wider”.",
-      "With an edit model (Flux Kontext, Qwen Image Edit, Klein) describe the whole finished picture: it redraws the whole canvas, the original included.",
       "Left empty, the workflow's own prompt is used.",
     ],
   },
@@ -717,6 +720,9 @@ const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
 const extending = computed(() => !!props.paint?.extending?.value);
 const hasExtension = computed(() => !!props.paint?.hasExtension?.value);
 const usesExtend = computed(() => EXTEND_TYPES.has(chosenCard.value?.type));
+const hasExtendCard = computed(() =>
+  cards.value.some((card) => EXTEND_TYPES.has(card.type)),
+);
 // A hand mark of either kind belongs to the picture it was made on.
 const handMark = computed(() => hasSelection.value || hasExtension.value);
 // An outpaint card pads by what a run sends, so it waits for an extension.

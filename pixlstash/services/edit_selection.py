@@ -43,6 +43,12 @@ MAX_POINTS = 20000
 MAX_GROW = 100
 MAX_FEATHER = 100
 MAX_EXTEND_FEATHER = 200
+# An extension adds up to this many times the picture's own size on each side
+# (#2812: one picture's size was not far enough). The Fill graph samples the
+# canvas at its own size and scales the result up, so the bound is memory: the
+# full-size canvas is held as float pixels, hence the cap on its area too.
+MAX_EXTEND_FACTOR = 3
+MAX_EXTENDED_PIXELS = 64 * 1024 * 1024
 MAX_FILL_HOLES = 200
 
 # A coordinate, as a fraction of the picture. A gesture may run a little past
@@ -233,8 +239,9 @@ class Extension(BaseModel):
         return self
 
     def past_cap(self, width: int, height: int) -> str | None:
-        """Why a side grows by more than the picture's own size on its axis,
-        if one does: each side takes at most one picture's width or height."""
+        """Why this extension of a *width* x *height* picture is too large, if
+        it is: a side past :data:`MAX_EXTEND_FACTOR` times the picture on its
+        axis, or a canvas past :data:`MAX_EXTENDED_PIXELS`."""
         for side, size, measure in (
             ("left", width, "wide"),
             ("right", width, "wide"),
@@ -242,11 +249,20 @@ class Extension(BaseModel):
             ("bottom", height, "tall"),
         ):
             grow = getattr(self, side)
-            if grow > size:
+            if grow > MAX_EXTEND_FACTOR * size:
                 return (
                     f"{side.capitalize()} adds {grow} px to a {size} px {measure} "
-                    f"picture; a side can add at most the picture's own size."
+                    f"picture; a side can add at most {MAX_EXTEND_FACTOR} times "
+                    "the picture's own size."
                 )
+        canvas_w = width + self.left + self.right
+        canvas_h = height + self.top + self.bottom
+        if canvas_w * canvas_h > MAX_EXTENDED_PIXELS:
+            return (
+                f"The extended picture would be {canvas_w} x {canvas_h} px; "
+                f"PixlStash extends a picture to at most "
+                f"{MAX_EXTENDED_PIXELS // (1024 * 1024)} megapixels."
+            )
         return None
 
 
