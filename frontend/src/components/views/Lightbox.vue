@@ -557,6 +557,8 @@
                 v-if="paintActive && lightboxReady"
                 :paint="paint"
                 :dims="lightboxDims"
+                :scale="mediaScale"
+                :hot="extendHot"
               />
               <!-- One picture over another, cut at the slider: the original
                    over an edit's result, or any two pictures picked. -->
@@ -669,11 +671,17 @@
               paint.tool.value
             "
             class="paint-input-layer"
-            :class="`paint-input-layer--${paint.tool.value}`"
+            :class="[
+              `paint-input-layer--${paint.tool.value}`,
+              paint.tool.value === 'extend' &&
+                extendHot &&
+                `paint-input-layer--extend-${extendCursor}`,
+            ]"
             @pointerdown.prevent="onPaintStart"
             @pointermove.prevent="onPaintMove"
             @pointerup.prevent="onPaintEnd"
             @pointercancel.prevent="onPaintCancel"
+            @pointerleave="onPaintLeave"
             @click.stop
             @dblclick.stop
             @touchstart.stop
@@ -1297,6 +1305,7 @@ import {
   MODE_TOOLS,
   PAINT_TOOLS,
   SIZED_TOOLS,
+  extendSidesAt,
   usePaintSelection,
 } from "../../composables/usePaintSelection";
 import { cropFramings } from "../../utils/cropFramings";
@@ -3473,8 +3482,12 @@ function handleKeydown(e) {
     } else if (paintActive.value && paint.tool.value) {
       // The tool goes down before anything closes.
       paint.setTool(null);
-    } else if (paintActive.value && paint.hasSelection.value) {
-      // The selection goes first; the next Escape closes the lightbox.
+    } else if (
+      paintActive.value &&
+      (paint.hasSelection.value || paint.hasExtension.value)
+    ) {
+      // The selection or extension goes first; the next Escape closes the
+      // lightbox.
       paint.clear();
     } else if (filmstripPicks.value.length) {
       filmstripPicks.value = [];
@@ -3928,6 +3941,7 @@ function stagePadding() {
 /** Z and the toolbar button: toggle between the snap stops, fit ↔ 100%,
  * centre-anchored. */
 function toggleZoomSnap() {
+  if (extendView.value) return;
   zoom.toggleSnap();
 }
 
@@ -3938,6 +3952,7 @@ function onCanvasDblClick(event) {
   if (target instanceof HTMLElement && target.closest(".lightbox-nav")) {
     return;
   }
+  if (extendView.value) return;
   zoom.toggleSnap(canvasCursorFromEvent(event));
 }
 
@@ -4027,6 +4042,8 @@ function onCanvasWheel(event) {
     wheelBrowse(event);
     return;
   }
+  // Extend holds the view at its own fit, so the frame stays in sight.
+  if (extendView.value) return;
   zoom.wheelZoom(event, canvasCursorFromEvent(event));
 }
 
@@ -4064,8 +4081,11 @@ function wheelBrowse(event) {
 // already renders the fitted image, so the CSS scale is scale/fitScale.
 const mediaTransformStyle = computed(() => {
   const { x, y } = zoom.offset.value;
+  const view = extendView.value;
   return {
-    transform: `translate(${x}px, ${y}px) scale(${zoom.transformScale.value})`,
+    transform: view
+      ? `translate(${x + view.x}px, ${y + view.y}px) scale(${mediaScale.value})`
+      : `translate(${x}px, ${y}px) scale(${zoom.transformScale.value})`,
   };
 });
 
@@ -4666,7 +4686,7 @@ function getDrawPoint(event) {
   // The bounding rect is the TRANSFORMED box (pan + continuous scale), while
   // dims are layout-space, so the cursor divides through the CSS scale before
   // the layout-space mapping. At fit the scale is 1 and this is a no-op.
-  const cssScale = zoom.transformScale.value || 1;
+  const cssScale = mediaScale.value || 1;
   const localX = (event.clientX - rect.left) / cssScale - (dims.offsetX || 0);
   const localY = (event.clientY - rect.top) / cssScale - (dims.offsetY || 0);
   const clampedX = clamp(localX, 0, dims.width);
@@ -4793,6 +4813,119 @@ const paintActive = computed(
   () =>
     editTabShown.value && inspectorShown.value && sidebarTab.value === "edit",
 );
+// ── Extend: the view holds the extended canvas ─────────────────────────────
+// The layout already fits the picture to the stage, so the canvas is fitted
+// by scaling the media down: the picture at EXTEND_FIT of the stage with
+// nothing added, the extended canvas at EXTEND_FIT of it as it grows, centred.
+// Refitted when a drag ends, never during one: a refit moves the edge under
+// the pointer, and the next move would read that as more drag.
+const EXTEND_FIT = 0.6;
+// How near an edge, in screen pixels, a press takes hold of it.
+const EXTEND_GRAB_PX = 12;
+const extendFitted = ref(null);
+const extendView = computed(() =>
+  paintActive.value && paint.extending.value ? extendFitted.value : null,
+);
+/** The CSS scale the media is drawn at: the zoom's, or Extend's. */
+const mediaScale = computed(
+  () => extendView.value?.scale ?? zoom.transformScale.value,
+);
+// The sides under the pointer with Extend in hand, as `left,top`.
+const extendHot = ref("");
+const extendCursor = computed(() => {
+  const hot = extendHot.value;
+  if (hot === "left,top" || hot === "right,bottom") return "nwse";
+  if (hot === "right,top" || hot === "left,bottom") return "nesw";
+  return hot === "left" || hot === "right" ? "ew" : "ns";
+});
+
+function fitExtendView() {
+  const canvas = lightboxCanvasRef.value;
+  const pad = stagePadding();
+  const stageWidth = (canvas?.clientWidth || 0) - pad.x;
+  const stageHeight = (canvas?.clientHeight || 0) - pad.y;
+  const { width, height, naturalWidth, naturalHeight } = lightboxDims.value;
+  if (stageWidth <= 1 || stageHeight <= 1 || !(naturalWidth > 1)) {
+    extendFitted.value = null;
+    return;
+  }
+  const { left, top, right, bottom } = paint.extension;
+  // The new area in layout pixels, where the picture is `width` wide.
+  const l = (left * width) / naturalWidth;
+  const r = (right * width) / naturalWidth;
+  const t = (top * height) / naturalHeight;
+  const b = (bottom * height) / naturalHeight;
+  const scale =
+    EXTEND_FIT *
+    Math.min(stageWidth / (width + l + r), stageHeight / (height + t + b));
+  extendFitted.value = {
+    scale,
+    x: ((l - r) / 2) * scale,
+    y: ((t - b) / 2) * scale,
+  };
+}
+
+watch(
+  [
+    () => paintActive.value && paint.extending.value,
+    () => paint.draft.value?.tool === "extend",
+    () => [paint.extension.left, paint.extension.top],
+    () => [paint.extension.right, paint.extension.bottom],
+    () => [lightboxDims.value.width, lightboxDims.value.height],
+  ],
+  ([on, dragging]) => {
+    if (!on) {
+      extendHot.value = "";
+      return;
+    }
+    if (dragging) return;
+    // Out of any zoom first: the view is Extend's own fit.
+    if (!zoom.atFit.value) zoom.snapTo(zoom.fitScale.value);
+    fitExtendView();
+  },
+  { immediate: true },
+);
+
+// A stage resize along the axis the bare picture is not fitted by leaves its
+// layout size, and so the watch above, unchanged, while the extended canvas's
+// fit has changed: refit on the stage's own size too, between drags.
+let extendStageObserver = null;
+watch(
+  () =>
+    paintActive.value && paint.extending.value ? lightboxCanvasRef.value : null,
+  (canvas) => {
+    extendStageObserver?.disconnect();
+    extendStageObserver = null;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
+    extendStageObserver = new ResizeObserver(() => {
+      if (paint.draft.value?.tool !== "extend") fitExtendView();
+    });
+    extendStageObserver.observe(canvas);
+  },
+);
+onUnmounted(() => extendStageObserver?.disconnect());
+
+/** A press point in fractions of the picture, past its edges too. */
+function extendPoint(event) {
+  if (!lightboxReady.value) return null;
+  const rect = mediaInnerRef.value?.getBoundingClientRect();
+  if (!rect) return null;
+  const dims = lightboxDims.value;
+  const cssScale = mediaScale.value || 1;
+  const x = (event.clientX - rect.left) / cssScale - (dims.offsetX || 0);
+  const y = (event.clientY - rect.top) / cssScale - (dims.offsetY || 0);
+  return { x: x / dims.width, y: y / dims.height };
+}
+
+function extendTolerance() {
+  const { width, height } = lightboxDims.value;
+  const scale = mediaScale.value || 1;
+  return {
+    x: EXTEND_GRAB_PX / (width * scale),
+    y: EXTEND_GRAB_PX / (height * scale),
+  };
+}
+
 // The floating options strip, for the tools whose options act on the picture.
 const paintOptionsShown = computed(
   () => MODE_TOOLS.has(paint.tool.value) || paint.tool.value === "crop",
@@ -4854,16 +4987,44 @@ function releasePaintPointer(event) {
 
 function onPaintStart(event) {
   if (event.button !== 0) return;
-  const at = paintPoint(event);
+  const extending = paint.tool.value === "extend";
+  const at = extending ? extendPoint(event) : paintPoint(event);
   if (!at) return;
-  paint.begin(at, { shift: event.shiftKey, alt: event.altKey });
+  paint.begin(at, {
+    shift: event.shiftKey,
+    alt: event.altKey,
+    tolerance: extending ? extendTolerance() : undefined,
+  });
   event.currentTarget?.setPointerCapture?.(event.pointerId);
 }
 
 function onPaintMove(event) {
+  if (paint.tool.value === "extend") {
+    const at = extendPoint(event);
+    if (!at) return;
+    if (paint.draft.value) {
+      paint.move(at);
+    } else {
+      extendHot.value = extendSidesAt(
+        at,
+        paint.extension,
+        {
+          width: lightboxDims.value.naturalWidth,
+          height: lightboxDims.value.naturalHeight,
+        },
+        extendTolerance(),
+      ).join(",");
+    }
+    return;
+  }
   if (!paint.draft.value) return;
   const at = paintPoint(event);
   if (at) paint.move(at);
+}
+
+/** Off the stage, no handle is under the pointer any more. */
+function onPaintLeave() {
+  if (!paint.draft.value) extendHot.value = "";
 }
 
 function onPaintEnd(event) {

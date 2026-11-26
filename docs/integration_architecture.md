@@ -770,8 +770,8 @@ stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
 `count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`,
 `destination: {set_id?, project_id?, character_id?}`, `character_id`,
 `character_ids`, `inputs:
-[{slot_label, input_name, picture_id}]`, `replay`, `stack`, `selection` and
-`allow_unchecked`.
+[{slot_label, input_name, picture_id}]`, `replay`, `stack`, `selection`,
+`extend` and `allow_unchecked`.
 
 **`selection` is where on the picture the run changes** (the lightbox Edit
 tab's Paint tools): `{version: 1, steps: [...], refine: {grow, feather,
@@ -790,6 +790,20 @@ is not a run: it is the built-in `crop` image plugin (`POST
 /pictures/plugins/crop`, `parameters: {left, top, width, height}` as fractions),
 so a crop and an inpaint are each one small JSON request and can be saved and
 repeated as they are.
+
+**`extend` is how far the run extends the picture** (the Edit tab's Extend
+tool): `{left, top, right, bottom, feather}`, pixels of the upright picture,
+each side rounded up to a multiple of 8 and `feather` 0-200 (default 40). One
+picture, at least one side above 0, and never together with `selection` (422
+for each: a run either inpaints or outpaints). A side past three times the
+picture's size on its axis or past 16384 px, or a canvas past 64 megapixels,
+is a 422 saying which; a picture whose file is not on disk, which the caps
+cannot measure, is a 404. The sides
+and the feather are written into every `ImagePadForOutpaint` whose `image` is
+output 0 of a loader the picture feeds, so the submitted graph, and the recipe
+recorded from it, carry the padding. A card with no such pad, including a pad
+behind a resize (its pixels are at another scale), is refused with
+`extend_not_read`.
 
 **`character_ids` is who the run's pictures are of**, and when sent it is the
 whole answer, whatever the LoRAs say (`[]` is nobody): the Run popup's
@@ -899,6 +913,8 @@ Seven rules the client must not re-derive:
    `lora_not_skippable: {node_id, field, file, message}`,
    `stage_not_skippable: {stage, message}`,
    `mask_not_read: {message}` (a `selection` on a card that reads no mask),
+   `extend_not_read: {message}` (an `extend` on a card with no pad on the
+   picture's loader),
    `missing_choices: {choices: [{node_id, class_type, field, value, options,
    replacement}]}` - a `sampler_name` or `scheduler` this ComfyUI does not
    list, `replacement` being `euler` / `simple` when listed, else the first
@@ -1145,6 +1161,7 @@ exports and duplicates like any other:
 | `POST /api/v1/workflows/{workflow_id}/duplicate` | A second copy of the base graph, as a new manual workflow. `?version=n` copies that kept version of its graph instead (#1792), named `… (version n)`; the workflow stays on the version it has | `201 {name, workflow_id}`: the manual workflow's name and id (`from_name` on its card names the source); `404` for a version it does not keep |
 | `POST /api/v1/workflows/{workflow_id}/inpaint-copy` | The base graph rewritten to inpaint with Crop & Stitch (#2446), as a new manual workflow named `… (inpaint)`; the original is not changed | `201 {name, workflow_id}`; `422 {detail}` with the reason a graph cannot be converted, which the grid shows as its error |
 | `POST /api/v1/workflows/{workflow_id}/sheet-copy` | The base graph of an image-edit workflow rewritten to draw on a canvas of its own size, its picture a reference only (#2679), or of a text-to-image workflow rewritten to encode its prompt with ComfyUI-PixlStash's Layout Text Encode (its card's `sheet_layout`), as a new manual workflow named `… (sheet)`; the original is not changed | `201 {name, workflow_id}`; `422 {detail}` with the reason a graph cannot be converted |
+| `POST /api/v1/workflows/{workflow_id}/outpaint-copy` | An outpaint graph (`ImagePadForOutpaint`, every side 0, feather 40; the original pasted back): Qwen Image 2.1 or FLUX.2 Klein 9B for a source of that family, else FLUX.1 Fill carrying the source's positive prompt, as a new manual workflow named `… (outpaint)`; the original is not changed | `201 {name, workflow_id}`; `422 {detail}` with the reason a graph cannot be converted |
 | `POST /api/v1/workflows/{workflow_id}/fixed-copy` | A copy with this ComfyUI's repairs applied, as a new manual workflow. No frontend caller since #1850, when the Run popup's *Save fixed workflow* went | `201 {name, workflow_id, changes}`, `workflow_id` the new manual one; 409 nothing to fix; 503 no ComfyUI |
 | `GET /api/v1/workflows/{workflow_id}/changes` | What waits on the workflow, unsaved, and what its last run changed (#1849; `docs/backend_architecture.md` §13, "Saving over a workflow") | `{workflow_id, version, waiting, count, stale, ran, save: {open, reason}, save_as_new: {open, reason}, ran_save}`. `stale` is true when what waits was made against a version of the workflow that is no longer its current one (false when nothing waits): Save is then closed with that reason and `GET …/graph?waiting=true` opens the workflow without what waits, so it is what tells that case from a Save closed for a checkpoint change, where the opened graph does carry the changes. `ran` is only what the last run changed against the workflow, and `ran_save` is Save for `ran` by itself, the set a save with `from_run` writes (null when `ran` is). `waiting` and `ran` are `WorkflowChanges`: `{models: [{address, filename \| sha256}], loras: [{node_id, field, sha256, strength_model, strength_clip}], skip_loras: [{node_id, field}], stages: {stage: bool}, values: [{slot_label, input_name, value}]}`, the fields a run body already has. `reason` is the sentence to print when a verb is closed: a change of a checkpoint this machine has, or changes made before the workflow got another version |
 | `PUT /api/v1/workflows/{workflow_id}/changes` | Replace what waits with a `WorkflowChanges` body; an empty one discards. A LoRA attached to a person is left out. `DELETE` discards | The same state. The card's `unsaved_changes` (grid and detail) is the count; `CHANGED_WORKFLOWS` names the workflow |

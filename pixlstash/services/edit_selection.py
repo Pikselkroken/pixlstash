@@ -42,6 +42,15 @@ MAX_STEPS = 200
 MAX_POINTS = 20000
 MAX_GROW = 100
 MAX_FEATHER = 100
+MAX_EXTEND_FEATHER = 200
+# An extension adds up to this many times the picture's own size on each side
+# (#2812: one picture's size was not far enough). The Fill graph samples a
+# 2 MP copy of the canvas, but pads and pastes the original back at full size,
+# so ComfyUI holds the whole canvas as float pixels: hence the cap on its area.
+# ComfyUI's pad takes at most MAX_PAD_SIDE on a side (its MAX_RESOLUTION).
+MAX_EXTEND_FACTOR = 3
+MAX_EXTENDED_PIXELS = 64 * 1024 * 1024
+MAX_PAD_SIDE = 16384
 MAX_FILL_HOLES = 200
 
 # A coordinate, as a fraction of the picture. A gesture may run a little past
@@ -206,6 +215,73 @@ def render_mask(selection: Selection, image: np.ndarray) -> np.ndarray:
         else:
             mask = np.minimum(mask, shape)
     return _refine(mask, selection.refine)
+
+
+class Extension(BaseModel):
+    """How far an outpaint run extends the picture (the Edit tab's Extend tool).
+
+    Sides are pixels of the upright picture, rounded up to ComfyUI's 8 px pad
+    step; ``feather`` is how far the redraw blends into the original. Written
+    into the ``ImagePadForOutpaint`` the open picture's loader feeds.
+    """
+
+    left: int = Field(0, ge=0)
+    top: int = Field(0, ge=0)
+    right: int = Field(0, ge=0)
+    bottom: int = Field(0, ge=0)
+    feather: int = Field(40, ge=0, le=MAX_EXTEND_FEATHER)
+
+    @model_validator(mode="after")
+    def _some_side_on_the_pad_grid(self) -> "Extension":
+        sides = ("left", "top", "right", "bottom")
+        if not any(getattr(self, side) for side in sides):
+            raise ValueError("An extension extends at least one side.")
+        for side in sides:
+            setattr(self, side, -(-getattr(self, side) // 8) * 8)
+        return self
+
+    def past_cap(self, width: int, height: int) -> str | None:
+        """Why this extension of a *width* x *height* picture is too large, if
+        it is: a side past :data:`MAX_PAD_SIDE` or :data:`MAX_EXTEND_FACTOR`
+        times the picture on its axis, or a canvas past
+        :data:`MAX_EXTENDED_PIXELS`."""
+        for side, size, measure in (
+            ("left", width, "wide"),
+            ("right", width, "wide"),
+            ("top", height, "tall"),
+            ("bottom", height, "tall"),
+        ):
+            grow = getattr(self, side)
+            if grow > MAX_PAD_SIDE:
+                return (
+                    f"{side.capitalize()} adds {grow} px; ComfyUI pads a side "
+                    f"by at most {MAX_PAD_SIDE} px."
+                )
+            if grow > MAX_EXTEND_FACTOR * size:
+                return (
+                    f"{side.capitalize()} adds {grow} px to a {size} px {measure} "
+                    f"picture; a side can add at most {MAX_EXTEND_FACTOR} times "
+                    "the picture's own size."
+                )
+        canvas_w = width + self.left + self.right
+        canvas_h = height + self.top + self.bottom
+        if canvas_w * canvas_h > MAX_EXTENDED_PIXELS:
+            return (
+                f"The extended picture would be {canvas_w} x {canvas_h} px; "
+                f"PixlStash extends a picture to at most "
+                f"{MAX_EXTENDED_PIXELS // (1024 * 1024)} megapixels."
+            )
+        return None
+
+
+def upright_size(path: str) -> tuple[int, int]:
+    """The picture's width and height as it is shown, read from its header."""
+    with Image.open(path) as image:
+        width, height = image.size
+        # Orientations 5-8 turn the picture a quarter.
+        if image.getexif().get(0x0112) in (5, 6, 7, 8):
+            return height, width
+        return width, height
 
 
 # What reading a picture can raise: not an image, unreadable, or past PIL's

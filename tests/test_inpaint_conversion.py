@@ -9,10 +9,20 @@ from pathlib import Path
 
 import pytest
 
+from pixlstash.services.edit_selection import Extension
 from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
 )
+from pixlstash.services.outpaint_conversion import (
+    EDIT_PROMPT,
+    FILL_MODEL,
+    convert_to_outpaint,
+    fill_outpaint_graph,
+)
+from pixlstash.services.workflow_hash import reduce_api_graph
+from pixlstash.services.workflow_identity import reduced_workflow_type
+from pixlstash.services.workflow_io import detect_workflow_io
 
 BUILT_IN = (
     Path(__file__).resolve().parent.parent
@@ -455,3 +465,158 @@ def test_each_shape_it_cannot_convert_is_refused_with_a_reason(graph, says):
         convert_to_inpaint(source)
     assert says in refused.value.reason
     assert source == before
+
+
+# --- Convert to Outpainting: the FLUX.1 Fill graph (#2812) ------------------
+
+
+def test_outpainting_builds_the_fill_graph_for_any_other_family():
+    """The smoke test's chain. Wrong if the source's model survives (#2551
+    rewrote the edit model's own graph, which re-frames instead of
+    extending), or if the original is not pasted back over the decode."""
+    source = _moss_edit()
+    before = copy.deepcopy(source)
+    out = convert_to_outpaint(source)
+    assert source == before
+    assert out[_one(out, "UNETLoader")]["inputs"]["unet_name"] == FILL_MODEL
+    pad = _one(out, "ImagePadForOutpaint")
+    loader = _one(out, "LoadImage")
+    assert out[pad]["inputs"]["image"] == [loader, 0]
+    # The canvas is scaled for the model; the result back to the canvas.
+    scale = _one(out, "ImageScaleToTotalPixels")
+    assert out[scale]["inputs"]["image"] == [pad, 0]
+    cond = out[_one(out, "InpaintModelConditioning")]["inputs"]
+    assert (cond["pixels"], cond["mask"], cond["noise_mask"]) == (
+        [scale, 0],
+        [pad, 1],
+        True,
+    )
+    composite = out[_one(out, "ImageCompositeMasked")]["inputs"]
+    back = _one(out, "ImageScale")
+    assert (composite["destination"], composite["source"], composite["mask"]) == (
+        [pad, 0],
+        [back, 0],
+        [pad, 1],
+    )
+    assert out[back]["inputs"]["image"] == [_one(out, "VAEDecode"), 0]
+    save = out[_one(out, "SaveImage")]["inputs"]
+    assert save["images"] == [_one(out, "ImageCompositeMasked"), 0]
+    sampler = out[_one(out, "KSampler")]["inputs"]
+    assert sampler["model"] == [_one(out, "DifferentialDiffusion"), 0]
+    assert (sampler["cfg"], sampler["denoise"]) == (1.0, 1.0)
+
+
+def test_outpainting_carries_the_source_prompt_into_the_one_it_reads():
+    """The copy's only tie to its source. Wrong if PixlStash's prompt
+    detection cannot find it, since a run's prompt is written there."""
+    source = _sdxl_img2img()
+    [encoder] = detect_workflow_io(source).positive_prompt_nodes
+    source[encoder]["inputs"]["text"] = "a lighthouse at dusk"
+    out = convert_to_outpaint(source)
+    [found] = detect_workflow_io(out).positive_prompt_nodes
+    assert out[found]["inputs"]["text"] == "a lighthouse at dusk"
+    assert fill_outpaint_graph()[found]["inputs"]["text"] == ""
+
+
+@pytest.mark.parametrize(
+    "source, built_in",
+    [
+        ("FLUX.2 Klein 9B Edit.json", "FLUX.2 Klein 9B Inpaint.json"),
+        (
+            "Qwen-Image 2.1 Sheet from Reference.json",
+            "Qwen-Image 2.1 Inpaint.json",
+        ),
+    ],
+    ids=["klein", "qwen_image_21"],
+)
+def test_a_klein_or_qwen_21_source_outpaints_on_its_own_edit_model(source, built_in):
+    """#2812's probes: white pad, the whole canvas as the only reference and
+    sampled at its own size, the original pasted back. Wrong if the Fill model
+    loads (the owner has this family's files), if the sampler starts from a
+    latent of another size than the reference (#2551 re-framed), or if the
+    decode is saved without the paste-back (the edit redraws everything)."""
+    out = convert_to_outpaint(_built_in(source))
+    model_files = {
+        n["class_type"]: n["inputs"]
+        for n in _built_in(built_in).values()
+        if n["class_type"]
+        in ("UNETLoader", "PixlStashCLIPLoader", "PixlStashVAELoader")
+    }
+    assert {cls: out[_one(out, cls)]["inputs"] for cls in model_files} == model_files
+    pad = _one(out, "ImagePadForOutpaint")
+    assert out[pad]["inputs"]["image"] == [_one(out, "LoadImage"), 0]
+    new_area = _one(out, "ThresholdMask")
+    assert out[new_area]["inputs"]["mask"] == [pad, 1]
+    white, kept = sorted(
+        _of(out, "ImageCompositeMasked"),
+        key=lambda i: out[i]["inputs"]["source"] == [_one(out, "ImageScale"), 0],
+    )
+    assert out[white]["inputs"]["destination"] == [pad, 0]
+    assert out[white]["inputs"]["source"] == [_one(out, "MaskToImage"), 0]
+    canvas = _one(out, "ImageScaleToTotalPixels")
+    assert out[canvas]["inputs"]["image"] == [white, 0]
+    if "Klein" in source:
+        encode = _one(out, "VAEEncode")
+        assert out[encode]["inputs"]["pixels"] == [canvas, 0]
+        assert out[_one(out, "ReferenceLatent")]["inputs"]["latent"] == [encode, 0]
+        sampler = out[_one(out, "SamplerCustomAdvanced")]["inputs"]
+        assert sampler["latent_image"] == [encode, 0]
+        decoded = _one(out, "VAEDecode")
+    else:
+        encode = _one(out, "TextEncodeQwenImage21")
+        assert out[encode]["inputs"]["images.image_1"] == [canvas, 0]
+        assert out[encode]["inputs"]["resolution"] == 0
+        assert out[_one(out, "KSampler")]["inputs"]["latent_image"] == [encode, 2]
+        decoded = _one(out, "SplitImageWithAlpha")
+    assert "SetLatentNoiseMask" not in {n["class_type"] for n in out.values()}
+    assert out[_one(out, "ImageScale")]["inputs"]["image"] == [decoded, 0]
+    assert out[kept]["inputs"]["destination"] == [pad, 0]
+    assert out[kept]["inputs"]["mask"] == [pad, 1]
+    assert out[_one(out, "SaveImage")]["inputs"]["images"] == [kept, 0]
+    # A run's prompt and the Extend tool find it as an outpaint workflow.
+    [found] = detect_workflow_io(out).positive_prompt_nodes
+    assert EDIT_PROMPT in out[found]["inputs"].values()
+    assert reduced_workflow_type(reduce_api_graph(out)) == "outpaint"
+
+
+@pytest.mark.parametrize("clip_type", ["flux", "sd3", None])
+def test_a_text_encoder_of_another_type_keeps_the_fill_graph(clip_type):
+    """Only a ``flux2`` text encoder makes a graph Klein. Wrong if FLUX.1
+    (``flux``) or an untyped loader reaches the Klein outpainter."""
+    source = _built_in("FLUX.2 Klein 9B Edit.json")
+    for node in source.values():
+        if "CLIPLoader" in node["class_type"]:
+            node["inputs"].pop("type")
+            if clip_type:
+                node["inputs"]["type"] = clip_type
+    out = convert_to_outpaint(source)
+    assert out[_one(out, "UNETLoader")]["inputs"]["unet_name"] == FILL_MODEL
+
+
+@pytest.mark.parametrize(
+    "graph, says",
+    [
+        (_already_inpaint, "already inpaints"),
+        (lambda: fill_outpaint_graph(), "already outpaints"),
+        (_video, "video"),
+        (_upscale, "upscale"),
+    ],
+    ids=["inpaint", "outpaint", "video", "upscale"],
+)
+def test_each_kind_outpainting_cannot_convert_is_refused(graph, says):
+    with pytest.raises(InpaintConversionRefused) as refused:
+        convert_to_outpaint(graph())
+    assert says in refused.value.reason
+
+
+def test_an_extension_is_capped_at_three_pictures_a_side_and_64_megapixels():
+    """#2812 raised the cap from one picture's size a side. Wrong if a side
+    of exactly three times passes nothing, or a canvas past 64 MP passes."""
+    assert Extension(left=288, right=288, top=144, bottom=144).past_cap(96, 48) is None
+    assert "Left adds 296" in Extension(left=296).past_cap(96, 48)
+    assert "Bottom adds 152" in Extension(bottom=152).past_cap(96, 48)
+    # 4096 x 8192 is 32 MP; doubling the height reaches 64 MP exactly.
+    assert Extension(bottom=8192).past_cap(4096, 8192) is None
+    assert "megapixels" in Extension(bottom=8200).past_cap(4096, 8192)
+    # ComfyUI's pad: a long thin picture is held to 16384 px a side.
+    assert "16384" in Extension(right=16392).past_cap(6000, 100)

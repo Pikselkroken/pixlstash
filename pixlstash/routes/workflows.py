@@ -216,10 +216,13 @@ from pixlstash.services.inpaint_conversion import (
     InpaintConversionRefused,
     convert_to_inpaint,
 )
+from pixlstash.services.outpaint_conversion import convert_to_outpaint
 from pixlstash.services.model_downloads import live_sources
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
+    Extension,
     Selection,
+    upright_size,
     write_masked_picture,
 )
 from pixlstash.services import prompt_assist
@@ -2005,6 +2008,11 @@ class RunRequest(BaseModel):
     # selection belongs to the picture it was drawn on. A workflow whose
     # loader's MASK nothing reads is refused with `mask_not_read`.
     selection: Selection | None = None
+    # How far the Extend tool extends the one picture: written into the
+    # `ImagePadForOutpaint` its loader feeds. A workflow with none is refused
+    # with `extend_not_read`. Never with a selection: a run inpaints or
+    # outpaints.
+    extend: Extension | None = None
 
     @field_validator("inputs")
     @classmethod
@@ -2065,6 +2073,13 @@ class RunRequest(BaseModel):
             )
         if self.selection is not None and len(self.picture_ids) != 1:
             raise ValueError("A selection runs on exactly one picture.")
+        if self.extend is not None and len(self.picture_ids) != 1:
+            raise ValueError("An extension runs on exactly one picture.")
+        if self.extend is not None and self.selection is not None:
+            raise ValueError(
+                "A run either extends the picture or changes a selection of it, "
+                "not both: clear one."
+            )
         return self
 
     stack: bool = False
@@ -3674,6 +3689,28 @@ def _masked(body: "RunRequest") -> tuple[int, str] | None:
         return None
     digest = hashlib.sha256(body.selection.model_dump_json().encode()).hexdigest()
     return body.picture_ids[0], digest[:16]
+
+
+def _extend_pads(graph: dict, feeds: list[Feed], picture_id: int) -> list[str]:
+    """Every ``ImagePadForOutpaint`` reading output 0 of a loader fed
+    *picture_id* directly. A pad behind a resize gets pixels at another scale,
+    so it does not count."""
+    loaders = {
+        str(workflow_bindings.target_node(graph, target.get("path")))
+        for feed in feeds
+        if feed.picture_id in (None, picture_id)
+        for target in feed.targets
+    }
+    return [
+        node_id
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") == "ImagePadForOutpaint"
+        and isinstance(image := (node.get("inputs") or {}).get("image"), list)
+        and len(image) == 2
+        and str(image[0]) in loaders
+        and image[1] == 0
+    ]
 
 
 def _reads_mask(graph: dict, feeds: list[Feed], picture_id: int) -> bool:
@@ -7253,6 +7290,74 @@ def create_router(server) -> APIRouter:
                 )
         return files
 
+    def _apply_extension(graph: dict, feeds: list[Feed], body: RunRequest) -> list:
+        """Write *body*'s extension into the pads the open picture feeds.
+
+        Refusals instead when nothing would read it, when it is past
+        ``Extension.past_cap``, or when the picture has no file to measure.
+        """
+        extend, picture_id = body.extend, body.picture_ids[0]
+        pads = _extend_pads(graph, feeds, picture_id)
+        if not pads:
+            return [
+                run_service.Reason(
+                    run_service.EXTEND_NOT_READ,
+                    {
+                        "message": (
+                            "This workflow does not extend pictures. Choose an "
+                            "outpaint workflow, or clear the extension."
+                        )
+                    },
+                )
+            ]
+        kept = read_kept_picture_files(server.vault, [picture_id])
+        path = (
+            ImageUtils.resolve_picture_path(
+                server.vault.image_root, kept[picture_id][0]
+            )
+            if picture_id in kept
+            else None
+        )
+        if not path or not os.path.isfile(path):
+            # Fail closed: a picture the caps cannot measure is never padded
+            # unchecked, whichever loader would fetch it.
+            logger.warning(
+                "Picture %s cannot be extended: its file (resolved %r) is not on disk.",
+                picture_id,
+                path,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Picture {picture_id}'s file is not on disk, so it cannot "
+                    "be extended."
+                ),
+            )
+        try:
+            past = extend.past_cap(*upright_size(path))
+        except UNREADABLE_PICTURE as exc:
+            logger.warning(
+                "Picture %s (%s) cannot be measured for an extension: %s",
+                picture_id,
+                path,
+                exc,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Picture {picture_id} cannot be read, so it cannot be extended.",
+            ) from exc
+        if past:
+            raise HTTPException(status_code=422, detail=past)
+        for node_id in pads:
+            graph[node_id]["inputs"].update(
+                left=extend.left,
+                top=extend.top,
+                right=extend.right,
+                bottom=extend.bottom,
+                feathering=extend.feather,
+            )
+        return []
+
     def _require_one_source(body: RunRequest) -> None:
         """Exactly one of the three sources, checked before anything is read.
 
@@ -8326,6 +8431,8 @@ def create_router(server) -> APIRouter:
                         },
                     )
                 )
+            if body.extend is not None:
+                found += _apply_extension(graph, feeds, body)
             group.reasons = [r.as_dict() for r in found]
             # A replacement this ComfyUI does not have left its loader naming
             # the original, which is missing too. The file to name is the one
@@ -10834,6 +10941,62 @@ def create_router(server) -> APIRouter:
             f"{_file_stem(card, workflow.name)} (inpaint)",
             graph,
             source.bindings,
+            "duplicate",
+            workflow,
+            card,
+        )
+        _announce(request, [landed], "imported")
+        return WorkflowFile(name=name, workflow_id=landed)
+
+    @router.post(
+        "/workflows/{workflow_id}/outpaint-copy",
+        summary="Convert a workflow to outpainting",
+        description=(
+            "Store a new manual workflow that extends the picture: it pads the "
+            "picture by the extension a run sends, draws the new area and "
+            "keeps the original's pixels. A Qwen Image 2.1 or FLUX.2 workflow's "
+            "copy runs Qwen Image 2.1 or FLUX.2 Klein 9B; any other's runs "
+            "FLUX.1 Fill with this workflow's prompt. The original is not "
+            "changed."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to convert."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
+            422: {
+                "description": "This graph cannot be converted; the detail says why."
+            },
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def outpaint_copy_workflow(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        source = _card_source(
+            card,
+            workflow_id=workflow.workflow_id,
+            comfyui_url=_comfyui_url(_user(request)),
+        )
+        try:
+            graph = convert_to_outpaint(source.graph)
+        except InpaintConversionRefused as exc:
+            logger.info(
+                "[workflows] Workflow %s was not converted to outpainting: %s",
+                workflow.workflow_id,
+                exc.reason,
+            )
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (outpaint)",
+            graph,
+            # A new graph: the source's bindings name its nodes, not these.
+            None,
             "duplicate",
             workflow,
             card,

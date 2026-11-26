@@ -427,6 +427,19 @@ export async function sheetCopyWorkflow(workflowId) {
 }
 
 /**
+ * Store a new MANUAL workflow that outpaints (`… (outpaint)`), with Qwen
+ * Image 2.1 or FLUX.2 Klein for a workflow of theirs, else FLUX.1 Fill: the picture is padded by `ImagePadForOutpaint`, only the
+ * new area is drawn, and the original is pasted back. A run's `extend` sets
+ * the padding. A graph it cannot convert is a 422 whose detail says why.
+ *
+ * @param {string} workflowId
+ * @returns {Promise<{name: string, workflow_id: string}>}
+ */
+export async function outpaintCopyWorkflow(workflowId) {
+  return unwrap(apiClient.post(wf(workflowId, "/outpaint-copy")));
+}
+
+/**
  * What a workflow's model files could be changed to.
  *
  * Without `checkpointId`: the model files the card's graph names (each
