@@ -1,0 +1,10 @@
+{
+  "id": "1-build-a-hand-labelled-set-of-drawn-pictu",
+  "number": 1,
+  "title": "Build a hand-labelled set of drawn pictures and measure how many faces PixlStash finds today",
+  "body": "Collect around 200 drawn pictures (anime, Western cartoon, comic, painted illustration, 3D-rendered cartoon) and about 100 ordinary photos, and draw a box by hand around every face in each. Then run PixlStash's current face finder (the InsightFace SCRFD-10G detector at its present settings: the picture shrunk to 512 px on its long side, the detector working at 256 px, confidence cut-off 0.25) over all of them. Nothing is improved by this idea itself; it exists because no measurement of face detection quality exists in the project, so every other idea has nothing to be judged against. It reports recall (the share of hand-drawn faces the detector found, counting a found box as a match when it overlaps the hand box by at least half) and false finds per picture, separately for each style and for photos. The result counts if it gives stable numbers per style that the other ideas can be compared with; it would also confirm or refute the owner's impression, for example by showing anime recall at 20% against 95% for photos.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-26T18:45:11.647Z",
+  "reopenings": []
+}

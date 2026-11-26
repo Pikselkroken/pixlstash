@@ -1,0 +1,10 @@
+{
+  "id": "2-let-the-current-face-detector-see-drawn",
+  "number": 2,
+  "title": "Let the current face detector see drawn pictures at a larger size and a lower cut-off",
+  "body": "Keep the same detector but give it more pixels: load pictures at 1024 px instead of 512, let it work at 640 px instead of 256, and try cut-offs of 0.25, 0.15 and 0.1. Part of why drawn faces may be missed is simply size: at today's settings a face that fills a twentieth of the picture's width reaches the detector at about 13 pixels across, which is too small for it to recognise a face drawn with a few lines. If size is the main cause, this is the cheapest possible fix, because no new model is needed. Measured on the hand-labelled set from the first idea: recall on drawn pictures, false finds per picture, recall on photos, and the time per picture. It counts as working if drawn-picture recall rises by at least 20 percentage points while photo recall does not drop and false finds stay under about one in ten pictures; if recall barely moves, the cause is that the detector does not know what a drawn face looks like, which points to a second detector.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-26T18:45:11.647Z",
+  "reopenings": []
+}

@@ -1,0 +1,10 @@
+{
+  "id": "5-check-whether-faces-of-the-same-drawn-ch",
+  "number": 5,
+  "title": "Check whether faces of the same drawn character are recognised as the same person",
+  "body": "Take drawn pictures of a handful of known characters, several pictures each, and see whether PixlStash's face recognition (ArcFace, which turns a face into 512 numbers so that two faces of the same person come out close together) puts faces of the same character closer together than faces of different characters. Finding a drawn face is only useful for face clusters, character likeness and face search if its numbers also say who it is, and ArcFace was trained on photographs of real people, so drawn faces of different characters may all look alike to it (same big eyes, same style) or one character may look different from picture to picture. It is measured by how well the cosine similarity (a closeness score from -1 to 1) separates same-character from different-character pairs, for example with the area under the ROC curve, where 0.5 is a coin flip and 1.0 is perfect, and by whether PixlStash's own same-person threshold of 0.45 sorts the pairs correctly. It counts if separation is clearly better than chance, say above 0.85; if it is near 0.5, drawn faces will need a different embedding even once they are found.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-26T18:45:11.647Z",
+  "reopenings": []
+}

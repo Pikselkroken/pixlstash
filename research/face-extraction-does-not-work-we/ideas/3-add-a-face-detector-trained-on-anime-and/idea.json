@@ -1,0 +1,10 @@
+{
+  "id": "3-add-a-face-detector-trained-on-anime-and",
+  "number": 3,
+  "title": "Add a face detector trained on anime and cartoon faces and compare it with the current one",
+  "body": "Try one or two openly licensed detectors trained specifically on drawn faces, for example a YOLO model trained on anime face boxes, and run them on the hand-labelled set from the first idea next to the current detector. The current detector was trained only on photographs of real people, so a face drawn as two large eyes and a line for a mouth may simply not look like a face to it; a detector trained on drawn faces does not have that gap. The comparison measures recall and false finds per style, on photos as well, plus speed and memory, and also checks whether the new detector gives the five face points (eyes, nose, mouth corners) that PixlStash needs to straighten a face before recognising it, since without them the found face cannot be fed to the rest of the pipeline as it stands. It counts if the anime detector finds at least 80% of drawn faces with few false finds, and the report should say plainly which styles it still misses (Western cartoon and painted styles may differ a lot from anime).",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-26T18:45:11.647Z",
+  "reopenings": []
+}

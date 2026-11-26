@@ -1,0 +1,10 @@
+{
+  "id": "4-send-each-picture-to-the-photo-or-the-dr",
+  "number": 4,
+  "title": "Send each picture to the photo or the drawn-face detector according to its style",
+  "body": "Use something PixlStash already computes to decide, per picture, whether it is a photo or a drawing, and send it to the matching face detector: for example the WD14 tagger, which already tags pictures in an anime-style vocabulary, or a simple comparison of the picture's CLIP embedding (a numeric summary of what a picture shows) against the phrases \"a photograph\" and \"a drawing\". Running a drawn-face detector on photos could add false finds or miss real faces, and running both on everything doubles the work, so a reliable style switch would give each picture the right detector. The alternative to compare against is running both detectors on every picture and merging overlapping boxes. Measured on the hand-labelled set: how often the style check is wrong, and total recall and false finds for routing against merging. It counts if routing keeps photo recall where it is today and gets drawn-picture recall within a few points of the better detector alone. This idea only makes sense once a drawn-face detector has been shown to work.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-26T18:45:11.647Z",
+  "reopenings": []
+}
