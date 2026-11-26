@@ -341,10 +341,12 @@ function reveal(index, { centre = false } = {}) {
   transition: opacity var(--dur-2) var(--ease-standard);
 }
 
-/* A clip with sound adds its 16px waveform lane and the 4px above it under
-   the frames (#2807); a silent clip keeps the 72px band. */
-.lightbox-rail:has(.storyboard-lane) {
-  flex-basis: calc(72px + var(--space-2) + var(--space-5));
+/* A clip's frames keep their own shape, so the band grows to hold them and
+   any waveform lane, but is never shorter than a band of pictures. */
+.lightbox-rail:has(.storyboard) {
+  flex-basis: auto;
+  min-height: 72px;
+  padding-block: var(--space-3);
 }
 
 .lightbox-rail.hidden {
