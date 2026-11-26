@@ -1625,7 +1625,6 @@ class ResourceArbiter:
         # checkpoint instead, over a floor of torch's reserved memory plus a
         # context.
         held = self._ledger.own_mb(device) if device is not None else None
-        floor = (self._usage() or 0) + CUDA_CONTEXT_ESTIMATE_MB
         with self._lock:
             holder = self._suspend_lease_locked()
             busy = self._gpu_work_locked(worker_type)
@@ -1644,8 +1643,11 @@ class ResourceArbiter:
         if not self._checkpoint.drain():
             self._checkpoint.abandon()
             return False
-        before = None
+        before = floor = None
         if held is None:
+            # After the drain, as own_mb is read again: a search encoding on
+            # the GPU meanwhile grows torch's reserved memory too.
+            floor = (self._usage() or 0) + CUDA_CONTEXT_ESTIMATE_MB
             # nvidia-smi, as every reading is until the restore, which needs
             # one: a card it cannot read now could never be restored onto.
             before = self._used_mb(device)

@@ -1848,6 +1848,17 @@ def test_a_training_run_allocating_during_the_suspend_leaves_the_floor():
     lease.release()
 
 
+def test_the_floor_is_read_after_the_calls_in_flight_have_ended():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    fake.own = None
+    # A search encoding on the GPU grew torch's cache before the drain ended.
+    ckpt.on_drain = lambda: setattr(arb, "_usage", lambda: CONTEXT_MB + 2000)
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    assert arb._suspended_mb == CONTEXT_MB + 2000 + CUDA_CONTEXT_ESTIMATE_MB
+    lease.release()
+
+
 def test_a_card_unread_after_the_suspend_is_sized_at_the_floor():
     arb, fake, ckpt, _asked = _suspend_scene()
     fake.own = None
