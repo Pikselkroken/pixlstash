@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from pixlstash.event_types import EventType
-from pixlstash.services import character_sheet
+from pixlstash.services import character_sheet, location_angles
 
 # A run draws at most a handful of sheets; "Draw more" adds to them.
 MAX_SHEETS = 32
@@ -263,6 +263,51 @@ class UsedSheets(BaseModel):
     picture_ids: list[int]
 
 
+class LocationShot(BaseModel):
+    preset: str = Field("closer", pattern="^(closer|opposite|reverse|left|right)$")
+    words: str = Field("", max_length=500)
+
+
+class LocationShotsPromptRequest(BaseModel):
+    description: str = Field("", max_length=2000)
+    layout: str = Field("", max_length=2000)
+    light: str = Field("plain daylight", max_length=200)
+    shots: list[LocationShot] = Field(min_length=1, max_length=4)
+
+
+class LocationShotsPrompt(BaseModel):
+    prompt: str
+    seconds: int
+
+
+class LocationShotsRequest(BaseModel):
+    video_picture_id: int
+    shots: int = Field(ge=1, le=4, description="New shots, the picture's own left out.")
+
+
+class LocationRestorePair(BaseModel):
+    frame_id: int
+    restored_id: int
+
+
+class LocationRestoreCheckRequest(BaseModel):
+    original_id: int
+    pairs: list[LocationRestorePair] = Field(min_length=1, max_length=8)
+
+
+class LocationRestoreCheck(BaseModel):
+    frame_id: int
+    restored_id: int
+    ok: bool
+    reason: str
+    frame_match: float
+    original_match: float
+
+
+class LocationRestoreChecks(BaseModel):
+    views: list[LocationRestoreCheck]
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -412,5 +457,80 @@ def create_router(server) -> APIRouter:
             },
         )
         return UsedSheets(picture_ids=panel_ids)
+
+    @router.post(
+        "/item-sheets/shots/prompt",
+        summary="Write a location's shots prompt",
+        description=(
+            "The prompt for *MiniMax H3 Location Shots*: the picture as shot 1, "
+            "then one static shot per row (`closer`, `opposite`, `reverse`, "
+            "`left`, `right`, with words for what it shows), joined by hard "
+            "cuts. `seconds` is the video's length, two a shot."
+        ),
+        response_model=LocationShotsPrompt,
+    )
+    def location_shots_prompt(payload: LocationShotsPromptRequest):
+        shots = [shot.model_dump() for shot in payload.shots]
+        return LocationShotsPrompt(
+            prompt=location_angles.location_shots_prompt(
+                payload.description, payload.layout, shots, payload.light
+            ),
+            seconds=location_angles.shots_seconds(len(shots)),
+        )
+
+    @router.post(
+        "/item-sheets/shots",
+        summary="Take a location's new views out of its shots video",
+        description=(
+            "Finds the hard cuts in the video and imports the sharpest frame "
+            "of each new shot as a picture made from it, in shot order. 409 "
+            "when the video holds another number of cuts than `shots`, or "
+            "cannot be read; 404 for a picture that is not there."
+        ),
+        response_model=UsedSheets,
+    )
+    def location_shots(request: Request, payload: LocationShotsRequest):
+        try:
+            frame_ids = location_angles.frames_of_video(
+                server, payload.video_picture_id, payload.shots
+            )
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (character_sheet.SheetUnreadable, location_angles.ShotsNotFound) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        server.vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": frame_ids,
+                "source": "ui",
+                "origin_client_id": getattr(request.state, "origin_client_id", None),
+                "change_kind": "added",
+            },
+        )
+        return UsedSheets(picture_ids=frame_ids)
+
+    @router.post(
+        "/item-sheets/shots/check",
+        summary="Check a location's restored views",
+        description=(
+            "Whether each restored view is still the frame it was restored "
+            "from (grey correlation at 128 px of at least "
+            f"{location_angles.RESTORE_KEEPS}) and has not turned back into "
+            "the original picture. 404 for a picture that is not there."
+        ),
+        response_model=LocationRestoreChecks,
+    )
+    def location_shots_check(payload: LocationRestoreCheckRequest):
+        try:
+            views = location_angles.check_restored(
+                server,
+                payload.original_id,
+                [(p.frame_id, p.restored_id) for p in payload.pairs],
+            )
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except character_sheet.SheetUnreadable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return LocationRestoreChecks(views=views)
 
     return router

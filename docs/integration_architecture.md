@@ -4328,3 +4328,4 @@ never composes a prompt: it asks the scene for one.
 | Read | `GET /studio/scenes/{id}` | files ended runs as `takes`; `ended` says `completed`, `failed` or `lost` |
 | Items | `PUT`/`DELETE /studio/items/{set_id}` | a set as an outfit, location or prop; the sheet dialog calls `PUT` for each set it makes |
 | Favourites | `PUT /studio/favourites` | `{kind, item_id, favourite}` |
+| More angles | `POST /item-sheets/shots/prompt`, run *MiniMax H3 Location Shots*, `POST /item-sheets/shots`, run *MiniMax H3 Restore a Frame* per frame (`hold`), `POST /item-sheets/shots/check` | the client orders the runs; the server writes the prompt, finds the frames and checks the views |

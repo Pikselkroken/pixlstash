@@ -686,6 +686,9 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
 | POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
+| POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
+| POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
+| POST   | /api/v1/item-sheets/shots/prompt                                              | characters      | Write a location's shots prompt                               |
 | POST   | /api/v1/item-sheets/use                                                       | characters      | Use outfit, location or prop sheets                           |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                     |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                                 |
@@ -13761,9 +13764,24 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   has ended (`comfyui_service.run_outcome`) as takes and says how it ended in
   `ended`. A run the server no longer knows (it restarted) ends as `lost`:
   its pictures, if any, stay in the library without the scene.
+- **More angles of one location** (`services/location_angles.py`): new
+  views of exactly the place in one of its pictures. Two built-in workflows
+  do the drawing: *MiniMax H3 Location Shots* (image to video, 0.4 MP, 14
+  steps, 8 s, the picture as the first frame) films four static tripod shots
+  joined by hard cuts, shot 1 being the picture, from the prompt `POST
+  /item-sheets/shots/prompt` writes (the place, a layout sentence said once,
+  then a preset and words per shot). `POST /item-sheets/shots` finds the cuts
+  by frame difference (a run of high differences is one cut; another count
+  than asked is a 409, never a guess) and imports the sharpest frame of each
+  new shot (Laplacian variance over motion, past the first frames after the
+  cut). *MiniMax H3 Restore a Frame* restores each frame from the frame
+  itself (VAE-encoded, denoise 0.75, 2560x1440) with the picture as `<Picture
+  2>`; restoring from noise flips back to the picture, so `POST
+  /item-sheets/shots/check` refuses a view that matches the picture better
+  than its frame or drifts below `RESTORE_KEEPS` (grey correlation at 128 px).
+  The kept views and the video join the location's set.
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
-  design proposes) and "more angles from one picture" for a location: a
-  shot is one run of one workflow.
+  design proposes): a shot is one run of one workflow.
 
 ---
 

@@ -1571,6 +1571,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Cut outfit, location or prop sheets into pictures; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/item-sheets/shots/prompt"): RoutePolicy(
+        _OWNER,
+        justification="Write a location's shots prompt; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/item-sheets/shots"): RoutePolicy(
+        _OWNER,
+        justification="Take a location's new views out of its shots video; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/item-sheets/shots/check"): RoutePolicy(
+        _OWNER,
+        justification="Check a location's restored views; POST blocked for READ tokens; owner only",
+    ),
     # ── studio.py ───────────────────────────────────────────────────────────
     ("GET", "/api/v1/studio/overview"): RoutePolicy(
         _OWNER,

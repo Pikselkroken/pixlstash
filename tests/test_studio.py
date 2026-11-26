@@ -7,6 +7,8 @@ import tempfile
 import uuid
 from types import SimpleNamespace
 
+import cv2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -14,7 +16,7 @@ from PIL import Image
 from pixlstash.db_models import Picture
 from pixlstash.db_models.studio import Scene
 from pixlstash.server import Server
-from pixlstash.services import comfyui_service
+from pixlstash.services import comfyui_service, location_angles
 from pixlstash.services.studio import Item, Person, compose_shot, place_words
 from tests.utils import (
     API_PREFIX,
@@ -447,4 +449,132 @@ def test_a_read_token_reaches_none_of_the_studio(env):
     assert (
         reader.post(f"{API_PREFIX}/studio/scenes", json={"name": "x"}).status_code
         == 403
+    )
+
+
+# ── More angles of one location ─────────────────────────────────────────────
+
+
+def _shots_video(path, shots=4, seconds=2, fps=12, size=(160, 96), blur_first=8):
+    """Static shots joined by hard cuts, each a distinct pattern; the first
+    frames after each cut are blurred, so the sharpest is past the settle."""
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    for shot in range(shots):
+        # Flat shapes on a flat ground, another layout each shot, so a cut
+        # changes most pixels and the settle's blur only the edges.
+        base = np.full(
+            (size[1], size[0], 3), (40 + 50 * shot, 90, 200 - 40 * shot), np.uint8
+        )
+        for k in range(3):
+            x = 10 + ((shot * 37 + k * 45) % (size[0] - 40))
+            cv2.rectangle(
+                base, (x, 15 + k * 22), (x + 30, 30 + k * 22), (255, 255, 255), -1
+            )
+        for frame in range(seconds * fps):
+            image = cv2.GaussianBlur(base, (7, 7), 0) if frame < blur_first else base
+            writer.write(image)
+    writer.release()
+
+
+def test_the_shots_prompt_has_the_picture_first_and_a_cut_per_shot():
+    prompt = location_angles.location_shots_prompt(
+        "a pub",
+        "The room has exactly one open fireplace, on the left wall",
+        [
+            {"preset": "closer", "words": "the fireplace"},
+            {"preset": "reverse", "words": ""},
+            {"preset": "nonsense", "words": "the bar"},
+        ],
+    )
+    assert prompt.startswith("Gimbal footage inside a pub, plain daylight, no people.")
+    assert "exactly one open fireplace" in prompt
+    assert "A sequence of 4 static shots" in prompt
+    assert "SHOT 1: exactly <Picture 1>, held still." in prompt
+    assert (
+        "SHOT 2: cut to a static shot from closer in, looking at the fireplace."
+        in prompt
+    )
+    # An empty row still names its move; an unknown preset is taken as closer.
+    assert "looking back towards where the first shot's camera stands" in prompt
+    assert "SHOT 4: cut to a static shot from closer in, looking at the bar." in prompt
+    assert location_angles.shots_seconds(3) == 8
+
+
+def test_cuts_are_found_where_the_difference_jumps_and_a_wrong_count_refuses():
+    diffs = [0.3] * 47
+    for at in (11, 23, 35):
+        diffs[at] = 30.0
+    diffs[24] = 28.0  # one cut spread over two frames is still one cut
+    assert location_angles.find_cuts(diffs, 3) == [12, 24, 36]
+    with pytest.raises(location_angles.ShotsNotFound, match="3 hard cuts where 2"):
+        location_angles.find_cuts(diffs, 2)
+
+
+def test_the_sharpest_frame_of_each_new_shot_is_past_the_settle(tmp_path):
+    path = str(tmp_path / "shots.mp4")
+    _shots_video(path)
+    picked = location_angles.sharpest_frames(path, 3)
+    assert len(picked) == 3
+    for shot, index in enumerate(picked, start=1):
+        # Each pick inside its own shot, after the blurred settle.
+        assert shot * 24 + 8 <= index < (shot + 1) * 24
+
+
+def test_a_restore_that_turns_back_into_the_original_is_refused():
+    rng = np.random.default_rng(3)
+    frame = Image.fromarray((rng.random((72, 128, 3)) * 255).astype(np.uint8))
+    original = Image.fromarray((rng.random((72, 128, 3)) * 255).astype(np.uint8))
+    kept = location_angles.restore_check(frame, frame, original)
+    assert kept["ok"] and kept["frame_match"] > 0.99
+    flipped = location_angles.restore_check(frame, original, original)
+    assert not flipped["ok"] and "original" in flipped["reason"]
+
+
+def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
+    client = env.client
+    path = os.path.join(env.temp_dir, "shots.mp4")
+    _shots_video(path)
+    with open(path, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("shots.mp4", f.read(), "video/mp4"))]
+        )
+    assert status["status"] == "completed", status
+    video_id = status["results"][0]["picture_id"]
+
+    prompt = client.post(
+        f"{API_PREFIX}/item-sheets/shots/prompt",
+        json={"description": "a pub", "shots": [{"preset": "left"}] * 3},
+    ).json()
+    assert prompt["seconds"] == 8 and "SHOT 4" in prompt["prompt"]
+
+    wrong = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": video_id, "shots": 2},
+    )
+    assert wrong.status_code == 409, wrong.text
+    made = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": video_id, "shots": 3},
+    )
+    assert made.status_code == 200, made.text
+    frames = made.json()["picture_ids"]
+    assert len(frames) == 3 and video_id not in frames
+
+    checked = client.post(
+        f"{API_PREFIX}/item-sheets/shots/check",
+        json={
+            "original_id": frames[0],
+            "pairs": [
+                {"frame_id": frames[1], "restored_id": frames[1]},
+                {"frame_id": frames[2], "restored_id": frames[0]},
+            ],
+        },
+    ).json()["views"]
+    assert [v["ok"] for v in checked] == [True, False]
+    assert (
+        client.post(
+            f"{API_PREFIX}/item-sheets/shots",
+            json={"video_picture_id": 999999, "shots": 3},
+        ).status_code
+        == 404
     )

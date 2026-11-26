@@ -8835,6 +8835,14 @@ inside its lightboxes, so the rail is empty on `/studio`.
   hands the run keys to the scene; while any is drawing the scene is read
   every 3 s, which files finished runs as takes. A clip runs the chosen video
   workflow, from the scene or from a still take.
+- **More angles…** on a location's lightbox opens `io/LocationAnglesDialog`:
+  a source picture from the location, a layout sentence, three views (a
+  preset and words each) and the light. It runs the shots video, asks the
+  server for its frames, runs one restore per frame (held), checks them and
+  offers the views to keep; *Use* restores the kept ones from the Scrapheap,
+  puts them and the video in the location's set and sends the frames to the
+  Scrapheap. The built-ins are found by the names they ship under. Closing it
+  stops its runs.
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always

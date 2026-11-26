@@ -35,6 +35,15 @@
             >New scene here</AppButton
           >
           <AppButton
+            v-if="kind === 'location'"
+            variant="secondary"
+            icon-left="rotate-orbit"
+            :disabled="!item.picture_ids.length"
+            data-testid="studio-more-angles"
+            @click="anglesOpen = true"
+            >More angles…</AppButton
+          >
+          <AppButton
             v-if="kind === 'cast'"
             variant="secondary"
             icon-left="hanger"
@@ -183,6 +192,13 @@
         </details>
       </div>
     </aside>
+    <LocationAnglesDialog
+      v-if="kind === 'location'"
+      :open="anglesOpen"
+      :location="item"
+      @close="anglesOpen = false"
+      @done="emit('changed')"
+    />
   </div>
 </template>
 
@@ -192,10 +208,11 @@
  * angles (a person's wardrobe), and in the inspector its words, who wears it
  * and the scenes it is in. ‹ › steps through its section's items.
  */
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import LocationAnglesDialog from "../io/LocationAnglesDialog.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -218,6 +235,7 @@ const emit = defineEmits(["close", "go", "changed", "new-scene", "item-sheets"])
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+const anglesOpen = ref(false);
 
 const item = computed(() => store.byKey.get(`${props.kind}:${props.itemId}`) || null);
 const angleNames = computed(() => (props.kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES));
@@ -287,6 +305,7 @@ async function stopUsing() {
 }
 
 function onKey(event) {
+  if (anglesOpen.value) return;
   if (event.defaultPrevented || event.target?.closest?.("input, textarea, [role=dialog]")) return;
   if (event.key === "Escape") emit("close");
   else if (event.key === "ArrowLeft") step(-1);

@@ -94,3 +94,45 @@ export async function useItemSheets(kind, pictureIds, boxes = {}) {
     }),
   );
 }
+
+/**
+ * The prompt for a location's shots video (More angles): the picture as shot
+ * 1, then one static shot per row, joined by hard cuts.
+ *
+ * @param {{description: string, layout: string, light?: string,
+ *   shots: Array<{preset: string, words: string}>}} body
+ * @returns {Promise<{prompt: string, seconds: number}>}
+ */
+export async function buildLocationShotsPrompt(body) {
+  return unwrap(apiClient.post("/item-sheets/shots/prompt", body));
+}
+
+/**
+ * Import the sharpest frame of each new shot of a shots video, in shot order.
+ * A 409 when the video holds another number of cuts.
+ *
+ * @param {number} videoPictureId
+ * @param {number} shots - new shots, the picture's own left out.
+ * @returns {Promise<{picture_ids: number[]}>}
+ */
+export async function takeLocationShots(videoPictureId, shots) {
+  return unwrap(
+    apiClient.post("/item-sheets/shots", {
+      video_picture_id: videoPictureId,
+      shots,
+    }),
+  );
+}
+
+/**
+ * Whether each restored view is still its frame and not the original again.
+ *
+ * @param {number} originalId
+ * @param {Array<{frame_id: number, restored_id: number}>} pairs
+ * @returns {Promise<{views: Array<{frame_id: number, restored_id: number, ok: boolean, reason: string}>}>}
+ */
+export async function checkLocationShots(originalId, pairs) {
+  return unwrap(
+    apiClient.post("/item-sheets/shots/check", { original_id: originalId, pairs }),
+  );
+}
