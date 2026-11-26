@@ -1669,9 +1669,12 @@ class ResourceArbiter:
                     self._suspend_failed_for = holder.id
             return False
         if before is not None:
-            # What left the card, unless the training run allocated meanwhile;
-            # never less than the floor. Its freeing meanwhile only makes the
-            # restore wait for more room than it needs.
+            # What left the card, unless the training run allocated meanwhile,
+            # so not less than the floor; a card unread now falls back to the
+            # floor alone. The floor is an estimate: memory of ours outside
+            # torch's allocator beyond it is left to the restore's safety
+            # margin. The run freeing meanwhile only makes the restore wait
+            # for more room than it needs.
             after = self._used_mb(device)
             held = max(before - after if after is not None else 0, floor)
             logger.info(

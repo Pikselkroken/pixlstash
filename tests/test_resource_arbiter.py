@@ -1848,6 +1848,21 @@ def test_a_training_run_allocating_during_the_suspend_leaves_the_floor():
     lease.release()
 
 
+def test_a_card_unread_after_the_suspend_is_sized_at_the_floor():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    fake.own = None
+
+    def leave_and_lose_the_card():
+        fake.used_mb -= 2000
+        fake.unreadable = True
+
+    ckpt.on_suspend = leave_and_lose_the_card
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    assert arb._suspended_mb == CONTEXT_MB + CUDA_CONTEXT_ESTIMATE_MB
+    lease.release()
+
+
 def test_a_suspend_not_possible_now_is_asked_again():
     arb, _fake, ckpt, asked = _suspend_scene()
     ckpt.suspend_result = None
