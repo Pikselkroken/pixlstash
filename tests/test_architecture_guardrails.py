@@ -1406,6 +1406,10 @@ _PROJECT_REFS_IN_TYPED_BODY = frozenset(
         # The same body again, held for ComfyUI to open: `destination` is read
         # by nothing there, and the route is OWNER_ONLY like the two above.
         ("POST", "/api/v1/workflows/run/opening", "body.destination.project_id"),
+        # The Studio (#2819): the project a scene is made in or moved to. Both
+        # OWNER_ONLY, neither in READ_SAFE_POST_PATHS.
+        ("POST", "/api/v1/studio/scenes", "payload.project_id"),
+        ("PATCH", "/api/v1/studio/scenes/{scene_id}", "payload.project_id"),
     }
 )
 

@@ -13,8 +13,14 @@
 import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useVersionCheck } from "../composables/useVersionCheck";
-import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
+import {
+  MODEL_SHELF_ROUTES,
+  STUDIO_ROUTES,
+  WORKFLOW_ROUTES,
+} from "../router/routeNames";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useProjectStore } from "../stores/useProjectStore";
+import { NOT_IN_PROJECT_QUERY } from "../stores/useViewStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { isReadOnly } from "../utils/apiClient";
@@ -44,6 +50,7 @@ const isMac = /mac/i.test(
 
 const route = useRoute();
 const modelShelfStore = useModelShelfStore();
+const projectStore = useProjectStore();
 const tasksStore = useTasksStore();
 const userPrefsStore = useUserPrefsStore();
 
@@ -54,8 +61,33 @@ const currentWorkspace = computed(() =>
     ? "workflows"
     : MODEL_SHELF_ROUTES.includes(route.name)
       ? "models"
-      : "media",
+      : STUDIO_ROUTES.includes(route.name)
+        ? "studio"
+        : "media",
 );
+
+// The project is one choice across Media and the Studio (#2819): the project
+// store holds it, Media's route says it and the Studio's `?project=` does.
+// "any", "none" or a project id.
+const projectScope = computed(() =>
+  projectStore.projectViewMode !== "project"
+    ? "any"
+    : (projectStore.selectedProjectId ?? "none"),
+);
+
+/** The project a remembered Media place is in, read off its route. */
+function mediaScopeOf(place) {
+  const match = /^\/project\/(\d+)/.exec(place?.path || "");
+  if (match) return Number(match[1]);
+  return place?.query?.project === NOT_IN_PROJECT_QUERY ? "none" : "any";
+}
+
+/** Media's front page for a scope, as its own selector would land. */
+function mediaFrontPage(scope) {
+  if (scope === "any") return { path: "/", query: {} };
+  if (scope === "none") return { path: "/", query: { project: NOT_IN_PROJECT_QUERY } };
+  return { path: `/project/${scope}`, query: {} };
+}
 
 // Where Media and Models were left, so switching back lands on the sidebar
 // row you were on (Favourites in a project, a set, Duplicates, the shelf's
@@ -82,6 +114,11 @@ watch(
       const query = { ...route.query };
       for (const key of OVERLAY_QUERY) delete query[key];
       leftAt.value.media = { path: route.path, query };
+    } else if (currentWorkspace.value === "studio") {
+      // The section and the item open in it; the project goes with the store.
+      const query = { ...route.query };
+      delete query.project;
+      leftAt.value.studio = { path: route.path, query };
     } else if (currentWorkspace.value === "models") {
       const query = {};
       for (const key of MODELS_KEPT_QUERY) {
@@ -101,8 +138,31 @@ const workspaces = computed(() => {
   const token = route.query.token;
   const at = (path) => (token ? { path, query: { token } } : path);
   const current = currentWorkspace.value;
+  // Back to Media in the project the Studio was left in: the remembered place
+  // when it is in that project, else that project's front page.
+  const media = leftAt.value.media;
+  const scope = projectScope.value;
+  const mediaTo =
+    media && mediaScopeOf(media) === scope
+      ? media
+      : media || scope !== "any"
+        ? mediaFrontPage(scope)
+        : at("/");
+  const studioQuery = { ...(leftAt.value.studio?.query ?? {}) };
+  delete studioQuery.project;
+  if (scope !== "any") studioQuery.project = String(scope);
+  if (token) studioQuery.token = token;
   return [
-    { id: "media", label: "Media", to: leftAt.value.media ?? at("/") },
+    { id: "media", label: "Media", to: mediaTo },
+    {
+      id: "studio",
+      label: "Studio",
+      to: { path: "/studio", query: studioQuery },
+      // Owner-only, like Workflows: scenes are not part of a shared view.
+      locked: isReadOnly.value
+        ? "The Studio is only available in your own library"
+        : "",
+    },
     {
       id: "workflows",
       label: "Workflows",

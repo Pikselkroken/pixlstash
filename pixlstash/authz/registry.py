@@ -1571,6 +1571,51 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Cut outfit, location or prop sheets into pictures; POST blocked for READ tokens; owner only",
     ),
+    # ── studio.py ───────────────────────────────────────────────────────────
+    ("GET", "/api/v1/studio/overview"): RoutePolicy(
+        _OWNER,
+        justification="The Studio's scenes, cast, outfits, locations and props; owner only. Under READ_BLOCKED_GET_PREFIXES too",
+    ),
+    ("POST", "/api/v1/studio/scenes"): RoutePolicy(
+        _OWNER,
+        justification="Make a scene; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/studio/scenes/{scene_id}"): RoutePolicy(
+        _OWNER,
+        justification="A scene, its takes and its shoots; owner only. Under READ_BLOCKED_GET_PREFIXES too",
+    ),
+    ("PATCH", "/api/v1/studio/scenes/{scene_id}"): RoutePolicy(
+        _OWNER,
+        justification="Change a scene; PATCH blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/studio/scenes/{scene_id}"): RoutePolicy(
+        _OWNER,
+        justification="Delete a scene; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/studio/scenes/{scene_id}/shot"): RoutePolicy(
+        _OWNER,
+        justification="Write a scene's shot prompt; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/studio/scenes/{scene_id}/runs"): RoutePolicy(
+        _OWNER,
+        justification="Follow a scene's shoots; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/studio/scenes/{scene_id}/takes/{picture_id}"): RoutePolicy(
+        _OWNER,
+        justification="Take a picture out of a scene's takes; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/studio/items/{set_id}"): RoutePolicy(
+        _OWNER,
+        justification="Use a set as an outfit, location or prop; PUT blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/studio/items/{set_id}"): RoutePolicy(
+        _OWNER,
+        justification="Stop using a set in the Studio; DELETE blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/studio/favourites"): RoutePolicy(
+        _OWNER,
+        justification="Star a Studio item; PUT blocked for READ tokens; owner only",
+    ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
     ("GET", "/api/v1/picture_sets"): _LIST_AWARE,
     ("GET", "/api/v1/picture_sets/locked-members"): _LIST_AWARE,

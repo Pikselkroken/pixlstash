@@ -31,7 +31,9 @@ const api = vi.hoisted(() => ({
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
   sheetCopyWorkflow: vi.fn(),
+  listSetInStudio: vi.fn(),
 }));
+vi.mock("../../api/studio", () => ({ listSetInStudio: api.listSetInStudio }));
 vi.mock("../../api/characterSheets", () => ({
   buildSheetPrompt: api.buildSheetPrompt,
   rankSheets: api.rankSheets,
@@ -146,6 +148,7 @@ beforeEach(() => {
     picture_set: { id: 8, name: "Mustard raincoat" },
   });
   api.bulkAddPicturesToSet.mockResolvedValue({});
+  api.listSetInStudio.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -244,6 +247,8 @@ describe("CharacterSheetStep: an outfit", () => {
       parent_character_id: 3,
     });
     expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(8, [51, 52, 53, 54]);
+    // The set is the Studio's outfit (#2819).
+    expect(api.listSetInStudio).toHaveBeenCalledWith(8, "outfit");
     expect(wrapper.emitted("done")[0]).toEqual([
       [51, 52, 53, 54],
       { id: 8, name: "Mustard raincoat" },

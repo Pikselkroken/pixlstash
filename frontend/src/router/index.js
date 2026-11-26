@@ -44,6 +44,14 @@ import App from "../App.vue";
 //                                            Built by `utils/loraChain.editLorasRoute`,
 //                                            honoured by WorkflowTab.
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
+//   /studio                                 → the Studio (#2819). Its query is its
+//                                            place: `project` (an id or `none`;
+//                                            absent is Any project), `section`
+//                                            (scenes, favourites, cast, locations,
+//                                            props) and `open` (`<kind>:<id>`, an
+//                                            item's lightbox). `via=sidebar` says
+//                                            the lightbox was opened from a sidebar
+//                                            row, so Esc goes to its section's grid.
 //
 //   Any of the above routes may also carry:
 //   ?path=<absolute folder>      → Narrow the grid to one folder by path. The
@@ -99,6 +107,7 @@ const routes = [
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   { path: "/workflows", name: "workflows", component: App },
+  { path: "/studio", name: "studio", component: App },
   // The runs were briefly a destination of their own. They are a view of the
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },

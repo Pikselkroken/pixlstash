@@ -83,6 +83,7 @@ import { useLibrariesStore } from "../stores/useLibrariesStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useFolderMappingStore } from "../stores/useFolderMappingStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
+import { useProjectStore } from "../stores/useProjectStore";
 import { isReadOnly } from "../utils/apiClient";
 import TitleBar from "./TitleBar.vue";
 import Tooltip from "./widgets/Tooltip.vue";
@@ -124,7 +125,9 @@ function makeRouter() {
       { path: "/", name: "all-pictures", component: page },
       { path: "/set/:id", name: "set", component: page },
       { path: "/scrapheap", name: "scrapheap", component: page },
+      { path: "/project/:id", name: "project", component: page },
       { path: "/workflows", name: "workflows", component: page },
+      { path: "/studio", name: "studio", component: page },
       { path: "/models", name: "models", component: page },
       { path: "/models/runs", name: "models-runs", component: page },
     ],
@@ -211,6 +214,7 @@ describe("the workspace switch", () => {
       "A",
       "A",
       "A",
+      "A",
     ]);
   });
 
@@ -218,15 +222,51 @@ describe("the workspace switch", () => {
     const wrapper = await mountBar("/");
     expect(segments(wrapper).map((el) => el.attributes("href"))).toEqual([
       "/",
+      "/studio",
       "/workflows",
       "/models",
     ]);
+  });
+
+  // The Studio is the fourth tab, after Media (#2819), and the project is one
+  // choice across the two.
+  it("takes Media's project into the Studio", async () => {
+    const projectStore = useProjectStore();
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId = 7;
+    const wrapper = await mountBar("/project/7");
+    expect(segment(wrapper, "Studio").attributes("href")).toBe("/studio?project=7");
+  });
+
+  it("goes back to Media in the project picked in the Studio", async () => {
+    // Media was left on the library; the Studio then picked project 7.
+    const wrapper = await mountBar("/set/3");
+    await router.push("/studio?project=7&section=props");
+    const projectStore = useProjectStore();
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId = 7;
+    await flushPromises();
+    expect(segment(wrapper, "Studio").attributes("aria-current")).toBe("page");
+    expect(segment(wrapper, "Media").attributes("href")).toBe("/project/7");
+    // Not in a project is Media's own spelling of it.
+    projectStore.selectedProjectId = null;
+    await flushPromises();
+    expect(segment(wrapper, "Media").attributes("href")).toBe("/?project=none");
+    // And Any project goes back to where Media was left.
+    projectStore.projectViewMode = "global";
+    await flushPromises();
+    expect(segment(wrapper, "Media").attributes("href")).toBe("/set/3");
+    // The Studio keeps its section when it is left and come back to.
+    await segment(wrapper, "Media").trigger("click");
+    await flushPromises();
+    expect(segment(wrapper, "Studio").attributes("href")).toBe("/studio?section=props");
   });
 
   it.each([
     ["/set/3", "Media"],
     ["/scrapheap", "Media"],
     ["/workflows", "Workflows"],
+    ["/studio", "Studio"],
     ["/models", "Models"],
     // The shelf's second route is still the Models workspace.
     ["/models/runs", "Models"],
@@ -370,6 +410,7 @@ describe("a read-only session", () => {
     const owner = await mountBar("/set/3?token=example-share");
     expect(segments(owner).map((el) => el.attributes("href"))).toEqual([
       "/set/3?token=example-share",
+      "/studio?token=example-share",
       "/workflows?token=example-share",
       "/models?token=example-share",
     ]);

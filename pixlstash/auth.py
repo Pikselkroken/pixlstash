@@ -249,6 +249,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # (Open with). LOOPBACK_OWNER_ONLY at the gate; untemplated (the picture
         # is a query parameter) precisely so it can sit on this belt.
         "/api/v1/open-with",
+        # The Studio's scenes, cast and items (#2819); its templated reads sit
+        # under the /api/v1/studio/ prefix below.
+        "/api/v1/studio/overview",
         # The plugin list carries the caller's own tagger_settings, which is
         # user settings exactly like /users/me/config above - a plugin may
         # declare a free-text parameter and the owner may have typed a path
@@ -425,6 +428,8 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/recipes/",
     "/api/v1/reviews/",
     "/api/v1/snapshots/",
+    # The Studio (#2819): the owner's scenes, takes and the prompts they write.
+    "/api/v1/studio/",
     "/api/v1/training/jobs/",
     "/api/v1/workflows/",
 )

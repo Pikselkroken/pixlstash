@@ -21,6 +21,7 @@ import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useWorkflowTemplatesStore } from "./stores/useWorkflowTemplatesStore";
+import { useStudioStore } from "./stores/useStudioStore";
 import { useTrainingStore } from "./stores/useTrainingStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
@@ -115,6 +116,14 @@ const WorkflowsView = defineAsyncComponent(
 // Its right rail (v1.12 F3), a component of its own rather than a branch
 // inside StatsSidebar: that panel fetches on watchers, so a
 // hidden-but-mounted copy would keep asking for numbers nobody is looking at.
+// The Studio (#2819): its sidebar and its screen, loaded when it is opened.
+// The screen draws its own inspector in a lightbox, so the rail stays empty.
+const StudioSidebar = defineAsyncComponent(
+  () => import("./components/panels/StudioSidebar.vue"),
+);
+const StudioView = defineAsyncComponent(
+  () => import("./components/views/StudioView.vue"),
+);
 const TemplateInspector = defineAsyncComponent(
   () => import("./components/panels/TemplateInspector.vue"),
 );
@@ -150,6 +159,7 @@ const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const workflowTemplatesStore = useWorkflowTemplatesStore();
+const studioStore = useStudioStore();
 const trainingStore = useTrainingStore();
 const userPrefsStore = useUserPrefsStore();
 const runDialogStore = useRunDialogStore();
@@ -250,6 +260,7 @@ const {
   isMovesView,
   isInboxView,
   isWorkflowsView,
+  isStudioView,
   handleSelectInsights,
   handleSelectMoves,
   handleSelectInbox,
@@ -443,6 +454,7 @@ const tagReviewBackLabel = computed(() => {
   if (isInboxView.value) return "Inbox";
   if (isWorkflowsView.value) return "Workflows";
   if (isModelsView.value) return "Models";
+  if (isStudioView.value) return "Studio";
   return activeCategoryLabel.value;
 });
 
@@ -604,6 +616,16 @@ function onSheetsCut({ kind, character, pictureIds, set }) {
   const n = pictureIds.length;
   if (kind && kind !== "character") {
     if (!set) return;
+    if (isStudioView.value) {
+      // Already where it is listed: the Studio reads it again.
+      studioStore.refresh();
+      noticeStore.push({
+        level: "success",
+        text: `Made ${set.name} from ${n} ${n === 1 ? "picture" : "pictures"}.`,
+        key: `item-sheets-cut-${set.id}`,
+      });
+      return;
+    }
     noticeStore.push({
       level: "success",
       text: `Made ${set.name}: ${n} ${n === 1 ? "picture" : "pictures"} in a new set.`,
@@ -725,7 +747,8 @@ watch(
 watch(
   () => whatsChanged.reopened,
   () => {
-    if (isModelsView.value || isWorkflowsView.value) router.push("/");
+    if (isModelsView.value || isWorkflowsView.value || isStudioView.value)
+      router.push("/");
   },
 );
 
@@ -808,6 +831,7 @@ const isGridView = computed(
     !isInsightsView.value &&
     !isMovesView.value &&
     !isWorkflowsView.value &&
+    !isStudioView.value &&
     !buildingSet.value,
 );
 watch(
@@ -1087,8 +1111,9 @@ defineExpose({
             @open-settings="openSettingsDialog"
           />
           <ModelsSideBar v-else-if="isModelsView" />
+          <StudioSidebar v-else-if="isStudioView" />
           <div
-            v-show="!isWorkflowsView && !isModelsView"
+            v-show="!isWorkflowsView && !isModelsView && !isStudioView"
             style="display: contents"
           >
           <SideBar
@@ -1214,6 +1239,10 @@ defineExpose({
                 v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
               />
+              <StudioView
+                v-else-if="isStudioView"
+                @item-sheets="openSheets($event)"
+              />
               <!-- A training set still being built shows its build, not its
                    grid; created, it is an ordinary set and the grid returns. -->
               <TrainingSetBuild
@@ -1301,6 +1330,8 @@ defineExpose({
              media rail, beside Details in the band both panes draw, so it
              sits just ahead of the stats panel. -->
         <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
+        <!-- The Studio draws its inspector inside its own lightboxes. -->
+        <template v-else-if="isStudioView"></template>
         <template v-else>
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
