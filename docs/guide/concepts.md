@@ -87,9 +87,10 @@ are under `/api/v1`.
 | **2 libraries** | another library is registered | `GET /libraries` → 2 or more |
 | **snapshot** | a snapshot exists | `GET /snapshots` → non-empty |
 | **history** | an undoable operation exists | `GET /operations/undo-state` → something to undo |
-| **scene** | a Studio scene exists | **needs a count** (Studio is not on `develop`) |
+| **location** | a Studio location exists | `GET /studio/overview` → `locations` non-empty |
+| **scene** | a Studio scene exists | `GET /studio/overview` → `scenes` non-empty |
 
-The two "needs a count" rows are left for pass 2 or the build to decide. Do not
+The "needs a count" rows are left for pass 2 or the build to decide. Do not
 answer them by reading the library database.
 
 ## New in 2.x
@@ -111,7 +112,8 @@ that owns it, and opens that concept's matching task.
 | Video frames in the lightbox | Browse & inspect › Video storyboard | next |
 | Faces and reference cluster | Similar pictures & faces › Face clusters | next |
 | Extend a picture (outpaint) | Edit a picture › Extend | next (**unstable**) |
-| Outfit, location and prop sheets | Studio › Outfit sheets | next (**unstable**) |
+| The Studio: scenes with a cast, locations and props | Studio › Stage a scene | next (**unstable**) |
+| Outfit, location and prop sheets | Studio › Cast and wardrobe | next (**unstable**) |
 
 "next" is what `changelog.d/` holds for the coming release. The release cut
 decides the final list: a headline is added here when its fragment lands, and
@@ -392,23 +394,21 @@ Keep ComfyUI workflows as cards, swap their models and expose what you change.
 
 Dress your cast, draw locations and props, and stage scenes. **Unstable.**
 
-- **Goal:** Generate · **Workspace:** Studio, **pending**: no Studio workspace exists on `develop`; until it does, the live tasks start from the Media sidebar
-- **Needs:** person (see the departure note on location and prop sheets)
-- **Startup:** yes (slide 6) · **New:** yes (outfit, location and prop sheets)
-- **Illustration (unstable):** a person's outfit sheet, four angles of one outfit drawn together.
+- **Goal:** Generate · **Workspace:** Studio (title bar *Studio*)
+- **Needs:** person (a scene can be made with nothing, but the Studio's core is its cast)
+- **Startup:** yes (slide 6) · **New:** yes (the Studio; outfit, location and prop sheets)
+- **Illustration (unstable):** a scene's stage: two of the cast placed on a location's picture, the Takes strip below.
 
 | Task | Entry point | File | Needs | Illustration |
 |---|---|---|---|---|
-| Outfit sheets | right-click a person › *Draw outfit sheets…* | `frontend/src/components/panels/SideBar.vue` | person | four angles of one outfit, the kept sheet marked (**unstable**) |
-| Location sheets | right-click the *Sets* heading › *Draw location sheets…* | `frontend/src/components/panels/SideBar.vue` | none | a location drawn from four sides (**unstable**) |
-| Prop sheets | right-click the *Sets* heading › *Draw prop sheets…* | `frontend/src/components/panels/SideBar.vue` | none | one prop drawn from four sides (**unstable**) |
-| Cast and wardrobe | **no entry point yet** (Studio workspace) | — | person | a cast list with each person's outfits (**unstable**) |
-| Scenes and takes | **no entry point yet** (Studio workspace) | — | scene | a scene with its cast, location and takes (**unstable**) |
-| More angles | **no entry point yet** | — | set | one location from new angles (**unstable**) |
-
-The three "no entry point yet" tasks stay in the catalogue because the owner
-put Studio in scope. They get their entry points when the Studio workspace
-lands, and no wizard or screenshot is built for them before that.
+| Open the Studio | title bar *Studio*; sidebar Scenes, Favourites, Cast, Locations, Props | `frontend/src/components/TitleBar.vue`, `frontend/src/components/panels/StudioSidebar.vue` | none | the Studio sidebar with a project picked (**unstable**) |
+| Make a scene | Studio sidebar › *New scene* › *Make scene* | `frontend/src/components/views/StudioView.vue` | none | the New scene dialog with a name and a location (**unstable**) |
+| Cast and wardrobe | Studio › *Cast* › a person › *Wardrobe* › *New outfit…*; or right-click a person in Media › *Draw outfit sheets…* | `frontend/src/components/views/StudioItem.vue`, `frontend/src/components/panels/SideBar.vue` | person | a person's wardrobe, each outfit drawn from four angles (**unstable**) |
+| Locations | Studio › *Locations* › *Add a set…* or *New sheets…*; or right-click the Media *Sets* heading › *Draw location sheets…* | `frontend/src/components/views/StudioView.vue`, `frontend/src/components/views/StudioItem.vue` | none | a location's Wide, Reverse, Left and Right views (**unstable**) |
+| More angles | Studio › a location › *More angles…* | `frontend/src/components/views/StudioItem.vue`, `frontend/src/components/io/LocationAnglesDialog.vue` | location | new views of one place from one of its pictures (**unstable**) |
+| Props | Studio › *Props* › *Add a set…* or *New sheets…*; or the Media *Sets* heading › *Draw prop sheets…* | `frontend/src/components/views/StudioView.vue`, `frontend/src/components/views/StudioItem.vue` | none | one prop from Front, ¾, Side and Back (**unstable**) |
+| Stage a scene | a scene › place the cast on the location (drag, or the arrow keys); *Outfit*, *Pose*, *Brings* per person | `frontend/src/components/views/StudioScene.vue` | scene | the stage with each person's mark and the inspector showing Wearing and Doing (**unstable**) |
+| Shoot takes | a scene › *Shoot* (stills or a clip); *Make a clip from this take* | `frontend/src/components/views/StudioScene.vue` | scene | the Takes strip with three stills and a clip (**unstable**) |
 
 ## Edit
 
@@ -615,12 +615,8 @@ Checking each task against `develop` changed these:
 - **People › Colour and icon is dropped.** People have no colour or icon
   control; sets do, so *Icon and colour* moved to Sets & projects. *Assign
   faces* needs a face and a person; *Draw a face box* needs only a picture.
-- **Studio has no workspace on `develop`.** Its workspace is marked pending,
-  and its live tasks (outfit, location and prop sheets) start from sidebar
-  menus. Cast and wardrobe, scenes and takes, and *More angles* have no entry
-  point anywhere and are kept as placeholders. Location and prop sheets need
-  nothing, but Studio's core is the cast, so the concept needs a person, as
-  the plan and the design both draw it.
+- **Studio needs a person**, though *Make a scene*, locations and props
+  need nothing: its core is the cast, as the plan and the design draw it.
 - **Extend needs an Outpaint workflow**, made by *Convert to Outpainting
   workflow*. That workflow is library content, so the Extend task greys on its
   own ("First: Workflows"), though Edit a picture as a concept does not. The
@@ -638,6 +634,6 @@ Checking each task against `develop` changed these:
 - **F1 is taken.** `?` and F1 open Keyboard shortcuts today, and the design
   gives F1 to the Guide. The build must choose one: move shortcuts to `?`
   only, or give the Guide another key.
-- **Two needs have no endpoint yet** ("person with a LoRA", "text in a
-  picture") and Studio's "scene" has nothing to count. They are marked
-  "needs a count".
+- **Some needs have no endpoint yet** ("person with a LoRA", "text in a
+  picture", a share of a person, set or project). They are marked "needs a
+  count".
