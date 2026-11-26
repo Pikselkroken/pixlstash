@@ -1017,10 +1017,13 @@ async function follow(runs) {
     schedulePoll();
   } catch (e) {
     if (!alive) return;
-    noticeStore.error(`The shoot started, but the scene couldn't take its runs yet; trying again. ${errorMessage(e, "")}`.trim(), {
-      key: "studio-scene-follow",
-    });
-    setTimeout(() => follow(runs), POLL_MS);
+    // A refusal (the scene is gone) won't change on a retry; a lost answer may.
+    const refused = e?.response?.status < 500;
+    noticeStore.error(
+      `The shoot started, but the scene couldn't take its runs${refused ? "" : " yet; trying again"}. ${errorMessage(e, "")}`.trim(),
+      { key: "studio-scene-follow" },
+    );
+    if (!refused) setTimeout(() => follow(runs), POLL_MS);
   }
 }
 

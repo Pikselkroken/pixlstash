@@ -311,6 +311,17 @@ describe("a scene", () => {
     expect(wrapper.findAll(".scene-take--drawing")).toHaveLength(2);
   });
 
+  it("stops handing a shoot's runs over when the scene refuses them", async () => {
+    vi.useFakeTimers();
+    api.followSceneRuns.mockRejectedValue(
+      Object.assign(new Error("gone"), { response: { status: 404, data: { detail: "No scene 1." } } }),
+    );
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(api.followSceneRuns).toHaveBeenCalledTimes(1);
+  });
+
   it("makes a clip from a still take with the video workflow", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-take-900"]').trigger("click");

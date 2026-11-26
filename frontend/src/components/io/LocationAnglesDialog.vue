@@ -285,10 +285,19 @@ async function start(body) {
 async function finished(keys) {
   const mine = drawing;
   const done = new Map();
+  let misses = 0;
   while (alive && mine === drawing && done.size < keys.length) {
     for (const key of keys) {
       if (done.has(key)) continue;
-      const outcome = await getRunOutcome(key);
+      let outcome;
+      try {
+        outcome = await getRunOutcome(key);
+        misses = 0;
+      } catch (e) {
+        // One lost answer must not throw away minutes of drawing.
+        if ((misses += 1) >= 3) throw e;
+        continue;
+      }
       if (outcome.status === "failed") {
         throw new Error(outcome.message || "A run failed.");
       }
