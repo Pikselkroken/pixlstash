@@ -213,7 +213,7 @@ def env():
         try:
             client = TestClient(server.api)
             resp = client.post(
-                "/login", json={"username": "testuser", "password": "testpassword"}
+                "/login", json={"username": "testuser", "password": "example-password"}
             )
             assert resp.status_code == 200, resp.text
             yield SimpleNamespace(client=client, server=server, temp_dir=temp_dir)
@@ -337,6 +337,28 @@ def test_leaving_the_cast_puts_down_what_was_held(env):
     assert resp.json()["props"] == [
         {"set_id": prop, "state": "", "held_by": None, "box": None}
     ]
+
+
+def test_a_scene_whose_person_was_deleted_can_still_be_renamed(env):
+    client = env.client
+    person = _person(client)
+    prop = _item(client, "prop")
+    scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Gone"}).json()
+    url = f"{API_PREFIX}/studio/scenes/{scene['id']}"
+    client.patch(
+        url,
+        json={
+            "cast": [{"character_id": person}],
+            "props": [{"set_id": prop, "held_by": person}],
+        },
+    )
+    assert client.delete(f"{API_PREFIX}/characters/{person}").status_code == 200
+    resp = client.patch(url, json={"name": "Renamed"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Renamed"
+    # The shot leaves out who is gone rather than failing.
+    shot = client.post(f"{url}/shot", json={}).json()
+    assert "Person" not in shot["prompt"]
 
 
 def test_a_scene_naming_a_missing_set_is_refused(env):

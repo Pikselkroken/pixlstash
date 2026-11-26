@@ -94,8 +94,8 @@ class SceneUpdate(BaseModel):
     location_set_id: Optional[int] = None
     camera: Optional[Camera] = None
     setting: Optional[Setting] = None
-    cast: Optional[list[CastMember]] = None
-    props: Optional[list[PropPlacement]] = None
+    cast: Optional[list[CastMember]] = Field(default=None, max_length=32)
+    props: Optional[list[PropPlacement]] = Field(default=None, max_length=32)
 
 
 class ShotRequest(BaseModel):
@@ -187,8 +187,13 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="No scene with that id.")
         return scene
 
-    def _check_refs(session: Session, payload) -> None:
-        """Every id a scene names is there: a 404 names the one that is not."""
+    def _check_refs(session: Session, payload, holders=None) -> None:
+        """Every id the request names is there: a 404 names the one that is not.
+
+        Only what is sent is checked, so a scene whose person or set was
+        deleted since can still be renamed. A prop's holder must be in
+        *holders*, the cast the scene will have (the sent one by default).
+        """
         if getattr(payload, "project_id", None) is not None:
             if session.get(Project, payload.project_id) is None:
                 raise HTTPException(status_code=404, detail="No project with that id.")
@@ -198,9 +203,11 @@ def create_router(server) -> APIRouter:
             character_ids.add(member.character_id)
             if member.outfit_set_id is not None:
                 set_ids.add(member.outfit_set_id)
+        if holders is None:
+            holders = character_ids
         for prop in getattr(payload, "props", None) or []:
             set_ids.add(prop.set_id)
-            if prop.held_by is not None and prop.held_by not in character_ids:
+            if prop.held_by is not None and prop.held_by not in holders:
                 raise HTTPException(
                     status_code=422,
                     detail="A prop can only be held by someone in the scene's cast.",
@@ -531,11 +538,13 @@ def create_router(server) -> APIRouter:
 
         def update(session: Session):
             scene = _scene(session, scene_id)
-            check = payload.model_copy()
-            if "cast" not in sent:
-                # A prop's holder is checked against the cast it will have.
-                check.cast = [CastMember(**m) for m in scene.cast or []]
-            _check_refs(session, check)
+            # A prop's holder is checked against the cast the scene will have.
+            holders = (
+                {m.character_id for m in payload.cast}
+                if "cast" in sent and payload.cast is not None
+                else {m.get("character_id") for m in scene.cast or []}
+            )
+            _check_refs(session, payload, holders)
             if payload.name is not None:
                 scene.name = payload.name.strip()
             if "project_id" in sent:
