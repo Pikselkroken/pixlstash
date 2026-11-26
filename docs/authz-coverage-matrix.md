@@ -381,6 +381,20 @@ listing to suppress.
 | POST | `/api/v1/characters/{character_id}/sheets/use` | owner_only |  | Cut sheets into pictures; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/item-sheets/rank` | owner_only |  | Rank drawn outfit, location or prop sheets; POST blocked for READ tokens; owner only |
 | POST | `/api/v1/item-sheets/use` | owner_only |  | Cut outfit, location or prop sheets into pictures; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/item-sheets/shots/prompt` | owner_only |  | Write a location's shots prompt; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/item-sheets/shots` | owner_only |  | Take a location's new views out of its shots video; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/item-sheets/shots/check` | owner_only |  | Check a location's restored views; POST blocked for READ tokens; owner only |
+| GET | `/api/v1/studio/overview` | owner_only |  | The Studio's scenes, cast, outfits, locations and props; owner only. Under READ_BLOCKED_GET_PREFIXES too |
+| POST | `/api/v1/studio/scenes` | owner_only |  | Make a scene; POST blocked for READ tokens; owner only |
+| GET | `/api/v1/studio/scenes/{scene_id}` | owner_only |  | A scene, its takes and its shoots; owner only. Under READ_BLOCKED_GET_PREFIXES too |
+| PATCH | `/api/v1/studio/scenes/{scene_id}` | owner_only |  | Change a scene; PATCH blocked for READ tokens; owner only |
+| DELETE | `/api/v1/studio/scenes/{scene_id}` | owner_only |  | Delete a scene; DELETE blocked for READ tokens; owner only |
+| POST | `/api/v1/studio/scenes/{scene_id}/shot` | owner_only |  | Write a scene's shot prompt; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/studio/scenes/{scene_id}/runs` | owner_only |  | Follow a scene's shoots; POST blocked for READ tokens; owner only |
+| DELETE | `/api/v1/studio/scenes/{scene_id}/takes/{picture_id}` | owner_only |  | Take a picture out of a scene's takes; DELETE blocked for READ tokens; owner only |
+| PUT | `/api/v1/studio/items/{set_id}` | owner_only |  | Use a set as an outfit, location or prop; PUT blocked for READ tokens; owner only |
+| DELETE | `/api/v1/studio/items/{set_id}` | owner_only |  | Stop using a set in the Studio; DELETE blocked for READ tokens; owner only |
+| PUT | `/api/v1/studio/favourites` | owner_only |  | Star a Studio item; PUT blocked for READ tokens; owner only |
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |

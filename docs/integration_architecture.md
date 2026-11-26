@@ -30,6 +30,7 @@
 20. [Folder-Structure API: read, commit, layout and moves](#20-folder-structure-api-read-commit-layout-and-moves) — incl. [20.1 Read](#201-read), [20.2 Commit](#202-commit), [20.3 Layout & Move](#203-layout--move), [20.4 Move Reconciliation](#204-move-reconciliation)
 21. [About your library](#21-about-your-library)
 22. [Text in Pictures](#22-text-in-pictures)
+23. [The Studio](#23-the-studio)
 
 ---
 
@@ -4310,3 +4311,21 @@ Text read out of a picture is its own data: never `description`, never tags.
 ---
 
 *When a change needs documenting, edit the section that covers its subsystem, adding a numbered subsection there, and to the Table of Contents, if it needs one. Never add a new `##` section named for a feature, a release or a phase.*
+
+
+## 23. The Studio
+
+Every route is under `/api/v1/studio/` and `OWNER_ONLY` (#2819). The client
+never composes a prompt: it asks the scene for one.
+
+| Step | Call | Notes |
+|---|---|---|
+| List | `GET /studio/overview?project_id=` | id, `none`, or absent for any project |
+| Make, change | `POST /studio/scenes`, `PATCH /studio/scenes/{id}` | `cast` and `props` are replaced whole; a prop's `held_by` must be in the cast (422) |
+| Shot | `POST /studio/scenes/{id}/shot` | `{kind, from_picture_id?, max_references}` → `{prompt, negative, references, loras}` |
+| Run | `POST /workflows/run` | `inputs` filled in order from `references`, one per non-fixed picture input the pre-flight names |
+| Follow | `POST /studio/scenes/{id}/runs` | the run keys the run answered with |
+| Read | `GET /studio/scenes/{id}` | files ended runs as `takes`; `ended` says `completed`, `failed` or `lost` |
+| Items | `PUT`/`DELETE /studio/items/{set_id}` | a set as an outfit, location or prop; the sheet dialog calls `PUT` for each set it makes |
+| Favourites | `PUT /studio/favourites` | `{kind, item_id, favourite}` |
+| More angles | `POST /item-sheets/shots/prompt`, run *MiniMax H3 Location Shots*, `POST /item-sheets/shots`, run *MiniMax H3 Restore a Frame* per frame (`hold`), `POST /item-sheets/shots/check` | the client orders the runs; the server writes the prompt, finds the frames and checks the views |

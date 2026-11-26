@@ -1,4 +1,8 @@
-import { MODEL_SHELF_ROUTES, WORKFLOW_ROUTES } from "../router/routeNames";
+import {
+  MODEL_SHELF_ROUTES,
+  STUDIO_ROUTES,
+  WORKFLOW_ROUTES,
+} from "../router/routeNames";
 import { computed, nextTick, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { isReadOnly } from "../utils/apiClient";
@@ -429,6 +433,12 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && WORKFLOW_ROUTES.includes(route.name),
   );
 
+  // The Studio (#2819) is a destination for the same reasons: it lists scenes,
+  // not pictures, and every /studio route is owner-only.
+  const isStudioView = computed(
+    () => !isReadOnly.value && STUDIO_ROUTES.includes(route.name),
+  );
+
   // …and a pasted /models URL is bounced to the library rather than left on a
   // route that renders the grid under a Models heading. The title bar's segment cannot
   // reach this: it is inert for a READ session, so the only way in is an
@@ -458,6 +468,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         readOnly &&
         (MODEL_SHELF_ROUTES.includes(name) ||
           WORKFLOW_ROUTES.includes(name) ||
+          STUDIO_ROUTES.includes(name) ||
           name === "insights" ||
           name === "moves" ||
           name === "inbox")
@@ -580,6 +591,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isMovesView,
     isInboxView,
     isWorkflowsView,
+    isStudioView,
     handleSelectInsights,
     handleSelectMoves,
     handleSelectInbox,

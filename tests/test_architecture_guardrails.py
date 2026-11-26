@@ -164,6 +164,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
         "pixlstash/services/share_service.py",  # vault-injection pattern
         "pixlstash/services/character_sheet.py",  # vault-injection pattern; thin wrappers around the sheet-face read and the panel filing, beside the import of the cut panels
+        "pixlstash/services/location_angles.py",  # vault-injection pattern; thin wrappers around pictures_in_session and the frame filing, beside the import of the video's frames
         "pixlstash/services/face_clusters.py",  # vault-injection pattern; thin wrappers around read_person_in_session and the reference-cluster write, the clustering run outside the reader
         "pixlstash/services/tag_prediction_service.py",  # vault-injection pattern
         "pixlstash/services/tag_suggestion_service.py",  # vault-injection pattern; review-queue writeback
@@ -1406,6 +1407,10 @@ _PROJECT_REFS_IN_TYPED_BODY = frozenset(
         # The same body again, held for ComfyUI to open: `destination` is read
         # by nothing there, and the route is OWNER_ONLY like the two above.
         ("POST", "/api/v1/workflows/run/opening", "body.destination.project_id"),
+        # The Studio (#2819): the project a scene is made in or moved to. Both
+        # OWNER_ONLY, neither in READ_SAFE_POST_PATHS.
+        ("POST", "/api/v1/studio/scenes", "payload.project_id"),
+        ("PATCH", "/api/v1/studio/scenes/{scene_id}", "payload.project_id"),
     }
 )
 

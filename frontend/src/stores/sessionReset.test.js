@@ -56,6 +56,7 @@ import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
+import { useStudioStore } from "./useStudioStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
@@ -77,6 +78,17 @@ import { useTagGroupsStore } from "./useTagGroupsStore";
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // The owner's scenes, cast, outfits, locations and props (#2819): every
+    // /studio route is owner-only, so a session change must not keep them.
+    name: "useStudioStore",
+    use: useStudioStore,
+    seed: (s) => {
+      s.overview = { scenes: [{ id: 1 }], cast: [], outfits: [], locations: [], props: [] };
+      s.loaded = true;
+    },
+    isEmpty: (s) => s.overview.scenes.length === 0 && !s.loaded,
+  },
   {
     // The model rows are hub-side facts about this machine, but each one
     // carries the characters and sets in the ACTIVE LIBRARY that use it, so

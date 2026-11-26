@@ -18,7 +18,7 @@
 10. [Naming and Coding Conventions](#10-naming-and-coding-conventions)
 11. [Build Configuration](#11-build-configuration)
 12. [Mermaid Diagrams](#12-mermaid-diagrams)
-13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox)
+13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox), [13.7 The Studio](#137-the-studio)
 
 ---
 
@@ -8804,3 +8804,46 @@ destinations.
   reaches back to, and offers the narrowest wider period that holds anything
   (`inboxEmptyState`), so a narrow period never hides an older pile.
 
+
+### 13.7 The Studio
+
+The fourth title-bar workspace, after Media (#2819): `/studio`, mounted by
+`App.vue` as `StudioSidebar` + `StudioView`. The view draws its own inspector
+inside its lightboxes, so the rail is empty on `/studio`.
+
+- **The route is the place.** `?section=` (scenes, favourites, cast,
+  locations, props) picks the grid, `?open=<kind>:<id>` opens an item's
+  lightbox over it, `?via=sidebar` says it came from a sidebar row. Esc closes
+  to the section's grid. `utils/studioKinds.studioQuery` patches it.
+- **The project is Media's.** The sidebar's top slot is `SidebarScopeSlot`;
+  the choice lives in `useProjectStore`, and `?project=` (an id or `none`)
+  carries it in the URL. `TitleBar` sends the Studio link with the current
+  project and sends Media back to that project's front page when the Studio
+  changed it (`mediaScopeOf`, `mediaFrontPage`).
+- **`useStudioStore`** holds one `GET /studio/overview` for the scope:
+  scenes, cast, outfits, locations, props. Every list, grid and lightbox reads
+  it; a change calls `refresh()`.
+- **Any project** lists the kinds (All scenes, Favourites, Cast, Locations,
+  Props), each a grid with filters in its toolbar. **In a project** the
+  sidebar lists the items under an All … row per section; the open scene
+  unfolds to its location and cast, the open person to their wardrobe.
+- **`StudioScene`** is blocking on the picture: the location's view (the
+  camera's `view`) is the stage, each person and prop a box dragged into
+  place and sized from its corner. The inspector shows the selection in
+  `<details>` groups. Shoot pre-flights the chosen workflow for its picture
+  inputs, asks the scene for a shot with that many references, runs it, and
+  hands the run keys to the scene; while any is drawing the scene is read
+  every 3 s, which files finished runs as takes. A clip runs the chosen video
+  workflow, from the scene or from a still take.
+- **More angles…** on a location's lightbox opens `io/LocationAnglesDialog`:
+  a source picture from the location, a layout sentence, three views (a
+  preset and words each) and the light. It runs the shots video, asks the
+  server for its frames, runs one restore per frame (held), checks them and
+  offers the views to keep; *Use* restores the kept ones from the Scrapheap,
+  puts them and the video in the location's set and sends the frames to the
+  Scrapheap. The built-ins are found by the names they ship under. Closing it
+  stops its runs.
+- **Category colours** are `--kind-cast` (raspberry), `--kind-location`
+  (teal) and `--kind-prop` (violet), aliases of the theme fills in
+  `design-tokens.css`, drawn as a rounded tile with a white glyph and always
+  beside the kind's word. Scenes are ink. Selection stays olive.

@@ -39,3 +39,6 @@ export const MODEL_SHELF_ROUTES = ["models", "models-runs"];
  * through the first. When a second workflow route lands, adding it here is the whole edit.
  */
 export const WORKFLOW_ROUTES = ["workflows"];
+
+/** The Studio (#2819): scenes, cast, locations and props. */
+export const STUDIO_ROUTES = ["studio"];

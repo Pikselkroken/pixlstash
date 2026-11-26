@@ -107,6 +107,7 @@ from pixlstash.routes.character_sheets import (
     create_router as create_character_sheets_router,
 )
 from pixlstash.routes.characters import create_router as create_characters_router
+from pixlstash.routes.studio import create_router as create_studio_router
 from pixlstash.routes.characters_faces import (
     create_router as create_characters_faces_router,
 )
@@ -2011,6 +2012,12 @@ class Server(
             create_character_sheets_router(self),
             prefix=API_V1_PREFIX,
             tags=["characters"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_studio_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["studio"],
             dependencies=gate,
         )
         self.api.include_router(

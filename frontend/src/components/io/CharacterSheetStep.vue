@@ -809,6 +809,7 @@ import {
   createPictureSet,
   deletePictureSet,
 } from "../../api/pictureSets";
+import { listSetInStudio } from "../../api/studio";
 import {
   getCharacter,
   getReferencePictures,
@@ -2529,6 +2530,13 @@ async function useItem(keep, boxes) {
     error.value = `Couldn't make the set ${itemName.value}. ${errorMessage(e, "Please try again.")} Edit the name, then go back to the sheets and use them.`;
     working.value = false;
     return;
+  }
+  // The set is the item: the Studio lists it as one (#2819). A refusal here
+  // leaves an ordinary set, which the Studio can still take with Add a set.
+  try {
+    await listSetInStudio(set.id, props.kind);
+  } catch (e) {
+    console.warn("Couldn't list the new set in the Studio", set.id, props.kind, e);
   }
   let ids;
   try {

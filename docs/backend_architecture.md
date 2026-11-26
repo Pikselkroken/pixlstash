@@ -37,6 +37,7 @@
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
 25. [Model Shelf](#25-model-shelf), incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Folders scan themselves, and picking up a model before they do (#1985)](#2513-folders-scan-themselves-and-picking-up-a-model-before-they-do-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117), [25.18 Watching a run live (#2118)](#2518-watching-a-run-live-2118), [25.19 The Train dialog's preview: dataset checks and resolve (#2119)](#2519-the-train-dialogs-preview-dataset-checks-and-resolve-2119), [25.20 Checking memory and speed, and learning from runs (#2120)](#2520-checking-memory-and-speed-and-learning-from-runs-2120), [25.21 Recipe updates from pixlstash.dev (#2122)](#2521-recipe-updates-from-pixlstashdev-2122), [25.22 Dataset snapshots: what a LoRA was trained on (#2123)](#2522-dataset-snapshots-what-a-lora-was-trained-on-2123), [25.23 Browsing a model folder by directory (#2203)](#2523-browsing-a-model-folder-by-directory-2203), [25.24 Moving into a subfolder, and when a file is already there (#2204)](#2524-moving-into-a-subfolder-and-when-a-file-is-already-there-2204), [25.25 Where ComfyUI loads each kind from (#2205)](#2525-where-comfyui-loads-each-kind-from-2205), [25.26 Creating, renaming and moving a folder inside a model folder (#2206)](#2526-creating-renaming-and-moving-a-folder-inside-a-model-folder-2206), [25.27 Removing a folder inside a model folder (#2207)](#2527-removing-a-folder-inside-a-model-folder-2207), [25.28 Training set picker](#2528-training-set-picker), [25.29 Character sheets: drawing a training set](#2529-character-sheets-drawing-a-training-set), [25.30 Face clusters and the reference cluster](#2530-face-clusters-and-the-reference-cluster), [25.31 The prompt assist: curated prompt text per model family](#2531-the-prompt-assist-curated-prompt-text-per-model-family)
 26. [Prompt match](#26-prompt-match)
+27. [The Studio](#27-the-studio)
 
 ---
 
@@ -685,6 +686,9 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
 | POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
+| POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
+| POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
+| POST   | /api/v1/item-sheets/shots/prompt                                              | characters      | Write a location's shots prompt                               |
 | POST   | /api/v1/item-sheets/use                                                       | characters      | Use outfit, location or prop sheets                           |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                     |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                                 |
@@ -894,6 +898,17 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/stacks/{stack_id}/members/{picture_id}                                | stacks          | Set member position                                           |
 | PATCH  | /api/v1/stacks/{stack_id}/order                                               | stacks          | Reorder stack                                                 |
 | GET    | /api/v1/stacks/{stack_id}/pictures                                            | stacks          | List pictures in stack                                        |
+| PUT    | /api/v1/studio/favourites                                                     | studio          | Star or unstar a Studio item                                  |
+| PUT    | /api/v1/studio/items/{set_id}                                                 | studio          | Use a picture set in the Studio                               |
+| DELETE | /api/v1/studio/items/{set_id}                                                 | studio          | Stop using a picture set in the Studio                        |
+| GET    | /api/v1/studio/overview                                                       | studio          | Everything the Studio lists                                   |
+| POST   | /api/v1/studio/scenes                                                         | studio          | Make a scene                                                  |
+| GET    | /api/v1/studio/scenes/{scene_id}                                              | studio          | One scene and its takes                                       |
+| PATCH  | /api/v1/studio/scenes/{scene_id}                                              | studio          | Change a scene                                                |
+| DELETE | /api/v1/studio/scenes/{scene_id}                                              | studio          | Delete a scene                                                |
+| POST   | /api/v1/studio/scenes/{scene_id}/runs                                         | studio          | Follow a scene's shoots                                       |
+| POST   | /api/v1/studio/scenes/{scene_id}/shot                                         | studio          | Write one shot of a scene                                     |
+| DELETE | /api/v1/studio/scenes/{scene_id}/takes/{picture_id}                           | studio          | Take a picture out of a scene's takes                         |
 | GET    | /api/v1/tag_groups                                                            | tag_groups      | The tag group map                                             |
 | POST   | /api/v1/tag_groups                                                            | tag_groups      | Create a tag group (last in position)                         |
 | POST   | /api/v1/tag_groups/assign                                                     | tag_groups      | File tags under a group (or make them Ungrouped)              |
@@ -5870,7 +5885,7 @@ Without it, a filter needs no payload to answer the hidden question: `GET /pictu
 | Query parameter | `?project_id=7` | `enforce_project_filter_scope` (the gate, every declared route) |
 | Path segment, numeric | `/projects/{project_id}/summary` | the registry's `PROJECT_SCOPED` declaration; the gate resolves the id before the handler, so a missing project and an invisible one both 403 |
 | Path segment, name or id-or-name | `/projects/{project_name}/picture_sets/{set_name}`, `/projects/{id_or_name}` | `enforce_project_path_scope`, inline in the 4 `resolved_inline` handlers (§16.1) — see below |
-| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
+| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan`, `POST /workflows/run`, `POST /workflows/run/preflight`, `POST /studio/scenes`, `PATCH /studio/scenes/{scene_id}` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
 | Body / form field, **opaque (`payload: dict`)** | known: `PATCH /pictures/project`, `POST /characters`, `POST /picture_sets`, `PATCH /picture_sets/{id}` — **and this list cannot be shown complete** | **nothing, and nothing can enumerate them.** Same write-only argument as the row above, but the *set* is a blind spot: see below. |
 | Value-typed discriminator | `?resource_type=project&resource_id=7` | **nothing, and nothing name-based can.** An argument for keeping that pattern off read-filter routes. |
 
@@ -13839,6 +13854,62 @@ a missing second subject passes. An edit or detailer prompt ("give him a
 beard", "perfect hands") describes a change, not the picture, and is scored
 as if it described it. The real-prompt sample is six pictures; the threshold
 wants recalibrating against the owner's ratings.
+
+## 27. The Studio
+
+The Studio (#2819) is where a scene is set up and shot: a cast in a
+location, each person in an outfit and doing something, with props, taken as
+stills or video clips. Models in `db_models/studio.py`, routes in
+`routes/studio.py` (all `OWNER_ONLY`, and on the READ-token belt by the
+`/api/v1/studio/` prefix and `/api/v1/studio/overview`), the shot in
+`services/studio.py`, migration `0151_add_studio`.
+
+- **What is stored.** `scene` keeps its cast, props, setting
+  (`{weather, time, happening, light}`), camera (`{shot, view}`) and the
+  shoots still drawing (`runs`) as JSON columns the editor replaces whole;
+  `project_id` is one project or none. `scene_take` is a picture a shoot
+  made, a `still` or a `clip`, with the still a clip `from_picture_id`
+  started from. Both go with their scene and their picture.
+- **Outfits, locations and props are picture sets.** `studio_item` marks a
+  set as one (`PUT /studio/items/{set_id}`); the sheet dialog marks every set
+  it makes, and any older set can be added from the Studio. An outfit's
+  wearer is its set's `parent_character_id`; it is in scope with them. A
+  set's members in ascending id are its angles, as a sheet cuts them: a
+  location's Wide, Reverse, Left, Right, an outfit's or prop's Front, ¾,
+  Side, Back. `studio_favourite` stars any kind by `(kind, item_id)`.
+- **A shot** (`POST /studio/scenes/{id}/shot`, `compose_shot`) is a prompt
+  and the reference pictures it names by number: the location's view the
+  camera takes, each person's reference (when they bring `refs`) and their
+  outfit's angle (the Back from the Reverse view, the ¾ when the pose says
+  so), then the props. A box becomes words ("on the left, in the
+  foreground"); a prop held by someone says so. Only `max_references` are
+  named (the workflow's picture inputs), so a workflow that takes fewer
+  still gets every item in words. A person who brings `lora` adds their
+  attached LoRAs. A clip from a still has that still as its one reference.
+- **The run** is `POST /workflows/run`, started by the client with the
+  workflow the owner picked. Its run keys go to `POST
+  /studio/scenes/{id}/runs`, and `GET /studio/scenes/{id}` files each run that
+  has ended (`comfyui_service.run_outcome`) as takes and says how it ended in
+  `ended`. A run the server no longer knows (it restarted) ends as `lost`:
+  its pictures, if any, stay in the library without the scene.
+- **More angles of one location** (`services/location_angles.py`): new
+  views of exactly the place in one of its pictures. Two built-in workflows
+  do the drawing: *MiniMax H3 Location Shots* (image to video, 0.4 MP, 14
+  steps, 8 s, the picture as the first frame) films four static tripod shots
+  joined by hard cuts, shot 1 being the picture, from the prompt `POST
+  /item-sheets/shots/prompt` writes (the place, a layout sentence said once,
+  then a preset and words per shot). `POST /item-sheets/shots` finds the cuts
+  by frame difference (a run of high differences is one cut; another count
+  than asked is a 409, never a guess) and imports the sharpest frame of each
+  new shot (Laplacian variance over motion, past the first frames after the
+  cut). *MiniMax H3 Restore a Frame* restores each frame from the frame
+  itself (VAE-encoded, denoise 0.75, 2560x1440) with the picture as `<Picture
+  2>`; restoring from noise flips back to the picture, so `POST
+  /item-sheets/shots/check` refuses a view that matches the picture better
+  than its frame or drifts below `RESTORE_KEEPS` (grey correlation at 128 px).
+  The kept views and the video join the location's set.
+- **Not built yet.** Multi-pass engines (one masked pass per person, as the
+  design proposes): a shot is one run of one workflow.
 
 ---
 
