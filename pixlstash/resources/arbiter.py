@@ -51,6 +51,12 @@ VRAM_ORCHESTRATION_ENFORCING = True
 SAFETY_MARGIN_MB = 1024
 SAFETY_MARGIN_SHARE = 0.05
 
+#: What PixlStash's CUDA context is taken to cost beyond torch's reserved
+#: memory where NVML cannot say (a container, #2818): about 650 MB measured on
+#: an RTX 5090. The floor under the card's before-and-after difference, which
+#: a training run allocating meanwhile makes too small.
+CUDA_CONTEXT_ESTIMATE_MB = 700
+
 #: How often the arbiter re-reads the cards while anything waits or heavy work
 #: holds one.
 POLL_S = 2.0
@@ -1614,8 +1620,12 @@ class ResourceArbiter:
             return False
         device = self._tenant_device(Tenant.PIXLSTASH)
         # What a restore has to find room for. Read before it begins, while
-        # NVML can still be asked; without it nothing can size the restore.
+        # NVML can still be asked. Inside a container NVML lists host pids, so
+        # none is ours (#2818): the card is then read either side of the
+        # checkpoint instead, over a floor of torch's reserved memory plus a
+        # context.
         held = self._ledger.own_mb(device) if device is not None else None
+        floor = (self._usage() or 0) + CUDA_CONTEXT_ESTIMATE_MB
         with self._lock:
             holder = self._suspend_lease_locked()
             busy = self._gpu_work_locked(worker_type)
@@ -1626,14 +1636,6 @@ class ResourceArbiter:
                         ", ".join(busy),
                     )
                 return False
-            if held is None:
-                logger.info(
-                    "Not suspending PixlStash's CUDA context for %s: NVML does not "
-                    "say what it holds, so a restore could not be sized",
-                    holder.id,
-                )
-                self._suspend_failed_for = holder.id
-                return False
             self._checkpoint.begin()
         started = time.monotonic()
         # Sized again once the calls in flight have ended: a search encoding
@@ -1642,13 +1644,45 @@ class ResourceArbiter:
         if not self._checkpoint.drain():
             self._checkpoint.abandon()
             return False
-        held = max(held, self._ledger.own_mb(device) or 0)
+        before = None
+        if held is None:
+            # nvidia-smi, as every reading is until the restore, which needs
+            # one: a card it cannot read now could never be restored onto.
+            before = self._used_mb(device)
+            if before is None:
+                logger.info(
+                    "Not suspending PixlStash's CUDA context for %s: neither NVML "
+                    "nor nvidia-smi says what it holds, so a restore could not "
+                    "be sized",
+                    holder.id,
+                )
+                self._checkpoint.abandon()
+                with self._lock:
+                    self._suspend_failed_for = holder.id
+                return False
+        else:
+            held = max(held, self._ledger.own_mb(device) or 0)
         suspended = self._checkpoint.suspend()
         if not suspended:
             if suspended is False:
                 with self._lock:
                     self._suspend_failed_for = holder.id
             return False
+        if before is not None:
+            # What left the card, unless the training run allocated meanwhile;
+            # never less than the floor. Its freeing meanwhile only makes the
+            # restore wait for more room than it needs.
+            after = self._used_mb(device)
+            held = max(before - after if after is not None else 0, floor)
+            logger.info(
+                "NVML does not list PixlStash on the card; sized its CUDA context "
+                "at %s MB (card used %s MB before the suspend, %s MB after, "
+                "floor %s MB)",
+                held,
+                before,
+                after,
+                floor,
+            )
         with self._lock:
             self._suspended_mb = held
         logger.info(
@@ -1661,6 +1695,18 @@ class ResourceArbiter:
         )
         self._ensure_thread()
         return True
+
+    def _used_mb(self, device: str | None) -> int | None:
+        """The card *device*'s used memory, MB, read now, or None."""
+        try:
+            fresh = self._ledger.devices(max_age_s=0.0, strict=True)
+        except Exception as exc:
+            logger.info("Could not read the card to size the CUDA suspend: %s", exc)
+            return None
+        reading = next((d for d in fresh if d.uuid == device), None)
+        if reading is None or not reading.measurable:
+            return None
+        return reading.used_mb
 
     def _suspend_step(self) -> None:
         """Ask for a suspend while an exclusive lease holds PixlStash's card,

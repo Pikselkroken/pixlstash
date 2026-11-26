@@ -22,6 +22,7 @@ from pixlstash.inference.engine import InferenceEngine
 from pixlstash.resources import arbiter as arbiter_module
 from pixlstash.resources import cuda_checkpoint
 from pixlstash.resources.arbiter import (
+    CUDA_CONTEXT_ESTIMATE_MB,
     LeaseKind,
     LeaseState,
     ResourceArbiter,
@@ -1795,13 +1796,55 @@ def test_a_drain_that_does_not_end_leaves_the_context_and_asks_again():
 
 def test_a_restore_that_cannot_be_sized_is_never_risked():
     arb, fake, ckpt, asked = _suspend_scene()
+    # Neither NVML nor nvidia-smi says what it holds.
     fake.own = None
+    fake.unreadable = True
     lease = _train(arb)
     arb._suspend_step()
     assert arb.suspend_pixlstash("SuspendCuda") is False
     assert ckpt.suspends == 0 and not ckpt.suspended()
     arb._suspend_step()
     assert asked == [True], "not asked again for the same lease"
+    lease.release()
+
+
+def test_in_a_container_the_card_is_read_either_side_of_the_suspend():
+    """NVML lists host pids there, so none is ours (#2818)."""
+    arb, fake, ckpt, _asked = _suspend_scene()
+    fake.own = None
+
+    def leave_the_card():
+        fake.used_mb -= 1500
+
+    ckpt.on_suspend = leave_the_card
+    arb._usage = lambda: 0  # torch's cache is empty after the unload
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    assert arb._suspended_mb == 1500
+    lease.release()
+    # Restored only once the card has room for that figure.
+    fake.used_mb = TOTAL - MARGIN - 1499
+    arb._refresh()
+    arb._suspend_step()
+    assert ckpt.resumes == 0 and ckpt.suspended()
+    fake.used_mb = TOTAL - MARGIN - 1500
+    arb._refresh()
+    arb._suspend_step()
+    assert ckpt.resumes == 1 and not ckpt.suspended()
+
+
+def test_a_training_run_allocating_during_the_suspend_leaves_the_floor():
+    arb, fake, ckpt, _asked = _suspend_scene()
+    fake.own = None
+
+    def trainer_loads_while_we_leave():
+        fake.used_mb += 3000 - CONTEXT_MB
+
+    ckpt.on_suspend = trainer_loads_while_we_leave
+    lease = _train(arb)
+    assert arb.suspend_pixlstash("SuspendCuda") is True
+    # torch's reserved memory (CONTEXT_MB here) plus the context estimate.
+    assert arb._suspended_mb == CONTEXT_MB + CUDA_CONTEXT_ESTIMATE_MB
     lease.release()
 
 
