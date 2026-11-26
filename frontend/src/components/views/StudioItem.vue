@@ -40,7 +40,7 @@
             icon-left="rotate-orbit"
             :disabled="!item.picture_ids.length"
             data-testid="studio-more-angles"
-            @click="anglesOpen = true"
+            @click="openAngles"
             >More angles…</AppButton
           >
           <AppButton
@@ -196,7 +196,7 @@
       v-if="kind === 'location'"
       :open="anglesOpen"
       :location="item"
-      @close="anglesOpen = false"
+      @close="closeAngles"
       @done="emit('changed')"
     />
   </div>
@@ -208,7 +208,7 @@
  * angles (a person's wardrobe), and in the inspector its words, who wears it
  * and the scenes it is in. ‹ › steps through its section's items.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
@@ -236,6 +236,18 @@ const emit = defineEmits(["close", "go", "changed", "new-scene", "item-sheets"])
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
 const anglesOpen = ref(false);
+// Opened from code, so the dialog cannot know its trigger: focus goes back here.
+let anglesTrigger = null;
+
+function openAngles(event) {
+  anglesTrigger = event?.currentTarget ?? null;
+  anglesOpen.value = true;
+}
+
+function closeAngles() {
+  anglesOpen.value = false;
+  nextTick(() => anglesTrigger?.focus?.());
+}
 
 const item = computed(() => store.byKey.get(`${props.kind}:${props.itemId}`) || null);
 const angleNames = computed(() => (props.kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES));

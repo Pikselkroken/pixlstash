@@ -238,6 +238,17 @@ describe("the workspace switch", () => {
     expect(segment(wrapper, "Studio").attributes("href")).toBe("/studio?project=7");
   });
 
+  it("keeps a share token on Media's front page for the Studio's project", async () => {
+    const wrapper = await mountBar("/set/3?token=example-share");
+    const projectStore = useProjectStore();
+    projectStore.projectViewMode = "project";
+    projectStore.selectedProjectId = 7;
+    await flushPromises();
+    expect(segment(wrapper, "Media").attributes("href")).toBe(
+      "/project/7?token=example-share",
+    );
+  });
+
   it("goes back to Media in the project picked in the Studio", async () => {
     // Media was left on the library; the Studio then picked project 7.
     const wrapper = await mountBar("/set/3");

@@ -363,6 +363,19 @@ def test_a_scene_whose_person_was_deleted_can_still_be_renamed(env):
     assert "Person" not in shot["prompt"]
 
 
+def test_a_name_of_spaces_alone_is_no_name(env):
+    client = env.client
+    assert (
+        client.post(f"{API_PREFIX}/studio/scenes", json={"name": "   "}).status_code
+        == 422
+    )
+    scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": " Kept "}).json()
+    assert scene["name"] == "Kept"
+    url = f"{API_PREFIX}/studio/scenes/{scene['id']}"
+    assert client.patch(url, json={"name": "  "}).status_code == 422
+    assert client.get(url).json()["name"] == "Kept"
+
+
 def test_a_scene_naming_a_missing_set_is_refused(env):
     resp = env.client.post(
         f"{API_PREFIX}/studio/scenes",
@@ -399,6 +412,16 @@ def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     assert [t["picture_id"] for t in filed["takes"]] == [picture_id]
     assert filed["takes"][0]["format"].lower() == "png"
     assert filed["ended"][0]["picture_count"] == 1
+
+    # A picture already filed is not filed again, by another run or twice.
+    again = f"run-{uuid.uuid4().hex}"
+    client.post(f"{url}/runs", json={"runs": [{"key": again}]})
+    comfyui_service.record_run_outcome(
+        again, "completed", picture_ids=[picture_id, picture_id]
+    )
+    refiled = client.get(url).json()
+    assert [t["picture_id"] for t in refiled["takes"]] == [picture_id]
+    assert refiled["ended"][0]["picture_count"] == 0
 
     # A clip from that still must name one of the scene's takes.
     assert (

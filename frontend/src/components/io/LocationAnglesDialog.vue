@@ -360,6 +360,7 @@ async function draw() {
       );
     }
     const restored = (await finished(restoreKeys)).map((ids) => ids.at(-1));
+    if (restored.some((id) => id == null)) throw new Error("A restore run made nothing.");
 
     status.value = "Checking each view…";
     const { views: checked } = await checkLocationShots(

@@ -23,6 +23,11 @@ const api = vi.hoisted(() => ({
   listWorkflowCards: vi.fn(),
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
+  deleteScene: vi.fn(),
+  confirm: vi.fn(),
+}));
+vi.mock("../../composables/useConfirm", () => ({
+  useConfirm: () => ({ confirm: api.confirm }),
 }));
 vi.mock("../../api/studio", () => ({
   getStudioOverview: api.getStudioOverview,
@@ -32,7 +37,7 @@ vi.mock("../../api/studio", () => ({
   followSceneRuns: api.followSceneRuns,
   createScene: api.createScene,
   setStudioFavourite: api.setStudioFavourite,
-  deleteScene: vi.fn(),
+  deleteScene: api.deleteScene,
   removeTake: vi.fn(),
   listSetInStudio: vi.fn(),
   stopUsingSetInStudio: vi.fn(),
@@ -207,6 +212,22 @@ describe("the Studio's grids", () => {
 });
 
 describe("a scene", () => {
+  it("asks before it deletes a scene", async () => {
+    const wrapper = await mountAt("/studio?open=scene:1");
+    const remove = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Delete the scene"));
+    api.confirm.mockResolvedValueOnce(false);
+    await remove().trigger("click");
+    await flushPromises();
+    expect(api.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
+    expect(api.deleteScene).not.toHaveBeenCalled();
+    api.confirm.mockResolvedValueOnce(true);
+    api.deleteScene.mockResolvedValue({});
+    await remove().trigger("click");
+    await flushPromises();
+    expect(api.deleteScene).toHaveBeenCalledWith(1);
+  });
+
   it("puts a box on the stage for each person and prop", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     expect(wrapper.find('[data-testid="studio-scene"]').exists()).toBe(true);

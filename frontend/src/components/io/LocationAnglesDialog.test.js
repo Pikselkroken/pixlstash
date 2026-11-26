@@ -137,6 +137,18 @@ describe("More angles", () => {
     expect(wrapper.emitted("done")[0]).toEqual([2]);
   });
 
+  it("stops with a reason when a restore run makes nothing", async () => {
+    api.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "run-r2" ? [] : OUTPUTS[key],
+    }));
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.checkLocationShots).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("A restore run made nothing");
+  });
+
   it("says so when a built-in it draws with is gone, and runs nothing", async () => {
     api.listWorkflowCards.mockResolvedValue({
       cards: [{ id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" }],

@@ -492,6 +492,7 @@ import {
   preflightWorkflowRun,
   runWorkflowCard,
 } from "../../api/workflows";
+import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -513,6 +514,7 @@ const emit = defineEmits(["close", "go", "changed", "item-sheets"]);
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+const { confirm } = useConfirm();
 
 const SHOTS = [
   { id: "wide", label: "Wide" },
@@ -540,6 +542,8 @@ let alive = true;
 let pollTimer = null;
 let saveTimer = null;
 let pendingFields = new Set();
+// The drag in progress lets go of the window when the lightbox closes under it.
+let stopDrag = null;
 
 const index = computed(() => props.scenes.findIndex((s) => s.id === props.sceneId));
 function step(delta) {
@@ -866,11 +870,16 @@ function startDrag(event, mark, mode) {
         ? [clamp(x + dx, 0, 1 - w), clamp(y + dy, 0, 1 - h), w, h]
         : [x, y, clamp(w + dx, 0.04, 1 - x), clamp(h + dy, 0.04, 1 - y)];
   };
-  const onUp = () => {
+  const stop = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
+    stopDrag = null;
+  };
+  const onUp = () => {
+    stop();
     if (moved) save([mark.type === "person" ? "cast" : "props"]);
   };
+  stopDrag = stop;
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
 }
@@ -1028,6 +1037,13 @@ async function toggleFavourite() {
 }
 
 async function removeScene() {
+  const ok = await confirm({
+    title: "Delete this scene?",
+    message: `“${scene.value?.name}” and its cast, props and setting go. Its takes stay in the library.`,
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await deleteScene(props.sceneId);
     emit("changed");
@@ -1065,6 +1081,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   alive = false;
+  stopDrag?.();
   clearTimeout(pollTimer);
   if (saveTimer) {
     clearTimeout(saveTimer);

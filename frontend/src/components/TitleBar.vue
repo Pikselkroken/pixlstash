@@ -84,9 +84,12 @@ function mediaScopeOf(place) {
 
 /** Media's front page for a scope, as its own selector would land. */
 function mediaFrontPage(scope) {
-  if (scope === "any") return { path: "/", query: {} };
-  if (scope === "none") return { path: "/", query: { project: NOT_IN_PROJECT_QUERY } };
-  return { path: `/project/${scope}`, query: {} };
+  // A share session's credential rides in `?token=` (see `at` below).
+  const token = route.query.token;
+  const query =
+    scope === "none" ? { project: NOT_IN_PROJECT_QUERY } : {};
+  if (token) query.token = token;
+  return { path: scope === "any" || scope === "none" ? "/" : `/project/${scope}`, query };
 }
 
 // Where Media and Models were left, so switching back lands on the sidebar

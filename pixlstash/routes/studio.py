@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -80,8 +80,19 @@ class Setting(BaseModel):
     light: str = ""
 
 
+def _named(value: Optional[str]) -> Optional[str]:
+    """A name with its spaces taken off; one of spaces alone is no name."""
+    if value is None:
+        return None
+    if not value.strip():
+        raise ValueError("The scene needs a name.")
+    return value.strip()
+
+
 class SceneCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+    _name = field_validator("name")(_named)
     project_id: Optional[int] = None
     location_set_id: Optional[int] = None
 
@@ -93,6 +104,8 @@ class SceneUpdate(BaseModel):
     project_id: Optional[int] = None
     location_set_id: Optional[int] = None
     camera: Optional[Camera] = None
+
+    _name = field_validator("name")(_named)
     setting: Optional[Setting] = None
     cast: Optional[list[CastMember]] = Field(default=None, max_length=32)
     props: Optional[list[PropPlacement]] = Field(default=None, max_length=32)
@@ -289,10 +302,16 @@ def create_router(server) -> APIRouter:
             if outcome["status"] not in _ENDED:
                 still.append(run)
                 continue
+            # A picture is one take, however the run reaches here.
+            filed = set(
+                session.exec(
+                    select(SceneTake.picture_id).where(SceneTake.scene_id == scene.id)
+                ).all()
+            )
             ids = [
                 pid
-                for pid in outcome.get("picture_ids") or []
-                if session.get(Picture, pid) is not None
+                for pid in dict.fromkeys(outcome.get("picture_ids") or [])
+                if pid not in filed and session.get(Picture, pid) is not None
             ]
             for pid in ids:
                 session.add(
