@@ -1,0 +1,65 @@
+{
+  "at": "2026-11-26T18:45:35.996Z",
+  "cause": "after the question was approved and the first five ideas filed",
+  "order": [
+    "1-build-a-hand-labelled-set-of-drawn-pictu",
+    "2-let-the-current-face-detector-see-drawn",
+    "3-add-a-face-detector-trained-on-anime-and",
+    "5-check-whether-faces-of-the-same-drawn-ch",
+    "4-send-each-picture-to-the-photo-or-the-dr"
+  ],
+  "notes": {
+    "1-build-a-hand-labelled-set-of-drawn-pictu": {
+      "impact": 3,
+      "odds": 3,
+      "line": "Every other idea is measured on this set, so it goes first.",
+      "why": {
+        "impact": "Without it no idea can be judged, and it shows how big the gap really is.",
+        "odds": "It is labelling and one run of the existing detector, so it will almost surely produce usable numbers.",
+        "path": "Ideas 2, 3, 4 and 5 all need its labelled pictures."
+      }
+    },
+    "2-let-the-current-face-detector-see-drawn": {
+      "impact": 2,
+      "odds": 2,
+      "line": "The cheapest possible fix, and it tells size apart from training gap.",
+      "why": {
+        "impact": "A win needs no new model, but it may only help large, simply drawn faces.",
+        "odds": "The detector sees faces at about 13 px today, so more size should help some, but a photo-trained detector may still not know drawn faces.",
+        "path": "Its answer says whether a second detector (idea 3) is needed at all."
+      }
+    },
+    "3-add-a-face-detector-trained-on-anime-and": {
+      "impact": 3,
+      "odds": 2,
+      "line": "The most likely real fix for drawn faces, but it may lack the face points alignment needs.",
+      "why": {
+        "impact": "A detector trained on drawn faces attacks the believed main cause directly.",
+        "odds": "Such detectors exist for anime; Western cartoons and painted styles and the missing five face points are the risks.",
+        "path": "Idea 4 only makes sense once this shows a drawn-face detector works."
+      }
+    },
+    "5-check-whether-faces-of-the-same-drawn-ch": {
+      "impact": 2,
+      "odds": 1,
+      "line": "Tells whether found drawn faces will be useful for clusters and characters at all.",
+      "why": {
+        "impact": "If recognition fails on drawn faces, finding them helps thumbnails and crops but not clusters or likeness.",
+        "odds": "ArcFace is trained on real faces, so good separation of drawn characters is unlikely.",
+        "path": "Can use the hand-drawn boxes from idea 1, so it does not wait for a better detector."
+      }
+    },
+    "4-send-each-picture-to-the-photo-or-the-dr": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Only worth doing once idea 3 has shown a drawn-face detector works.",
+      "why": {
+        "impact": "It decides how a second detector ships without hurting photos, but adds nothing if idea 3 fails.",
+        "odds": "The WD14 tagger or a CLIP check should tell photos from drawings well, but mixed styles are hard.",
+        "path": "Waits for ideas 1 and 3."
+      }
+    }
+  },
+  "pinned": {},
+  "moved": {}
+}
