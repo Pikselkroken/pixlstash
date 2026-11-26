@@ -250,6 +250,23 @@ describe("a scene", () => {
     expect(api.getScene).toHaveBeenCalledTimes(3);
   });
 
+  it("tries a failed first read of the scene again, but not a refused one", async () => {
+    vi.useFakeTimers();
+    api.getScene.mockRejectedValueOnce(new Error("network"));
+    const wrapper = await mountAt("/studio?open=scene:1");
+    expect(wrapper.text()).toContain("Couldn't read the scene");
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(wrapper.find('[data-testid="scene-mark-person-0"]').exists()).toBe(true);
+
+    api.getScene.mockReset();
+    api.getScene.mockRejectedValue(
+      Object.assign(new Error("gone"), { response: { status: 404, data: { detail: "No scene 2." } } }),
+    );
+    await router.push("/studio?open=scene:2");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(api.getScene).toHaveBeenCalledTimes(1);
+  });
+
   it("puts a box on the stage for each person and prop", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     expect(wrapper.find('[data-testid="studio-scene"]').exists()).toBe(true);

@@ -286,17 +286,20 @@ async function start(body) {
 async function finished(keys) {
   const mine = drawing;
   const done = new Map();
-  let misses = 0;
+  // Lost answers in a row, per run: one blip costs each run one miss.
+  const misses = new Map();
   while (alive && mine === drawing && done.size < keys.length) {
     for (const key of keys) {
       if (done.has(key)) continue;
       let outcome;
       try {
         outcome = await getRunOutcome(key);
-        misses = 0;
+        misses.delete(key);
       } catch (e) {
         // One lost answer must not throw away minutes of drawing.
-        if ((misses += 1) >= 3) throw e;
+        const missed = (misses.get(key) ?? 0) + 1;
+        if (missed >= 3) throw e;
+        misses.set(key, missed);
         continue;
       }
       if (outcome.status === "failed") {

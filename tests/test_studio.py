@@ -635,3 +635,14 @@ def test_only_an_item_that_exists_is_starred(env):
     # A star whose item has gone can still be taken off.
     body = {"kind": "location", "item_id": 987654, "favourite": False}
     assert client.put(f"{API_PREFIX}/studio/favourites", json=body).status_code == 200
+
+
+def test_a_run_sent_twice_in_one_request_is_one_run(env):
+    client = env.client
+    scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Twice"}).json()
+    key = f"run-{uuid.uuid4().hex}"
+    resp = client.post(
+        f"{API_PREFIX}/studio/scenes/{scene['id']}/runs",
+        json={"runs": [{"key": key}, {"key": key}]},
+    )
+    assert [r["key"] for r in resp.json()["runs"]] == [key]

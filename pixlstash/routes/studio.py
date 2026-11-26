@@ -700,9 +700,13 @@ def create_router(server) -> APIRouter:
         def update(session: Session):
             scene = _scene(session, scene_id)
             known = {run["key"] for run in scene.runs or []}
-            scene.runs = [*(scene.runs or [])] + [
-                run.model_dump() for run in payload.runs if run.key not in known
-            ]
+            # A key sent twice in one request is still one run.
+            added = {
+                run.key: run.model_dump()
+                for run in payload.runs
+                if run.key not in known
+            }
+            scene.runs = [*(scene.runs or []), *added.values()]
             scene.updated_at = datetime.now(timezone.utc)
             session.add(scene)
             session.commit()

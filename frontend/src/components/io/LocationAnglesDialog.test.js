@@ -176,6 +176,26 @@ describe("More angles", () => {
     expect(api.checkLocationShots).toHaveBeenCalled();
   });
 
+  it("rides out a lost answer that hits every restore in one pass", async () => {
+    vi.useFakeTimers();
+    const outcome = api.getRunOutcome.getMockImplementation();
+    const missed = new Set();
+    api.getRunOutcome.mockImplementation(async (key) => {
+      if (key.startsWith("run-r") && !missed.has(key)) {
+        missed.add(key);
+        throw new Error("network");
+      }
+      return outcome(key);
+    });
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(20000);
+    vi.useRealTimers();
+    expect(missed.size).toBe(3);
+    expect(api.stopRun).not.toHaveBeenCalled();
+    expect(api.checkLocationShots).toHaveBeenCalled();
+  });
+
   it("stops the other restores when one fails", async () => {
     api.getRunOutcome.mockImplementation(async (key) =>
       key === "run-r1"

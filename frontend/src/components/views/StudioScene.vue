@@ -589,6 +589,11 @@ async function load({ keepDraft = false } = {}) {
     loadError.value = `Couldn't read the scene. ${errorMessage(e, "Please try again.")}`;
     // One failed read must not stop following the shoots still drawing.
     schedulePoll();
+    // A first read that failed has no scene to poll from: try it again,
+    // unless the server refused it (the scene is gone).
+    if (!scene.value && !(e?.response?.status < 500)) {
+      pollTimer = setTimeout(() => load(), POLL_MS);
+    }
   }
 }
 
