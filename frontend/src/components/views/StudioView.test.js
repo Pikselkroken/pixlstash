@@ -249,6 +249,24 @@ describe("a scene", () => {
     expect(cast[0].box.map((v) => Math.round(v * 100))).toEqual([12, 20, 20, 72]);
   });
 
+  it("never sizes a box past the stage's edge into a negative size", async () => {
+    vi.useFakeTimers();
+    api.getScene.mockResolvedValue({
+      ...SCENE,
+      cast: [{ ...SCENE.cast[0], box: [1.05, 1.05, 0.2, 0.2] }],
+      props: [],
+    });
+    api.patchScene.mockImplementation(async (_id, body) => ({ ...SCENE, ...body }));
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper
+      .find('[data-testid="scene-mark-person-0"]')
+      .trigger("keydown", { key: "ArrowLeft", altKey: true });
+    await vi.advanceTimersByTimeAsync(700);
+    const [, , w, h] = api.patchScene.mock.calls.at(-1)[1].cast[0].box;
+    expect(w).toBeGreaterThan(0);
+    expect(h).toBeGreaterThan(0);
+  });
+
   it("shoots with the chosen workflow, filling its picture inputs from the shot", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-shoot"]').trigger("click");

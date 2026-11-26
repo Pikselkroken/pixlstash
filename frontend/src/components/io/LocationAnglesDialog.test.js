@@ -149,6 +149,23 @@ describe("More angles", () => {
     expect(wrapper.text()).toContain("A restore run made nothing");
   });
 
+  it("stops the other restores when one fails", async () => {
+    api.getRunOutcome.mockImplementation(async (key) =>
+      key === "run-r1"
+        ? { status: "failed", message: "Out of memory." }
+        : { status: key === "run-video" ? "completed" : "running", picture_ids: OUTPUTS[key] },
+    );
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Out of memory.");
+    expect(api.stopRun.mock.calls.map(([key]) => key).sort()).toEqual([
+      "run-r1",
+      "run-r2",
+      "run-r3",
+    ]);
+  });
+
   it("says so when a built-in it draws with is gone, and runs nothing", async () => {
     api.listWorkflowCards.mockResolvedValue({
       cards: [{ id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" }],

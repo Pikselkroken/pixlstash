@@ -285,6 +285,12 @@ def create_router(server) -> APIRouter:
         """
         still: list[dict] = []
         ended: list[dict] = []
+        # A picture is one take, however many runs or reads reach it.
+        filed = set(
+            session.exec(
+                select(SceneTake.picture_id).where(SceneTake.scene_id == scene.id)
+            ).all()
+        )
         for run in scene.runs or []:
             outcome = run_outcome(run["key"])
             started_in = (outcome or {}).get("library_uuid")
@@ -302,18 +308,13 @@ def create_router(server) -> APIRouter:
             if outcome["status"] not in _ENDED:
                 still.append(run)
                 continue
-            # A picture is one take, however the run reaches here.
-            filed = set(
-                session.exec(
-                    select(SceneTake.picture_id).where(SceneTake.scene_id == scene.id)
-                ).all()
-            )
             ids = [
                 pid
                 for pid in dict.fromkeys(outcome.get("picture_ids") or [])
                 if pid not in filed and session.get(Picture, pid) is not None
             ]
             for pid in ids:
+                filed.add(pid)
                 session.add(
                     SceneTake(
                         scene_id=scene.id,

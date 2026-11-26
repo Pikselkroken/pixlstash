@@ -423,6 +423,17 @@ def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     assert [t["picture_id"] for t in refiled["takes"]] == [picture_id]
     assert refiled["ended"][0]["picture_count"] == 0
 
+    # Two runs ending in one read with the same picture file it once.
+    other = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Twice"}).json()
+    other_url = f"{API_PREFIX}/studio/scenes/{other['id']}"
+    first, second = f"run-{uuid.uuid4().hex}", f"run-{uuid.uuid4().hex}"
+    client.post(f"{other_url}/runs", json={"runs": [{"key": first}, {"key": second}]})
+    for key in (first, second):
+        comfyui_service.record_run_outcome(key, "completed", picture_ids=[picture_id])
+    assert [t["picture_id"] for t in client.get(other_url).json()["takes"]] == [
+        picture_id
+    ]
+
     # A clip from that still must name one of the scene's takes.
     assert (
         client.post(

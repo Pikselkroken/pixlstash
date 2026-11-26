@@ -843,7 +843,7 @@ function onMarkKey(event, mark) {
   const [x, y, w, h] = mark.box;
   const [dx, dy] = [delta[0] * step, delta[1] * step];
   entry.box = sizing
-    ? [x, y, clamp(w + dx, 0.04, 1 - x), clamp(h + dy, 0.04, 1 - y)]
+    ? [x, y, clamp(w + dx, 0.04, Math.max(0.04, 1 - x)), clamp(h + dy, 0.04, Math.max(0.04, 1 - y))]
     : [clamp(x + dx, 0, 1 - w), clamp(y + dy, 0, 1 - h), w, h];
   saveSoon([mark.type === "person" ? "cast" : "props"]);
 }
@@ -868,7 +868,7 @@ function startDrag(event, mark, mode) {
     entry.box =
       mode === "move"
         ? [clamp(x + dx, 0, 1 - w), clamp(y + dy, 0, 1 - h), w, h]
-        : [x, y, clamp(w + dx, 0.04, 1 - x), clamp(h + dy, 0.04, 1 - y)];
+        : [x, y, clamp(w + dx, 0.04, Math.max(0.04, 1 - x)), clamp(h + dy, 0.04, Math.max(0.04, 1 - y))];
   };
   const stop = () => {
     window.removeEventListener("pointermove", onMove);

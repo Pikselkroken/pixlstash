@@ -374,6 +374,11 @@ async function draw() {
     kept.value = checked.filter((v) => v.ok).map((v) => v.restored_id);
     phase.value = "pick";
   } catch (e) {
+    // A run that failed leaves the others drawing: stop them too.
+    for (const key of liveKeys) {
+      stopRun(key).catch((err) => console.warn("Couldn't stop a More angles run", key, err));
+    }
+    liveKeys = [];
     if (!alive || !props.open) return;
     console.warn("More angles failed", props.location?.id, e);
     error.value = `Couldn't draw more angles. ${errorMessage(e, "Please try again.")}`;
