@@ -1,5 +1,5 @@
 <template>
-  <!-- The head of the Edit tab: the mark tools, seven across with each one's
+  <!-- The head of the Edit tab: the mark tools, eight across with each one's
        key on it, then the size while a brush or eraser is in hand. Pressing
        the tool in hand puts it down, as Esc does. Crop is a Quick change
        further down, and undo is the footer's Ctrl+Z. -->
@@ -139,7 +139,7 @@ const sized = computed(() => SIZED_TOOLS.has(props.paint.tool.value));
 
 .paint-toolbox-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: var(--space-1);
 }
 

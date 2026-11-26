@@ -510,3 +510,70 @@ describe("the brush's size", () => {
     expect(paint.brushSize.value).toBe(29);
   });
 });
+
+describe("Extend's view", () => {
+  it("refits the extended canvas when only the stage resizes", async () => {
+    // The 800×600 picture is held by both axes; narrowing the stage leaves
+    // its layout size alone, so only the stage's own size can say the wider
+    // canvas no longer fits.
+    const observed = [];
+    const Original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        this.callback = callback;
+      }
+      observe(el) {
+        observed.push([this.callback, el]);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+    try {
+      const wrapper = await openMeasured();
+      wrapper.vm.sidebarTab = "edit";
+      await flush();
+      const paint = wrapper.vm.paint;
+      paint.setTool("extend");
+      paint.setExtension("right", 1600);
+      await flush();
+      // Twice the picture's width: 0.6 × 800 / 1600.
+      expect(wrapper.vm.extendFitted.scale).toBeCloseTo(0.3);
+      const canvasEl = wrapper.find(".lightbox-canvas").element;
+      Object.defineProperty(canvasEl, "clientWidth", {
+        configurable: true,
+        value: 400,
+      });
+      for (const [callback, el] of observed) if (el === canvasEl) callback([]);
+      expect(wrapper.vm.extendFitted.scale).toBeCloseTo(0.15);
+      wrapper.unmount();
+    } finally {
+      globalThis.ResizeObserver = Original;
+    }
+  });
+});
+
+describe("Extend's handles", () => {
+  it("lets go of the hot handle when the pointer leaves the stage", async () => {
+    const wrapper = await openMeasured();
+    wrapper.vm.sidebarTab = "edit";
+    await flush();
+    wrapper.vm.paint.setTool("extend");
+    await flush();
+    const layer = wrapper.find(".paint-input-layer");
+    // The picture's right edge, which is where the frame starts, drawn at
+    // Extend's fit (the stubbed rect does not move with it).
+    const { scale } = wrapper.vm.extendFitted;
+    layer.element.dispatchEvent(
+      new MouseEvent("pointermove", {
+        clientX: 800 * scale,
+        clientY: 300 * scale,
+        bubbles: true,
+      }),
+    );
+    await flush();
+    expect(wrapper.vm.extendHot).toBe("right");
+    await layer.trigger("pointerleave");
+    expect(wrapper.vm.extendHot).toBe("");
+    wrapper.unmount();
+  });
+});
