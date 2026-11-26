@@ -300,6 +300,17 @@ describe("a scene", () => {
     expect(wrapper.findAll(".scene-take--drawing")).toHaveLength(2);
   });
 
+  it("keeps handing a shoot's runs to the scene when the first hand-over fails", async () => {
+    vi.useFakeTimers();
+    api.followSceneRuns.mockRejectedValueOnce(new Error("network"));
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(api.followSceneRuns).toHaveBeenCalledTimes(2);
+    expect(api.followSceneRuns.mock.calls[1]).toEqual(api.followSceneRuns.mock.calls[0]);
+    expect(wrapper.findAll(".scene-take--drawing")).toHaveLength(2);
+  });
+
   it("makes a clip from a still take with the video workflow", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-take-900"]').trigger("click");

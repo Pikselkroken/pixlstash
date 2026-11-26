@@ -998,18 +998,29 @@ async function shoot(kind, fromPictureId = null) {
     if (!keys.length) {
       throw new Error(answer?.error || "The workflow can't run as it is. Open it from Workflows to see why.");
     }
-    const followed = await followSceneRuns(
-      props.sceneId,
-      keys.map((key) => ({ key, kind, from_picture_id: fromPictureId })),
-    );
+    await follow(keys.map((key) => ({ key, kind, from_picture_id: fromPictureId })));
+  } catch (e) {
+    shootError.value = `Couldn't shoot. ${errorMessage(e, "Please try again.")}`;
+  } finally {
+    shooting.value = false;
+  }
+}
+
+/** Hand started runs to the scene. They are drawing already, so a failed
+ * hand-over is tried again until it lands: the server skips keys it knows. */
+async function follow(runs) {
+  try {
+    const followed = await followSceneRuns(props.sceneId, runs);
     if (!alive) return;
     scene.value = { ...scene.value, ...followed };
     emit("changed");
     schedulePoll();
   } catch (e) {
-    shootError.value = `Couldn't shoot. ${errorMessage(e, "Please try again.")}`;
-  } finally {
-    shooting.value = false;
+    if (!alive) return;
+    noticeStore.error(`The shoot started, but the scene couldn't take its runs yet; trying again. ${errorMessage(e, "")}`.trim(), {
+      key: "studio-scene-follow",
+    });
+    setTimeout(() => follow(runs), POLL_MS);
   }
 }
 
