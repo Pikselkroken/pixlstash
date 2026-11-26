@@ -306,6 +306,33 @@ describe("a scene", () => {
     expect(h).toBeGreaterThan(0);
   });
 
+  it("puts down what a person held when they are taken out of the scene", async () => {
+    api.patchScene.mockImplementation(async (_id, body) => ({ ...SCENE, ...body }));
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-mark-person-1"]').trigger("pointerdown");
+    await wrapper.findAll("button").find((b) => b.text().includes("Take out of the scene")).trigger("click");
+    await flushPromises();
+    const body = api.patchScene.mock.calls.at(-1)[1];
+    expect(body.cast.map((m) => m.character_id)).toEqual([5]);
+    expect(body.props[0].held_by).toBeNull();
+  });
+
+  it("never moves a box wider than the stage off its left edge", async () => {
+    vi.useFakeTimers();
+    api.getScene.mockResolvedValue({
+      ...SCENE,
+      cast: [{ ...SCENE.cast[0], box: [0, 0, 1.2, 1.2] }],
+      props: [],
+    });
+    api.patchScene.mockImplementation(async (_id, body) => ({ ...SCENE, ...body }));
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-mark-person-0"]').trigger("keydown", { key: "ArrowRight" });
+    await vi.advanceTimersByTimeAsync(700);
+    const [x, y] = api.patchScene.mock.calls.at(-1)[1].cast[0].box;
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(y).toBeGreaterThanOrEqual(0);
+  });
+
   it("shoots with the chosen workflow, filling its picture inputs from the shot", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-shoot"]').trigger("click");

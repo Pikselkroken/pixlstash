@@ -735,8 +735,12 @@ function addProp(id) {
 function removeSelected() {
   const sel = selection.value;
   if (sel?.type === "person") {
-    draft.value.cast.splice(sel.index, 1);
-    save(["cast"]);
+    const [gone] = draft.value.cast.splice(sel.index, 1);
+    // What they held is put down: a holder outside the cast is refused.
+    for (const prop of draft.value.props) {
+      if (prop.held_by === gone.character_id) prop.held_by = null;
+    }
+    save(["cast", "props"]);
   } else if (sel?.type === "prop") {
     draft.value.props.splice(sel.index, 1);
     save(["props"]);
@@ -804,8 +808,8 @@ const marks = computed(() => {
       held: !!at,
       box: at
         ? [
-            clamp(at[0] + at[2] * 0.55, 0, 1 - own[2]),
-            clamp(at[1] + at[3] * 0.25, 0, 1 - own[3]),
+            clamp(at[0] + at[2] * 0.55, 0, Math.max(0, 1 - own[2])),
+            clamp(at[1] + at[3] * 0.25, 0, Math.max(0, 1 - own[3])),
             own[2],
             own[3],
           ]
@@ -851,7 +855,7 @@ function onMarkKey(event, mark) {
   const [dx, dy] = [delta[0] * step, delta[1] * step];
   entry.box = sizing
     ? [x, y, clamp(w + dx, 0.04, Math.max(0.04, 1 - x)), clamp(h + dy, 0.04, Math.max(0.04, 1 - y))]
-    : [clamp(x + dx, 0, 1 - w), clamp(y + dy, 0, 1 - h), w, h];
+    : [clamp(x + dx, 0, Math.max(0, 1 - w)), clamp(y + dy, 0, Math.max(0, 1 - h)), w, h];
   saveSoon([mark.type === "person" ? "cast" : "props"]);
 }
 
@@ -874,7 +878,7 @@ function startDrag(event, mark, mode) {
     const [x, y, w, h] = start;
     entry.box =
       mode === "move"
-        ? [clamp(x + dx, 0, 1 - w), clamp(y + dy, 0, 1 - h), w, h]
+        ? [clamp(x + dx, 0, Math.max(0, 1 - w)), clamp(y + dy, 0, Math.max(0, 1 - h)), w, h]
         : [x, y, clamp(w + dx, 0.04, Math.max(0.04, 1 - x)), clamp(h + dy, 0.04, Math.max(0.04, 1 - y))];
   };
   const stop = () => {
