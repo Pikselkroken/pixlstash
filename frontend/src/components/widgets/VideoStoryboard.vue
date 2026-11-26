@@ -272,7 +272,9 @@ function clock(seconds) {
   --active-wash: rgba(var(--v-theme-dark-surface-primary), 0.2);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --tile-gap: var(--space-1);
-  /* The tallest a tile gets. The sprite is 160px tall, 2x for 80. */
+  /* The tallest a tile gets. The sprite is 160px tall, sharp to 80 on a 2x
+     screen; past that it is a little soft, the price of stills big enough
+     to read. */
   --tile-h-max: 96px;
   /* One tile's width, from the strip's: 11 tiles and 10 gaps. */
   --tile-w: calc((100% - 10 * var(--tile-gap)) / 11);
