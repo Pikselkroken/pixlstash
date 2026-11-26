@@ -50,6 +50,7 @@ from pixlstash.image_plugins.service import (
     import_derived_outputs,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import makedirs_private
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS, is_hidden_entry
@@ -429,7 +430,7 @@ class EditCopyWatcher:
 
     def start(self) -> None:
         """Watch the root, creating it when missing."""
-        os.makedirs(self._root, mode=0o700, exist_ok=True)
+        makedirs_private(self._root)
         self._observer.schedule(
             _Handler(self._root, self._schedule), self._root, recursive=True
         )

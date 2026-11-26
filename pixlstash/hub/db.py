@@ -39,6 +39,7 @@ from pixlstash.startup_permissions import mkdir_private
 from pixlstash.trusted_sqlite import (
     TrustedSQLiteLocation,
     TrustedSQLiteLocationError,
+    create_private_file,
 )
 
 logger = get_logger(__name__)
@@ -85,13 +86,11 @@ def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]
     Returns True only for the process that won creation. ``O_EXCL`` handles a
     simultaneous server/CLI first open without either observing a permissive
     sqlite-created file; ``O_NOFOLLOW`` rejects a pre-positioned symlink where
-    the platform provides it.
+    the platform provides it. On Windows the file is created already carrying
+    the owner-only DACL (``create_private_file``).
     """
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        fd = os.open(path, flags, HUB_FILE_MODE)
+        fd = create_private_file(path, mode=HUB_FILE_MODE)
     except FileExistsError:
         info = _validate_hub_file(path, repair=repair)
         return False, (info.st_dev, info.st_ino)
@@ -166,12 +165,11 @@ def canonical_hub_path(path: str) -> str:
     pre-resolving the ancestors would hand ``TrustedSQLiteLocation.open`` a
     redirect-free path and defeat ``_reject_symlinked_path`` on an ancestor
     junction -- the redirect an unprivileged account can create with only
-    directory write access (``mklink /J``).  The two POSIX controls that make
-    following a redirect tolerable both return early on ``nt``:
-    ``_require_owned_directory``'s namespace walk (which would refuse an exposed
-    parent) and ``check_file_mode``'s mode-600 check.  Windows therefore keeps
-    refusing ancestor redirects rather than following them; see the W19 record in
-    ``docs/backend_architecture.md`` section 13.
+    directory write access (``mklink /J``).  The namespace walk reads each
+    directory's owner and DACL on ``nt`` but only reports what it finds, and
+    ``check_file_mode``'s mode-600 check has no Windows form, so Windows keeps
+    refusing ancestor redirects rather than following them; see the W19 record
+    in ``docs/backend_architecture.md`` section 13.
     """
     absolute = os.path.abspath(os.path.expanduser(path))
     if os.name == "nt":
@@ -196,9 +194,9 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         # Windows has no mode bits to check: `st_mode` is synthesised from the
         # read-only attribute and reads 0o666 for an ordinary file, so this
         # would refuse every hub, including one this process just created 0600.
-        # Access there is governed by the file's ACL, which Python cannot read
-        # portably; `TrustedSQLiteLocation` trusts the hub at the root its own
-        # configuration placed it (see that module's docstring, W17 record).
+        # Access there is governed by the file's ACL, which
+        # `TrustedSQLiteLocation` reads and judges natively (see that module's
+        # docstring, "Windows: the same verdict").
         return
     try:
         mode = stat.S_IMODE(os.lstat(path).st_mode)
@@ -282,13 +280,13 @@ class HubDatabase:
             )
         except TrustedSQLiteLocationError as exc:
             raise HubPermissionError(str(exc)) from exc
-        # The guard fd must outlive the connection. POSIX advisory locks are
-        # per-process, per-inode: closing ANY fd this process holds on the hub
-        # file releases every fcntl lock the process has on it - including the
-        # ones SQLite took for self._conn (sqlite.org/howtocorrupt.html §2.2).
-        # The hub is explicitly multi-process (server + CLI), so a lock-stripped
-        # connection lets another process treat the hub as unused and delete its
-        # live -wal/-shm on close. Retained as self._guard, closed in close().
+        # The guard holds no lock-releasing descriptor on the hub: POSIX
+        # advisory locks are per-process, per-inode, so closing ANY ordinary fd
+        # this process had on the file would release every fcntl lock the
+        # process holds on it - including the ones SQLite took for self._conn,
+        # or for another hub connection in this process
+        # (sqlite.org/howtocorrupt.html §2.2). Its inode pin (O_PATH on Linux)
+        # is released in close(), after the connection.
         try:
             self._conn = sqlite3.connect(
                 guard.path,

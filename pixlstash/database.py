@@ -6,6 +6,7 @@ import itertools
 import json
 import math
 import os
+import stat
 import struct
 import threading
 import queue
@@ -32,6 +33,7 @@ from rapidfuzz.distance import Levenshtein
 import numpy as np
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.trusted_sqlite import TrustedSQLiteLocationError, create_private_file
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.tag_reset_registry import TagResetRegistry
 from pixlstash.utils.sqlite_uri import sqlite_url
@@ -1131,26 +1133,49 @@ class VaultDatabase:
             # Pre-create the database file 0600. Left to SQLite, a missing
             # database is created at 0644 & ~umask - group/world-readable
             # under the Debian/Ubuntu default umask 002. Doing it here covers
-            # every construction site, guarded or not. Without O_EXCL a lost
-            # race simply opens the other creator's file; the mode argument is
-            # ignored for an existing file.
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-            os.close(os.open(self._db_path, flags, 0o600))
+            # every construction site, guarded or not. Exclusive and never
+            # through a link, and on Windows created owner-only.
+            try:
+                os.close(create_private_file(self._db_path))
+            except FileExistsError:
+                # Another opener won the race - or something is standing at the
+                # path that `exists()` could not see: a dangling symlink. SQLite
+                # would follow that and create the database at its target, so
+                # only a regular file is accepted here.
+                try:
+                    found = os.lstat(self._db_path)
+                except OSError as exc:
+                    raise TrustedSQLiteLocationError(
+                        f"Could not inspect vault {self._db_path}: {exc}"
+                    ) from exc
+                if not stat.S_ISREG(found.st_mode):
+                    kind = (
+                        "symlink" if stat.S_ISLNK(found.st_mode) else "non-regular file"
+                    )
+                    raise TrustedSQLiteLocationError(
+                        f"Vault path {self._db_path} is a {kind}; refusing to "
+                        "create or open a database through it."
+                    )
+                logger.debug(
+                    "Vault %s appeared before this process created it; another "
+                    "opener won the race, its file is used as it is.",
+                    self._db_path,
+                )
 
         self._engine = create_configured_engine(self._db_path)
 
-        # The guard holds a raw fd on vault.db. POSIX advisory locks are
-        # per-process, per-inode: closing ANY fd a process has on a file
-        # releases EVERY fcntl lock that process holds on it - including the
-        # ones SQLite took for the engine's live connections
-        # (sqlite.org/howtocorrupt.html §2.2). Closing the guard here, while
-        # pooled connections were open, therefore stripped the server of its
-        # kernel locks on the vault; a second process (CLI, the e2e dedup
+        # POSIX advisory locks are per-process, per-inode: closing ANY fd a
+        # process has on a file releases EVERY fcntl lock that process holds on
+        # it - including the ones SQLite took for the engine's live connections
+        # (sqlite.org/howtocorrupt.html §2.2). When the guard held a raw fd,
+        # closing it while pooled connections were open stripped the server of
+        # its kernel locks on the vault; a second process (CLI, the e2e dedup
         # seeder, another instance) closing its own connection then saw the
         # database as unused, checkpointed, and DELETED the live -wal/-shm,
         # split-braining every open connection ("disk I/O error", "database
-        # disk image is malformed"). The guard must outlive the engine: it is
-        # retained and closed in close(), after dispose().
+        # disk image is malformed"). The guard now holds no lock-releasing
+        # descriptor (trusted_sqlite.TrustedSQLiteLocation: an O_PATH pin on
+        # Linux), and is still closed only in close(), after dispose().
         self._location_guard = location_guard
         try:
             with self._engine.connect() as initial_connection:
@@ -1165,7 +1190,7 @@ class VaultDatabase:
         except Exception:
             self._engine.dispose()
             self._engine = None
-            # All connections are gone, so closing the guard fd is safe now.
+            # All connections are gone, so closing the guard is safe now.
             if location_guard is not None:
                 location_guard.close()
             raise
@@ -1233,10 +1258,8 @@ class VaultDatabase:
                         f"VaultDatabase: Exception during engine dispose: {e}"
                     )
 
-            # Only after every SQLite connection is disposed may the guard fd
-            # be closed: closing it earlier releases the process's POSIX locks
-            # on the vault file out from under the live connections (see the
-            # comment in __init__).
+            # Only after every SQLite connection is disposed is the guard
+            # closed (see the comment in __init__).
             if getattr(self, "_location_guard", None) is not None:
                 try:
                     self._location_guard.close()

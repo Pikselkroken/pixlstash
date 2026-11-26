@@ -32,6 +32,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import makedirs_private
 from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.picture_import_task import PictureImportTask
@@ -1061,7 +1062,7 @@ def register_routes(router, server):
                 status_code=500,
                 detail="The library staging path is not a trusted directory.",
             )
-        os.makedirs(path, mode=0o700, exist_ok=True)
+        makedirs_private(path)
         os.chmod(path, 0o700)
         return path
 

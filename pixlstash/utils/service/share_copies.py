@@ -30,6 +30,8 @@ from io import BytesIO
 from PIL import Image, ImageOps, PngImagePlugin
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.startup_permissions import makedirs_private
+from pixlstash.trusted_sqlite import create_private_directory
 from pixlstash.utils.image_processing.generation_data import strip_generation_data
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -156,8 +158,8 @@ def make_share_copies(
     """
     batch = uuid.uuid4().hex
     directory = os.path.join(root, batch)
-    os.makedirs(root, mode=0o700, exist_ok=True)
-    os.mkdir(directory, mode=0o700)
+    makedirs_private(root)
+    create_private_directory(directory)
     claimed: dict = {}
     files, skipped = [], []
     # Where a link may go, best first. The library's batch is made on first use.
@@ -310,7 +312,7 @@ def _link_or_copy(source: str, name: str, link_dirs: list[str]) -> str:
     copied into the last of them, which is logged. Returns the directory used.
     """
     for directory in link_dirs:
-        os.makedirs(directory, mode=0o700, exist_ok=True)
+        makedirs_private(directory)
         try:
             os.link(source, os.path.join(directory, name))
             return directory

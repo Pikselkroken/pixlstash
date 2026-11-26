@@ -25,19 +25,24 @@ from typing import Callable, Optional
 from pixlstash.hub.db import HubDatabase, default_hub_path
 from pixlstash.hub.engine import HubEngine
 from pixlstash.utils.media_files import has_media_files
-from pixlstash.utils.sqlite_uri import sqlite_file_uri
 from pixlstash.hub.registry import (
     Library,
     LibraryError,
     LibraryRegistry,
     NotAVaultError,
+    UntrustedVaultError,
     VAULT_FILENAME,
     remove_library_made_entries,
     resolve_path,
     validate_vault_folder,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.trusted_sqlite import TrustedSQLiteLocation
+from pixlstash.startup_permissions import makedirs_private
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+    checked_read_connection,
+)
 from pixlstash.services.portable_identity import sanitize_vault_connection
 
 logger = get_logger(__name__)
@@ -412,10 +417,9 @@ def _legacy_owner_present(vault_path: str) -> bool:
     if not os.path.isfile(vault_path):
         return False
     try:
-        vault = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
-        )
-    except sqlite3.Error as exc:
+        with checked_read_connection(vault_path) as vault:
+            return _read_user(vault) is not None
+    except (sqlite3.Error, TrustedSQLiteLocationError) as exc:
         logger.warning(
             "Could not open %s to check for a legacy owner (%s); not offering "
             "to migrate it.",
@@ -423,8 +427,6 @@ def _legacy_owner_present(vault_path: str) -> bool:
             exc,
         )
         return False
-    try:
-        return _read_user(vault) is not None
     except HubBootstrapError as exc:
         logger.warning(
             "Could not read a legacy owner from %s (%s); not offering to migrate it.",
@@ -432,8 +434,6 @@ def _legacy_owner_present(vault_path: str) -> bool:
             exc,
         )
         return False
-    finally:
-        vault.close()
 
 
 def _sweep_unfinished_imports(registry: LibraryRegistry) -> None:
@@ -504,14 +504,16 @@ def _register_first_library(
 ) -> Library:
     # Creation only, and it must still raise on a path that is not one: an
     # empty string or an existing *file* has to end start-up here rather than
-    # be registered as a library, which is why this is `makedirs` and not
-    # `mkdir_private` (that one no-ops on both). What it creates is 0700; what
+    # be registered as a library, which is why this is `makedirs_private` (the
+    # `os.makedirs` semantics) and not `mkdir_private` (that one no-ops on
+    # both). What it creates is 0700, and on Windows restricted to this
+    # account; what
     # was already there keeps the mode the owner gave it, because `image_root`
     # is routinely a picture folder they have had for years and start-up is not
     # the moment to take read access to it away from the rest of their machine.
     # The guarded open needs it not to be group/world-*writable*, not to be
     # 0700, and `startup_permissions` offers that repair with their consent.
-    os.makedirs(image_root, mode=0o700, exist_ok=True)
+    makedirs_private(image_root)
     vault_path = os.path.join(image_root, VAULT_FILENAME)
     exists = os.path.isfile(vault_path)
 
@@ -604,7 +606,12 @@ def _identity_payload(
 def prepare_legacy_identity(hub: HubDatabase, folder: str) -> Library:
     """Record explicit, path- and payload-bound one-shot migration intent."""
     resolved = os.path.realpath(os.path.abspath(os.path.expanduser(folder)))
-    vault_path = validate_vault_folder(resolved)
+    try:
+        vault_path = validate_vault_folder(resolved)
+    except UntrustedVaultError as exc:
+        raise HubBootstrapError(
+            f"Could not open legacy vault in {resolved}: {exc}"
+        ) from exc
     registry = LibraryRegistry(hub)
     existing = hub.fetchone("SELECT uuid FROM library WHERE path = ?", (resolved,))
     if existing is not None:
@@ -618,17 +625,12 @@ def prepare_legacy_identity(hub: HubDatabase, folder: str) -> Library:
                 "reauthorize it."
             )
     try:
-        vault = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
-        )
-    except sqlite3.Error as exc:
+        with checked_read_connection(vault_path, require_trusted_owner=True) as vault:
+            user, _tokens, digest = _identity_payload(vault)
+    except (sqlite3.Error, TrustedSQLiteLocationError) as exc:
         raise HubBootstrapError(
             f"Could not open legacy vault {vault_path}: {exc}"
         ) from exc
-    try:
-        user, _tokens, digest = _identity_payload(vault)
-    finally:
-        vault.close()
     if user is None:
         raise HubBootstrapError("The selected vault has no legacy owner to migrate.")
     try:
@@ -657,24 +659,19 @@ def _copy_legacy_identity_if_needed(hub: HubDatabase, library: Library) -> bool:
         )
 
     try:
-        vault = sqlite3.connect(
-            sqlite_file_uri(vault_path, read_only=True), uri=True, timeout=5
-        )
-    except sqlite3.Error as exc:
+        with checked_read_connection(vault_path, require_trusted_owner=True) as vault:
+            vault.row_factory = sqlite3.Row
+            user_row, token_rows, digest = _identity_payload(vault)
+    except (sqlite3.Error, TrustedSQLiteLocationError) as exc:
         raise HubBootstrapError(
             f"Could not open legacy identity database {vault_path}: {exc}"
         ) from exc
-    vault.row_factory = sqlite3.Row
-    try:
-        user_row, token_rows, digest = _identity_payload(vault)
-        if digest != operation[1]:
-            raise HubBootstrapError(
-                "Legacy identity payload changed after approval; nothing was copied."
-            )
-        if user_row is None:
-            raise HubBootstrapError("Approved legacy owner disappeared before copy.")
-    finally:
-        vault.close()
+    if digest != operation[1]:
+        raise HubBootstrapError(
+            "Legacy identity payload changed after approval; nothing was copied."
+        )
+    if user_row is None:
+        raise HubBootstrapError("Approved legacy owner disappeared before copy.")
 
     _write_identity_and_mark_copied(hub, library, user_row, token_rows)
     logger.info(
@@ -715,16 +712,11 @@ def prevalidate_library_fingerprint(library: Library) -> None:
     if expected is None:
         return
     try:
-        conn = sqlite3.connect(
-            sqlite_file_uri(library.vault_path, read_only=True), uri=True, timeout=5
-        )
-        try:
+        with checked_read_connection(library.vault_path) as conn:
             row = conn.execute(
                 "SELECT library_uuid FROM library_settings LIMIT 1"
             ).fetchone()
-        finally:
-            conn.close()
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, TrustedSQLiteLocationError) as exc:
         raise HubBootstrapError(
             f"Could not verify the registered library fingerprint at "
             f"{library.vault_path} before migration: {exc}"
@@ -760,6 +752,17 @@ def _vault_is_loadable(library: Library) -> bool:
     """
     try:
         validate_vault_folder(library.path)
+    except UntrustedVaultError as exc:
+        # Not a statement that the file is no vault: the open refuses it with
+        # this same reason, and starting over must never be offered for it.
+        logger.warning(
+            "Library %s at %s failed the location checks (%s); not offering "
+            "to start it over.",
+            library.name,
+            library.path,
+            exc,
+        )
+        return True
     except NotAVaultError as exc:
         return _is_environmental_failure(exc)
     return True
