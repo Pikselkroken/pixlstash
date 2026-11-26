@@ -39,8 +39,11 @@ file.
 - Every concept can be browsed two ways: by **goal** (the `##` sections below)
   and by **workspace** (Media, Studio, Workflows, Models, Settings).
 - **Needs** is the library content a concept or task needs before it can be
-  tried. A concept needs the weakest of its tasks' needs, so a concept can be
-  Normal while some of its tasks are greyed.
+  tried. A concept's need is what its core tasks need, the ones its card
+  illustrates. Tasks grey on their own either way: a task that needs more
+  greys inside a Normal concept, and a reference or set-up task that needs
+  less (*Keyboard shortcuts*, *Choose a tagger*, *Add a workflow file*) can be
+  tried inside a greyed one.
 - **Illustration** is one line on what the shot shows. Shots are real
   screenshots of the Demo Data library, made by the existing screenshot rig
   (`frontend/e2e/screenshots/`). Demo data is public in the hosted demo, so a
@@ -49,7 +52,8 @@ file.
   audits demo data.
 - **Unstable** marks a concept or task whose controls may still move. Pass 2
   and the capture rig must not freeze screenshots of it until it ships.
-- **Startup** marks the six concepts in the welcome carousel. **New** marks a
+- **Startup** marks the six concepts in the welcome carousel, plus the two
+  the welcome offers on an empty library instead. **New** marks a
   concept that owns a *New in 2.x* headline.
 
 ## Prerequisites and where they are answered
@@ -65,18 +69,18 @@ are under `/api/v1`.
 | **picture** | at least 1 picture | `GET /pictures/count` → `count ≥ 1` |
 | **2 pictures** | at least 2 pictures | `GET /pictures/count` → `count ≥ 2` |
 | **face** | a picture with a detected face | `GET /pictures/count?face_filter=with_face` → `count ≥ 1` |
-| **video** | a video in the library | `GET /pictures/count` with `format=` each video format the importer accepts → `count ≥ 1` |
+| **video** | a video in the library | `GET /pictures/count` with `format=` each video format the importer accepts, spelled as `GET /pictures/stats` reports formats → `count ≥ 1` |
 | **person** | at least 1 person | `GET /characters` → non-empty |
 | **person with pictures** | a person with at least 1 picture | `GET /pictures/count?character_id=<id>` for a person from `GET /characters` → `count ≥ 1` |
 | **person with a LoRA** | a person with a trained or attached LoRA | **needs a count** |
 | **set** | at least 1 picture set | `GET /picture_sets` → non-empty |
 | **2 sets** | at least 2 picture sets | `GET /picture_sets` → 2 or more |
-| **recipe** | a picture made in ComfyUI | `GET /workflows` → a card with `manual: false` (an automatic workflow exists only because pictures carry its recipe) |
-| **own workflow** | a workflow that is not built in | `GET /workflows` → a card with `built_in: false` |
+| **recipe** | a picture made in ComfyUI | `GET /workflows?include_one_offs=true` → a card with `manual: false` (an automatic workflow exists only because pictures carry its recipe; without the flag, one with fewer than three pictures is left out of `cards`) |
+| **own workflow** | a workflow that is not built in: imported, duplicated, or one PixlStash found in your pictures | `GET /workflows?include_one_offs=true` → a card with `built_in: false` |
 | **outpaint workflow** | an `(outpaint)` workflow | `GET /workflows` → a card with `type: "outpaint"` |
 | **duplicates** | the Duplicates queue holds a group | `GET /dedup/groups` → a non-empty page |
 | **stack** | a picture in a stack | `GET /pictures/count?stack_state=stacked` → `count ≥ 1` |
-| **shared** | something has a share link | `GET /pictures/count?shared_only=true` → `count ≥ 1`, or a person, set or project marked shared in its list |
+| **shared** | something has a share link | `GET /pictures/count?shared_only=true` → `count ≥ 1`; a share of a person, set or project with no picture shared on its own **needs a count** |
 | **pending moves** | files moved outside PixlStash, waiting | `GET /moves/pending` → non-empty |
 | **text in a picture** | a picture where text was found | **needs a count** |
 | **training run** | a LoRA training run exists | `GET /training/jobs` → non-empty |
@@ -168,7 +172,7 @@ Move through the grid, open a picture large, zoom, compare and score it.
 | Compare | select two pictures › right-click › *Compare* | `frontend/src/components/widgets/ImageGridContextMenu.vue` | 2 pictures | two near-identical shots split in compare |
 | Filmstrip | the strip along the lightbox's bottom | `frontend/src/components/views/LightboxFilmstrip.vue` | 2 pictures | the filmstrip with two pictures Ctrl-picked |
 | Video storyboard | lightbox on a video › band switch › *Frames of this clip* | `frontend/src/components/views/Lightbox.vue`, `frontend/src/components/widgets/VideoStoryboard.vue` | video | a clip's eleven frames under the player |
-| Favourites and stars | thumbnail hover stars and heart; sidebar *Favourites* | `frontend/src/components/widgets/StarRatingOverlay.vue`, `frontend/src/components/panels/RailPicture.vue` | picture | a thumbnail with its hover stars, four lit, heart filled |
+| Favourites and stars | thumbnail hover stars and heart; sidebar *Favourites* | `frontend/src/components/widgets/StarRatingOverlay.vue`, `frontend/src/components/panels/SideBar.vue` | picture | a thumbnail with its hover stars, four lit, heart filled |
 | Keyboard shortcuts | `?` or the floating F1 button | `frontend/src/components/widgets/ShortcutsDialog.vue` | none | the Keyboard shortcuts dialog |
 
 ### Search
@@ -199,7 +203,7 @@ Narrow the grid by tag, score or size, and save it as a set that keeps itself cu
 | Task | Entry point | File | Needs | Illustration |
 |---|---|---|---|---|
 | Filter the grid | toolbar *Filter* | `frontend/src/components/panels/Toolbar.vue`, `frontend/src/components/panels/FilterMenu.vue` | picture | the Filter menu open with a score range set |
-| Sort | toolbar sort split button | `frontend/src/components/panels/Toolbar.vue` | picture | the sort menu open, *Smart Score* highlighted |
+| Sort | toolbar sort split button (labels from `pixlstash/db_models/picture.py`) | `frontend/src/components/panels/Toolbar.vue` | picture | the sort menu open, *Smart Score* highlighted |
 | Save as smart set | filter strip › *Save as smart set…* | `frontend/src/components/panels/FilterStrip.vue` | picture | the *New smart set* dialog over the filtered grid |
 
 ### Similar pictures & faces
@@ -328,7 +332,7 @@ Connect ComfyUI and make new pictures from a template or from pictures you like.
 | Run a workflow | Workflows › a card › *Run…* (R); or right-click pictures › *Generate* › *Run a workflow on these…* | `frontend/src/components/panels/WorkflowTab.vue`, `frontend/src/components/io/RunDialog.vue` | none | the Run popup with count and seed set |
 | Blank picture | Run popup › *Blank picture* | `frontend/src/components/io/RunDialog.vue` | none | the Run popup with *Blank picture* ticked |
 | Make more like these | right-click pictures › *Generate* › *Make more like these…* | `frontend/src/components/widgets/ImageGridContextMenu.vue`, `frontend/src/components/io/MakeMoreDialog.vue` | picture | the dialog with its source pictures in a row |
-| Several ComfyUI connections | Settings › ComfyUI › *Connections* › *Add connection* | `frontend/src/components/settings/ComfyuiConnectionsTable.vue` | none | two connections, *Run on* set to the second |
+| Several ComfyUI connections | Settings › ComfyUI › *Connections* › *Add connection* | `frontend/src/components/settings/ComfyuiHostSection.vue`, `frontend/src/components/settings/ComfyuiConnectionsTable.vue` | none | two connections, *Run on* set to the second |
 | Open or finish in ComfyUI | Workflows inspector › *Open in ComfyUI*; a Draft card › *Finish in ComfyUI…* | `frontend/src/components/panels/WorkflowTab.vue`, `frontend/src/components/widgets/WorkflowCard.vue` | none | a Draft card with *Finish in ComfyUI…* |
 
 ### Models
@@ -463,7 +467,7 @@ Take pictures out as a ZIP, to a folder or as a training dataset.
 |---|---|---|---|---|
 | Export as a ZIP | select pictures › selection bar *Export* › *Export* | `frontend/src/components/panels/SelectionBar.vue`, `frontend/src/components/panels/TbExportPanel.vue` | picture | the Export panel with its options |
 | Export to a folder | Export panel › *Export to Folder…* | `frontend/src/components/panels/TbExportPanel.vue` | picture | the folder picker from the panel |
-| Bounding boxes (COCO, Ideogram) | Export panel › *Bounding boxes* › COCO JSON / Ideogram 4 JSON | `frontend/src/components/panels/TbExportPanel.vue` | picture | the dropdown open on the two formats |
+| Bounding boxes (COCO, Ideogram) | Export panel › *Bounding boxes* › COCO JSON / Ideogram 4 JSON | `frontend/src/components/panels/TbExportPanel.vue` (options in `frontend/src/stores/useExportStore.js`) | picture | the dropdown open on the two formats |
 | Export a recipe | see Recipes › *Export a recipe* | `frontend/src/components/panels/WorkflowRecipesTab.vue` | recipe | (shared with Recipes) |
 
 ### Share links
@@ -527,7 +531,7 @@ Undo a change, bring back deleted pictures and restore a snapshot.
 | Task | Entry point | File | Needs | Illustration |
 |---|---|---|---|---|
 | Undo history | title bar Undo / Redo and the *History* chevron | `frontend/src/components/panels/UndoControl.vue` | history | the History panel open |
-| Scrapheap | sidebar *Scrapheap*; Settings › Recovery › Scrapheap | `frontend/src/components/panels/SideBar.vue`, `frontend/src/components/settings/ScrapheapSection.vue` | picture | the Scrapheap view with *Restore* |
+| Scrapheap | sidebar *Scrapheap* › select › *Restore Selected*; retention in Settings › Recovery › Scrapheap | `frontend/src/components/panels/SideBar.vue`, `frontend/src/components/panels/SelectionMenu.vue`, `frontend/src/components/settings/ScrapheapSection.vue` | picture | the Scrapheap view with *Restore* |
 | Snapshots | Settings › Recovery › Snapshots; right-click › *Restore from snapshot* | `frontend/src/components/settings/SnapshotsSection.vue` | snapshot | the Snapshots list with a restore preview |
 | Ghosts | Settings › Recovery › Ghosts | `frontend/src/components/settings/GhostsSection.vue` | picture | picture and model ghosts listed |
 
@@ -599,6 +603,13 @@ picture, a recipe, a workflow of the user's own or a person.
 
 Checking each task against `develop` changed these:
 
+- **A concept's need is its core tasks' need, not its weakest task's.** The
+  plan said "weakest", but its own table contradicts that: Browse & inspect,
+  Tags & descriptions, Workflows, Share links and Connect an AI agent each hold
+  a task that needs nothing (shortcuts, a tagger setting, dropping a workflow
+  file, remote access, the connect dialog). Read literally, the rule would
+  light all five on an empty library. The plan's table wins, and those tasks
+  stay tryable inside their greyed concept.
 - **API is a concept** (owner, after the plan). It needs nothing, so the empty
   library leaves seven concepts lit, not six.
 - **People › Colour and icon is dropped.** People have no colour or icon
@@ -608,9 +619,8 @@ Checking each task against `develop` changed these:
   and its live tasks (outfit, location and prop sheets) start from sidebar
   menus. Cast and wardrobe, scenes and takes, and *More angles* have no entry
   point anywhere and are kept as placeholders. Location and prop sheets need
-  nothing, so by the weakest-task rule Studio would be Normal on an empty
-  library. It stays at "needs a person" here because the plan and the design
-  both draw it so. Either the rule or the concept's need wants a ruling.
+  nothing, but Studio's core is the cast, so the concept needs a person, as
+  the plan and the design both draw it.
 - **Extend needs an Outpaint workflow**, made by *Convert to Outpainting
   workflow*. That workflow is library content, so the Extend task greys on its
   own ("First: Workflows"), though Edit a picture as a concept does not. The
