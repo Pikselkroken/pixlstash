@@ -354,6 +354,8 @@ def create_router(server) -> APIRouter:
             )
         if ended:
             scene.runs = still
+            # New takes make it the scene shot last.
+            scene.updated_at = datetime.now(timezone.utc)
             session.add(scene)
             session.commit()
             session.refresh(scene)
@@ -701,6 +703,7 @@ def create_router(server) -> APIRouter:
             scene.runs = [*(scene.runs or [])] + [
                 run.model_dump() for run in payload.runs if run.key not in known
             ]
+            scene.updated_at = datetime.now(timezone.utc)
             session.add(scene)
             session.commit()
             session.refresh(scene)
@@ -724,6 +727,8 @@ def create_router(server) -> APIRouter:
                 )
             ).all():
                 session.delete(take)
+            scene.updated_at = datetime.now(timezone.utc)
+            session.add(scene)
             session.commit()
             return _scene_body(session, scene)
 

@@ -454,6 +454,18 @@ def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     assert still_there is not None
 
 
+def test_a_shoot_puts_its_scene_first_in_the_overview(env):
+    client = env.client
+    older = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Older"}).json()
+    client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Newer"})
+    client.post(
+        f"{API_PREFIX}/studio/scenes/{older['id']}/runs",
+        json={"runs": [{"key": f"run-{uuid.uuid4().hex}"}]},
+    )
+    scenes = client.get(f"{API_PREFIX}/studio/overview").json()["scenes"]
+    assert scenes[0]["id"] == older["id"]
+
+
 def test_a_favourite_is_starred_and_unstarred(env):
     client = env.client
     scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Starred"}).json()

@@ -587,6 +587,8 @@ async function load({ keepDraft = false } = {}) {
   } catch (e) {
     if (!alive) return;
     loadError.value = `Couldn't read the scene. ${errorMessage(e, "Please try again.")}`;
+    // One failed read must not stop following the shoots still drawing.
+    schedulePoll();
   }
 }
 

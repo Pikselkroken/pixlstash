@@ -228,6 +228,18 @@ describe("a scene", () => {
     expect(api.deleteScene).toHaveBeenCalledWith(1);
   });
 
+  it("keeps following its shoots after one failed read", async () => {
+    vi.useFakeTimers();
+    api.getScene
+      .mockResolvedValueOnce({ ...SCENE, runs: [{ key: "run-a" }] })
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValue({ ...SCENE, runs: [] });
+    await mountAt("/studio?open=scene:1");
+    await vi.advanceTimersByTimeAsync(3100);
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(api.getScene).toHaveBeenCalledTimes(3);
+  });
+
   it("puts a box on the stage for each person and prop", async () => {
     const wrapper = await mountAt("/studio?open=scene:1");
     expect(wrapper.find('[data-testid="studio-scene"]').exists()).toBe(true);
