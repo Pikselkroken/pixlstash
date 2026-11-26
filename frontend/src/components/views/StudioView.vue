@@ -410,6 +410,11 @@ const favouriteKindOptions = computed(() => {
   ];
 });
 
+// Unstarring the last of a kind takes its segment away: fall back to All.
+watch(favouriteKindOptions, (options) => {
+  if (!options.some((o) => o.id === favouriteKind.value)) favouriteKind.value = "all";
+});
+
 const cards = computed(() => {
   switch (section.value) {
     case "favourites":

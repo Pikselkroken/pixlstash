@@ -54,6 +54,7 @@ vi.mock("../../api/pictures", () => ({
 vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn() }));
 
 import { useProjectStore } from "../../stores/useProjectStore";
+import { useStudioStore } from "../../stores/useStudioStore";
 import StudioView from "./StudioView.vue";
 
 const OVERVIEW = {
@@ -189,6 +190,15 @@ describe("the Studio's grids", () => {
     await seg.vm.$emit("update:modelValue", "location");
     await flushPromises();
     expect(cardKeys(wrapper)).toEqual(["location-30"]);
+  });
+
+  it("falls back to All when the last favourite of the chosen kind is unstarred", async () => {
+    const wrapper = await mountAt("/studio?section=favourites");
+    await wrapper.findComponent({ name: "Segmented" }).vm.$emit("update:modelValue", "location");
+    await flushPromises();
+    useStudioStore().overview.locations[0].favourite = false;
+    await flushPromises();
+    expect(cardKeys(wrapper)).toEqual(["scene-1", "cast-5"]);
   });
 
   it("reads the project from the route into the shared project store", async () => {

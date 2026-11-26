@@ -98,7 +98,8 @@
     </div>
 
     <template #footer>
-      <AppButton variant="secondary" @click="close">{{
+      <!-- Cancel stops a draw, but must not walk away from a half-done Use. -->
+      <AppButton variant="secondary" :disabled="working && phase === 'pick'" @click="close">{{
         phase === "pick" ? "Discard" : "Cancel"
       }}</AppButton>
       <AppButton

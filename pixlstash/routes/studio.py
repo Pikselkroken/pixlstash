@@ -784,6 +784,15 @@ def create_router(server) -> APIRouter:
     )
     def put_favourite(payload: FavouriteToggle):
         def update(session: Session):
+            if payload.favourite:
+                model = {"scene": Scene, "cast": Character}.get(
+                    payload.kind, PictureSet
+                )
+                if session.get(model, payload.item_id) is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"No {payload.kind} {payload.item_id} to star.",
+                    )
             row = session.get(StudioFavourite, (payload.kind, payload.item_id))
             if payload.favourite and row is None:
                 session.add(StudioFavourite(kind=payload.kind, item_id=payload.item_id))

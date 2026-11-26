@@ -137,6 +137,21 @@ describe("More angles", () => {
     expect(wrapper.emitted("done")[0]).toEqual([2]);
   });
 
+  it("keeps Discard out of reach while the kept views are being put away", async () => {
+    let finish;
+    api.bulkAddPicturesToSet.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    const discard = () => wrapper.findAll("button").find((b) => b.text() === "Discard");
+    expect(discard().attributes("disabled")).toBeDefined();
+    finish({});
+    await flushPromises();
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
   it("stops with a reason when a restore run makes nothing", async () => {
     api.getRunOutcome.mockImplementation(async (key) => ({
       status: "completed",

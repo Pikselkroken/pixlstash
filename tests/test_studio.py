@@ -624,3 +624,14 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
         ).status_code
         == 404
     )
+
+
+def test_only_an_item_that_exists_is_starred(env):
+    client = env.client
+    for kind in ("scene", "cast", "location"):
+        body = {"kind": kind, "item_id": 987654, "favourite": True}
+        answer = client.put(f"{API_PREFIX}/studio/favourites", json=body)
+        assert answer.status_code == 404, kind
+    # A star whose item has gone can still be taken off.
+    body = {"kind": "location", "item_id": 987654, "favourite": False}
+    assert client.put(f"{API_PREFIX}/studio/favourites", json=body).status_code == 200
