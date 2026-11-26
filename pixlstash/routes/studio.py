@@ -144,6 +144,27 @@ class FavouriteToggle(BaseModel):
     favourite: bool
 
 
+class SceneDeleted(BaseModel):
+    status: str
+    id: int
+
+
+class ItemKindSet(BaseModel):
+    set_id: int
+    kind: str
+
+
+class ItemRemoved(BaseModel):
+    set_id: int
+    removed: bool
+
+
+class FavouriteSet(BaseModel):
+    kind: str
+    item_id: int
+    favourite: bool
+
+
 class SceneResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -605,6 +626,7 @@ def create_router(server) -> APIRouter:
         description=(
             "The scene and its list of takes go; the take pictures stay in the library."
         ),
+        response_model=SceneDeleted,
     )
     def delete_scene(scene_id: int):
         def remove(session: Session):
@@ -715,6 +737,7 @@ def create_router(server) -> APIRouter:
             "dialog's sets, or any set of pictures of one. An outfit is worn "
             "by its set's parent person. 404 for a set that is not there."
         ),
+        response_model=ItemKindSet,
     )
     def put_item(set_id: int, payload: ItemKind):
         def update(session: Session):
@@ -736,6 +759,7 @@ def create_router(server) -> APIRouter:
         "/studio/items/{set_id}",
         summary="Stop using a picture set in the Studio",
         description="The set and its pictures stay; scenes using it keep the id.",
+        response_model=ItemRemoved,
     )
     def delete_item(set_id: int):
         def update(session: Session):
@@ -751,6 +775,7 @@ def create_router(server) -> APIRouter:
         "/studio/favourites",
         summary="Star or unstar a Studio item",
         description=f"`kind` is one of {', '.join(FAVOURITE_KINDS)}.",
+        response_model=FavouriteSet,
     )
     def put_favourite(payload: FavouriteToggle):
         def update(session: Session):
