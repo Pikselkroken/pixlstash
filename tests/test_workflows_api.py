@@ -6192,6 +6192,8 @@ def test_a_blank_picture_size_is_not_a_size_the_sheet_step_sets(
     # The canvas and the conditioning, both the sheet's size: 4K for H3 Image.
     width, height = character_sheet.SIZES["4k"]
     assert sizes == {("width", width), ("height", height)}
+    # Listed as one PixlStash ships, so a sheet dialog can offer it first.
+    assert _by_key(_cards(owner))[r.json()["workflow_id"]]["built_in"] is True
 
 
 def test_an_unreadable_built_in_is_skipped_and_the_rest_still_listed(
@@ -6647,6 +6649,7 @@ def test_a_card_the_pull_made_is_an_ordinary_workflow_no_file_feeds(
     cards = _by_key(_cards(owner))
     assert (cards[key]["origin_category"], cards[key]["manual"]) == ("comfyui", True)
     assert cards[imported]["origin_category"] == "own"
+    assert cards[imported]["built_in"] is False
     assert {
         card["origin_category"]
         for wid, card in cards.items()

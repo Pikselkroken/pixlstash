@@ -683,6 +683,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                        |
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
+| POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
+| POST   | /api/v1/item-sheets/use                                                       | characters      | Use outfit, location or prop sheets                           |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                     |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                                 |
 | POST   | /api/v1/libraries/active                                                      | libraries       | Switch the active library                                     |
@@ -13445,6 +13447,27 @@ is never the library's**: it is drawn held, into the Scrapheap, and stays there.
   height) and widens the head box with it, so the layout stops insisting on a
   seven-heads-tall adult. `typical` leaves the probed boxes untouched; the
   other two fractions are textbook figures no probe has measured.
+- **Outfit, location and prop sheets.** The same dialog and step draw an
+  item by its *kind* (`outfit`, `location`, `prop`): `POST
+  /character-sheets/prompt` with `kind` writes `item_sheet_prompt`, always
+  prose from the description alone, four angles two by two on one sheet (an
+  outfit's Front, ¾, Side, Back on an invisible mannequin, framed to the
+  garments described, on a 4:5 sheet from `item_canvas` so a jumper fills its
+  panel; a location's Wide, Reverse, Left, Right and a prop's Front, ¾, Side,
+  Back on the 5:3 one). The step lists
+  MiniMax H3 Image workflows first and, among them, the shipped ones
+  (`WorkflowCard.built_in`): an owner's graph may sample several seeds a run
+  and save each, which multiplies the sheets asked for. The run, the hold in the
+  Scrapheap and the cut search (`_find_cut`, the frame and gutter trims) are
+  the character sheet's; `item_sheet_cells` cuts the item's grid, columns
+  first, then each column's rows. Items have no faces, so `POST
+  /item-sheets/rank` scores each panel by `colour_agreement` (colour histogram
+  overlap with the other three, the backdrop left out) and is ready as soon as
+  the sheet is imported; `ITEM_AGREEMENT` is unprobed. `POST
+  /item-sheets/use` cuts and imports the four panels, filed on nobody; the
+  dialog puts them in a new picture set named for the item (an outfit's under
+  its person). The Studio's own record of outfits, locations and props is not
+  built yet: a set is where they live until it is.
 
 ### 25.30 Face clusters and the reference cluster
 

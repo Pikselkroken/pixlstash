@@ -287,6 +287,7 @@ const emit = defineEmits([
   "train-lora",
   "create-training-set",
   "character-sheets",
+  "item-sheets",
   "face-clusters",
   "import-finished",
   "set-error",
@@ -394,6 +395,9 @@ const tagReviewRowEl = ref(null);
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 // Right-click on a section HEADER (not an item): 'people' | 'sets', or null. Offers the "create/add" action.
 const sidebarCtxHeader = ref(null);
+// The header's toggle, for a dialog its menu opens to hand focus back to: the
+// header itself takes no focus.
+let sidebarCtxHeaderEl = null;
 // Right-click on empty/uncovered sidebar space: offers the view toggles
 // (auto-hide, dock mode).
 const sidebarCtxEmpty = ref(false);
@@ -2278,8 +2282,11 @@ function openSidebarCtxMenu(type, item, event) {
     sidebarCtxProject.value = null;
     sidebarCtxAllPictures.value = false;
     sidebarCtxDeleteIds.value = [];
-    if (type === "header") sidebarCtxHeader.value = item;
-    else if (type === "empty") sidebarCtxEmpty.value = true;
+    if (type === "header") {
+      sidebarCtxHeader.value = item;
+      const header = event?.currentTarget ?? null;
+      sidebarCtxHeaderEl = header?.querySelector?.("button") ?? header;
+    } else if (type === "empty") sidebarCtxEmpty.value = true;
     sidebarCtxX.value = event.clientX;
     sidebarCtxY.value = event.clientY;
     sidebarCtxVisible.value = true;
@@ -6846,6 +6853,25 @@ defineExpose({
         <button
           class="ctx-item"
           :disabled="isReadOnly"
+          data-testid="ctx-outfit-sheets"
+          @click="
+            emit('item-sheets', {
+              kind: 'outfit',
+              character: {
+                id: sidebarCtxCharacter.id,
+                name: sidebarCtxCharacter.name,
+              },
+              returnFocusTo: sidebarCtxCharacterEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-hanger</v-icon>
+          <span class="ctx-label-text">Draw outfit sheets…</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
           @click="
             emit('create-training-set', {
               id: sidebarCtxCharacter.id,
@@ -7420,6 +7446,36 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-image-album</v-icon>
           Create set
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          data-testid="ctx-location-sheets"
+          @click="
+            emit('item-sheets', {
+              kind: 'location',
+              returnFocusTo: sidebarCtxHeaderEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-map-marker-outline</v-icon>
+          Draw location sheets…
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          data-testid="ctx-prop-sheets"
+          @click="
+            emit('item-sheets', {
+              kind: 'prop',
+              returnFocusTo: sidebarCtxHeaderEl,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-umbrella-outline</v-icon>
+          Draw prop sheets…
         </button>
       </template>
       <!-- ── Empty-space menu (right-click uncovered sidebar area) ── -->

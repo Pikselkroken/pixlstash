@@ -1563,6 +1563,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Cut sheets into pictures; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/item-sheets/rank"): RoutePolicy(
+        _OWNER,
+        justification="Rank drawn outfit, location or prop sheets; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/item-sheets/use"): RoutePolicy(
+        _OWNER,
+        justification="Cut outfit, location or prop sheets into pictures; POST blocked for READ tokens; owner only",
+    ),
     # ── picture_sets.py ─────────────────────────────────────────────────────
     ("GET", "/api/v1/picture_sets"): _LIST_AWARE,
     ("GET", "/api/v1/picture_sets/locked-members"): _LIST_AWARE,
