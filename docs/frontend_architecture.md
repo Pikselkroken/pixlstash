@@ -18,7 +18,7 @@
 10. [Naming and Coding Conventions](#10-naming-and-coding-conventions)
 11. [Build Configuration](#11-build-configuration)
 12. [Mermaid Diagrams](#12-mermaid-diagrams)
-13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox), [13.7 The Studio](#137-the-studio), [13.8 The Guide](#138-the-guide)
+13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves), [13.6 The Inbox](#136-the-inbox), [13.7 The Studio](#137-the-studio)
 
 ---
 
@@ -231,7 +231,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useWsStore` | `useWsStore.js` | `wsTagUpdate`, `wsPluginProgress`, `updatesSocket`; the per-tab `clientId` (`crypto.randomUUID()`, persisted under `pixlstash:clientId` in `sessionStorage`, in-memory fallback; mirrored into `apiClient` via `setRequestClientId`); the two pills' ids — `pendingExternalImportIds`/`sortChangedExternalIds` with computed `*Count` and `add*`/`clear*` setters |
 | `useUserPrefsStore` | `useUserPrefsStore.js` | `checkForUpdates`, `hiddenTags`, `applyTagFilter`, `penalisedTagWeights`, `dateFormat`, `themeMode`, `sidebarWidth` (drag-resizable through `useSidebarWidth`, clamped 140–300), `showKeyboardHint`, `gridOpenGesture` (`"double"`/`"single"`), `viewerWheelAction` (`"zoom"`/`"browse"`) |
 | `useTagClipboardStore` | `useTagClipboardStore.js` | Tag copy and paste (#2139). `clipboardTags` (filled by Copy on the chips selected in `RailTags`, in the grid rail and the lightbox's Info alike, where Rejected chips select and copy too but Delete passes them over, or a search token; also written to the system clipboard as comma-separated text; **client memory only**, gone when the app closes) and `chipSize` (written to the `--tag-chip-font` root variable; stored in `/users/me/config` as `tag_chip_size`). `pasteClipboard(ids)` adds only the tags each picture is missing, one batch id, so one undo step; it never rejects. Ctrl+V reaches it from the lightbox (anywhere but a text field) and the grid selection; the rail's Tags header (`RailTags`) has a Paste button too. Hydrated by `useAppConfig`. |
-| `useGuideStore` | `useGuideStore.js` | The Guide (#2825, §13.8): what the library holds for greying (`refresh()` → `met`, read by `guide/needs.js`, reset on a session change), Start here, the welcome (`hydrate` reads `guide_welcome_seen`; `evaluateWelcome` is called once per session from App.vue when the config, the first library count and the first-run prompts are settled; `closeWelcome` writes the edition, never from a read-only session), the search text, and the running wizard (`startTask`, `nextStep`, `endWizard`). |
+| `useGuideStore` | `useGuideStore.js` | The Guide (#2825): what the library holds for greying (`refresh()` → `met`, read by `guide/needs.js`, reset on a session change), Start here, the welcome (`hydrate` reads `guide_welcome_seen`; `evaluateWelcome` is called once per session from App.vue when the config, the first library count and the first-run prompts are settled; `closeWelcome` writes the edition, never from a read-only session), the search text, and the running wizard (`startTask`, `nextStep`, `endWizard`). |
 | `useTagGroupsStore` | `useTagGroupsStore.js` | Tag groups (#2469): the library-wide map from a tag name to its group (`groups` in rail order, `groupOf` tag → group id; a tag not in it is Ungrouped), read from `GET /tag_groups` at most every 30 s; every write answers with the whole map. `moveTags(tags, groupId)` is one undoable operation (`target_type: "tag_group"`), so it re-reads `useOperationStore`, whose undo/redo paths re-read this map when they restore one. Also this machine's view choices, in localStorage: the rail's Tags \| By group (`railView`), folded groups, and Tags to review's Health \| Groups (`boardView`). Filter terms `__group:<id>` / `__group:none` (`groupToken`). A share session cannot read the map (owner only), so it stays empty and every surface shows today's UI. |
 | `useProjectStore` | `useProjectStore.js` | `projectViewMode` *(sidebar-display only — see below)*, `selectedProjectId`, `characterProjectIds`, `setProjectIds` |
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen` (the Library's stats rail, default closed), `lightboxRailOpen` (the lightbox inspector's own flag, default **open**, key `pixlstash:lightboxRailOpen`; `toggleLightboxRail()` persists), `reviewsRailOpen` (the Tags view's Reviews inspector, default **open**, key `pixlstash:reviewsRailOpen`; `toggleReviewsRail()` persists), `workflowInspectorOpen` (the Workflows inspector's own flag, default **open**, key `pixlstash:workflowInspectorOpen`; `toggleWorkflowInspector()` persists, `openWorkflowInspector()` is for deep links and does not), `showCardInInspector(rail)` + `cardTabRequest` (a card's double-click: opens a shut `workflows` or `models` rail, persisted, and bumps the counter so the rail on screen selects its card tab, Workflow or Models; an open rail is left on its tab), `inspectorNudge` (a counter a selection-describing inspector's screen bumps on each new selection, and the Models shelf also when a card's tray opens, see "Closed inspector" under Shared shell pieces), `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
@@ -8847,44 +8847,3 @@ inside its lightboxes, so the rail is empty on `/studio`.
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always
   beside the kind's word. Scenes are ink. Selection stays olive.
-
-### 13.8 The Guide
-
-What PixlStash can do, and where to click (#2825). The content contract is
-`docs/guide/concepts.md`; the app's copy of it is `guide/catalogue.js`, plain
-data checked by `guide/catalogue.test.js`.
-
-- **A place, not a workspace.** `/guide` and `/guide/:concept`, owner-only
-  like the Studio (`GUIDE_ROUTES`, `isGuideView`), mounted by `App.vue` as
-  `GuideSidebar` + `GuideView` with no rail. It opens from the title bar's
-  Guide button and F1 (F1 inside it focuses the search); Keyboard shortcuts
-  keep `?`. With it open no workspace segment is lit. Settings' version and
-  What's new pill open it on New in 2.x.
-- **The route is the state.** `?in=` is the sidebar row (`all`, `start`,
-  `new`, `goal:<id>`, `ws:<id>`; `guide/browse.js`), kept on a concept page so
-  the sidebar still shows where it was reached from. `?view=read` is the
-  written page, `?task=` rings one task (a headline's target).
-- **Greying is a hint, never a lock.** `guide/needs.js` reads each need from
-  an existing endpoint (`readNeeds`); a reading that fails counts as met and
-  is logged. A concept or task greys when `firstUnmet(needs, met)` names a
-  need; a greyed concept opens like any other, and a greyed task offers
-  "First: <concept>" (from `NEEDS[key].first`) instead of Show me. Nothing
-  greys for a missing tool (ComfyUI, AI-toolkit, an MCP client).
-- **The wizard** (`GuideWizard.vue`, mounted by App.vue while
-  `useGuideStore().wizard` is set) grew out of the 2.0 LoRA tour: a scrim
-  with a hole over each step's `target`, which moves on when the user
-  clicks, right-clicks or double-clicks inside it. A step's `go` navigates
-  first (a route, or `settings:<tab>`). While the target is not on screen
-  there is no scrim, only the card, so nothing is blocked. Targets are stable
-  hooks; where a control had none it carries `data-guide="<concept>.<task>"`.
-  Moving or renaming such a control means updating its step;
-  `catalogue.test.js` fails on a `data-guide` value no component has.
-- **The welcome** (`GuideWelcome.vue`) shows on the first launch with
-  pictures, and again when a release adds a headline (`WELCOME_EDITION`, the
-  newest `HEADLINES` id, against the owner's `guide_welcome_seen`), then
-  opening on New. Esc, × and Not now all record it. An empty library gets
-  Import pictures and Generate with ComfyUI instead of the six.
-- **Illustrations** are real Demo Data screenshots in `assets/guide/`, made
-  by `e2e/screenshots/guide.spec.js` (`npm run screenshots:guide`). A concept
-  without one (Studio, while unstable) draws its icon on a plain tile.
-
