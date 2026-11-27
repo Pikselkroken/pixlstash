@@ -44,6 +44,13 @@ file.
   greys inside a Normal concept, and a reference or set-up task that needs
   less (*Keyboard shortcuts*, *Choose a tagger*, *Add a workflow file*) can be
   tried inside a greyed one.
+- **Search terms** are the extra words the Guide's search field matches for
+  a concept, beside its name, its summary and its task names. They are the
+  words someone types who does not know the app's own: synonyms, both
+  spellings (*colour*, *color*), names other apps use (*album*, *catalog*,
+  *smart folder*) and community jargon (*txt2img*, *cull*, *dedupe*). A word
+  may sit under more than one concept; search then shows both. Match them
+  case-insensitively, from the start of any word.
 - **Illustration** is one line on what the shot shows. Shots are real
   screenshots of the Demo Data library, made by the existing screenshot rig
   (`frontend/e2e/screenshots/`). Demo data is public in the hosted demo, so a
@@ -99,6 +106,8 @@ Pinned first in the grid, outside the A–Z order. **Needs:** none, never
 greyed. It holds no tasks of its own: each headline is a link into the concept
 that owns it, and opens that concept's matching task.
 
+**Search terms:** new, what's new, whats new, latest, recent, release notes, changelog, changes, update, updated, upgrade, new features, new version, 2.0, 2.1, highlights, announcements.
+
 **Illustration:** a mosaic of the headline shots below, the newest first.
 
 | Headline | Opens | Release |
@@ -128,6 +137,7 @@ Drop files, watch a folder, or add a folder you already keep pictures in.
 - **Goal:** Get pictures in · **Workspace:** Media
 - **Needs:** none
 - **Startup:** yes, on an empty library only · **New:** no
+- **Search terms:** import, add, add photos, add images, upload, ingest, load, bring in, open files, drag and drop, drop files, copy in, transfer, migrate, folder, watch folder, watched folder, hot folder, auto-import, monitor folder, sync folder, sidecar, caption files, .txt captions, existing folder, camera, phone, screenshots, scans, first pictures, get started, empty library
 - **Illustration:** the grid's drop overlay, "Drop files here to import", over an empty library.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -146,6 +156,7 @@ Keep several libraries apart and switch between them from the title bar.
 - **Goal:** Get pictures in · **Workspace:** title bar, Settings
 - **Needs:** none
 - **Startup:** no · **New:** no
+- **Search terms:** library, libraries, catalog, catalogue, vault, database, separate library, second library, multiple libraries, switch library, profile, storage, storage location, drive, disk, disk space, free space, full disk, external drive, NAS, data folder, where are my files, location on disk, library stats, insights, overview, about
 - **Illustration:** the open title-bar library picker, three libraries with their free-space bars.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -164,6 +175,7 @@ Move through the grid, open a picture large, zoom, compare and score it.
 - **Goal:** Find · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** yes (three workspaces; video frames)
+- **Search terms:** browse, view, look, gallery, grid, thumbnails, thumbnail size, contact sheet, justified, masonry, square, layout, lightbox, viewer, full screen, fullscreen, preview, large view, magnify, zoom in, pan, 100 %, pixel peep, side by side, A/B, before and after, compare, filmstrip, carousel, slideshow, next picture, video, frames, storyboard, scrub, rating, rate, stars, star rating, favourite, favorite, like, heart, best, pick, shortcuts, hotkeys, keybindings, keys, keyboard
 - **Illustration:** the lightbox open over the grid, filmstrip along the bottom, stars in the details panel.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -184,6 +196,7 @@ Find pictures by what is in them, their text, a tag, a face or a colour.
 - **Goal:** Find · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** yes (slide 1, colour search) · **New:** yes (colour search)
+- **Search terms:** search, find, look for, query, lookup, search bar, semantic search, natural language, describe, AI search, CLIP, meaning, concept search, OCR, text in image, words, writing, signs, tag search, by tag, face search, by person, by model, by checkpoint, by LoRA, by workflow, tokens, chips, colour, color, hue, palette, dominant colour, swatch, eyedropper, where is
 - **Illustration:** the search field with a blue swatch picked and a grid of blue-water pictures.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -200,6 +213,7 @@ Narrow the grid by tag, score or size, and save it as a set that keeps itself cu
 - **Goal:** Find · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** yes (smart sets)
+- **Search terms:** filter, filters, narrow, refine, facets, criteria, conditions, rules, query builder, score, rating filter, minimum stars, resolution, size, dimensions, megapixels, orientation, landscape, portrait, square, aspect ratio, format, file type, PNG, JPEG, WebP, video only, date, sort, order, arrange, newest, oldest, smart album, smart collection, smart folder, saved search, saved filter, dynamic set, live set, auto-updating set, rule-based set, virtual folder
 - **Illustration:** the active-filter strip (score ≥ 4, a tag, landscape) with *Save as smart set…* under the pointer.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -215,6 +229,7 @@ Sort by likeness, search with a picture, and let a face find more of a person.
 - **Goal:** Find · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** yes (slide 2, *Suggest more pictures*) · **New:** yes (faces and reference cluster)
+- **Search terms:** similar, similarity, lookalike, look-alike, alike, related, more like this, visually similar, reverse image search, search by image, image search, query by example, find matches, face recognition, facial recognition, face detection, face match, same person, who is this, identify, recognise, recognize, cluster, clustering, group faces, unknown faces, unnamed faces, suggest, suggestions, likeness, resemblance, embedding, nearest neighbours
 - **Illustration:** one person's thumbnail beside a grid of library pictures that look like them (*Suggest more pictures*).
 
 | Task | Entry point | File | Needs | Illustration |
@@ -235,6 +250,7 @@ Name the people in your pictures, then find and generate them by name.
 - **Goal:** Organise · **Workspace:** Media
 - **Needs:** none ("Create a person" needs nothing)
 - **Startup:** no · **New:** no
+- **Search terms:** people, person, persons, character, characters, OC, original character, persona, subject, identity, who, face, faces, name, name a face, label a face, tag a person, assign, unassign, face box, bounding box, draw box, missed face, add face, family, friends, avatar, profile picture, cover picture, thumbnail, portrait
 - **Illustration:** the sidebar People list with four people and the *+* button lit.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -251,6 +267,7 @@ Gather pictures into sets, nest and lock them, and scope the library to a projec
 - **Goal:** Organise · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** set, sets, album, albums, collection, collections, folder, folders, gallery, group, board, moodboard, mood board, selection, shortlist, project, projects, client, job, scope, nested, subfolder, sub-set, hierarchy, tree, lock, protect, read-only, freeze, icon, colour, color, label, combine, merge sets, union, overlap, intersection, difference, organise, organize, sort into, file away, categorise, categorize
 - **Illustration:** the sidebar Sets list with a nested set open and one set locked.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -269,6 +286,7 @@ Let the tagger describe every picture, then correct, copy and group the tags.
 - **Goal:** Organise · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** tag, tags, tagging, keyword, keywords, label, labels, labelling, labeling, metadata, auto-tag, autotag, auto tagging, AI tags, tagger, booru tags, danbooru, caption, captions, captioning, description, describe, alt text, interrogate, Florence, JoyCaption, copy tags, paste tags, bulk tag, batch tag, edit tags, remove tag, wrong tag, tag groups, tag categories, taxonomy, vocabulary, import tags
 - **Illustration:** the side panel's Tags section with grouped chips and the Description under it.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -290,6 +308,7 @@ Fold near-identical pictures into stacks and clear the Duplicates queue.
 - **Goal:** Review · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** stack, stacks, stacking, group, bundle, burst, variants, variations, versions, collapse, fold, duplicate, duplicates, dupes, dedupe, dedup, de-duplicate, near-duplicate, near duplicate, copies, identical, same picture twice, clean up duplicates, cover, top picture, representative, keep best, pick best, perceptual hash
 - **Illustration:** the Duplicates queue with a group of near-identical shots and *Keep cover only*.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -306,6 +325,7 @@ Work through the Inbox, check doubtful tags and look at what the score flags.
 - **Goal:** Review · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** review, triage, cull, culling, sort through, go through, inbox, queue, to do, keep, skip, reject, discard, scrap, delete, trash, clean up, tidy, declutter, prune, quality, bad pictures, blurry, artefacts, artifacts, anomalies, outliers, smart score, aesthetic score, quality score, ranking, tag review, wrong tags, doubtful tags, confidence, tag health, moves, pending moves, moved files, renamed files, files moved on disk
 - **Illustration:** the Inbox with its Keep / Skip / Scrap keys on screen.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -325,6 +345,7 @@ Connect ComfyUI and make new pictures from a template or from pictures you like.
 - **Goal:** Generate · **Workspace:** Workflows
 - **Needs:** none (without ComfyUI the first task is *Connect ComfyUI*)
 - **Startup:** yes (slide 3, *Make more like these*; and on an empty library) · **New:** no
+- **Search terms:** generate, generation, create, make, render, new picture, AI art, AI image, image generation, txt2img, text to image, img2img, image to image, prompt, prompting, Stable Diffusion, SD, SDXL, Flux, diffusion, ComfyUI, Comfy, connect, connection, server, host, URL, address, remote GPU, second GPU, batch, variations, more like this, same style, template, starter workflow, blank, from scratch, queue, open in ComfyUI, send to ComfyUI
 - **Illustration:** the *Make more like these* dialog over three selected pictures.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -344,6 +365,7 @@ See every checkpoint and LoRA on your shelf, look them up and download more.
 - **Goal:** Generate · **Workspace:** Models
 - **Needs:** none (the shelf is never empty in practice; downloads need nothing on it)
 - **Startup:** no · **New:** yes (the Models workspace)
+- **Search terms:** model, models, checkpoint, checkpoints, ckpt, safetensors, LoRA, LoRAs, lora, LyCORIS, embedding, textual inversion, VAE, upscaler, base model, SD 1.5, SDXL, Pony, Illustrious, Flux, shelf, model library, model manager, model sets, model collections, Civitai, look up, download, downloads, install model, model folder, models path, extra_model_paths, disk space, duplicate models, copies, hard link, one copy, trigger words
 - **Illustration:** the model shelf with checkpoints and LoRAs, sizes and base models showing.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -362,6 +384,7 @@ Read how a picture was made and run the recipe again.
 - **Goal:** Generate · **Workspace:** Media (lightbox), Workflows
 - **Needs:** recipe
 - **Startup:** no · **New:** no
+- **Search terms:** recipe, recipes, how was this made, how did I make this, generation info, generation data, parameters, PNG info, infotext, metadata, prompt, negative prompt, seed, sampler, scheduler, steps, CFG, guidance, resolution, settings, reproduce, regenerate, re-run, rerun, again, remix, copy prompt, provenance, save recipe, export recipe, share settings
 - **Illustration:** the lightbox *Recipe* tab: sampler, steps, CFG and size, with *Run…*.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -378,6 +401,7 @@ Keep ComfyUI workflows as cards, swap their models and expose what you change.
 - **Goal:** Generate · **Workspace:** Workflows
 - **Needs:** own workflow
 - **Startup:** no · **New:** yes (workflows as cards)
+- **Search terms:** workflow, workflows, graph, node graph, nodes, pipeline, ComfyUI workflow, JSON, workflow file, API format, import workflow, load workflow, add workflow, cards, inspector, parameters, inputs, expose, knobs, controls, sliders, swap model, change checkpoint, change LoRA, missing models, red nodes, broken workflow, fix workflow, replace model, versions, version history, revert, roll back, save over, save as new, workflow sets, organise workflows
 - **Illustration:** the Workflows grid with one card selected and its inspector showing Checkpoint, LoRA and version.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -397,6 +421,7 @@ Dress your cast, draw locations and props, and stage scenes. **Unstable.**
 - **Goal:** Generate · **Workspace:** Studio (title bar *Studio*)
 - **Needs:** person (a scene can be made with nothing, but the Studio's core is its cast)
 - **Startup:** yes (slide 6) · **New:** yes (the Studio; outfit, location and prop sheets)
+- **Search terms:** studio, scene, scenes, stage, staging, compose, composition, director, storyboard, shoot, shot, takes, cast, casting, actors, characters, wardrobe, outfit, outfits, costume, clothes, clothing, dress, dress up, outfit sheet, location, locations, background, backdrop, environment, setting, place, angles, camera angle, viewpoint, props, objects, items, prop sheet, comic, story, visual novel, consistent scene
 - **Illustration (unstable):** a scene's stage: two of the cast placed on a location's picture, the Takes strip below.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -419,6 +444,7 @@ Crop, inpaint, extend, upscale or cut out objects without leaving the lightbox.
 - **Goal:** Edit · **Workspace:** Media (lightbox)
 - **Needs:** picture
 - **Startup:** yes (slide 4, Extend) · **New:** yes (Extend)
+- **Search terms:** edit, editing, editor, crop, cropping, trim, rotate, straighten, flip, inpaint, inpainting, fix, repair, retouch, touch up, remove object, erase, replace, fill, generative fill, mask, masking, brush, outpaint, outpainting, extend, expand, uncrop, zoom out, widen, bigger canvas, upscale, upscaling, enlarge, upsize, super resolution, enhance, increase resolution, filters, adjust, brightness, contrast, blur, sharpen, greyscale, grayscale, sepia, invert, effects, segment, segmentation, detect objects, object detection, open with, external editor, Photoshop, GIMP, Krita
 - **Illustration:** the lightbox *Edit* tab with the *Mark where* tools and a selection on the picture.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -441,6 +467,7 @@ Draw character sheets, build a training set and train a LoRA of one person.
 - **Goal:** Train · **Workspace:** Media → Models
 - **Needs:** person (no pictures needed: sheets can be drawn from words)
 - **Startup:** yes (slide 5) · **New:** yes (train a LoRA from a person or a set)
+- **Search terms:** consistent character, character consistency, same face, keep a face, same person every time, LoRA training, train, training, fine-tune, finetune, custom model, my own LoRA, character LoRA, face LoRA, person LoRA, dataset, training set, training data, training captions, character sheet, reference sheet, turnaround, model sheet, front side back, poses, AI-toolkit, ai-toolkit, musubi, kohya, steps, epochs, checkpoints, train longer, continue training, resume training, runs, training progress, use LoRA, create with LoRA, trigger word
 - **Illustration:** a character sheet (front, ¾, side, back) beside the Train dialog.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -461,6 +488,7 @@ Take pictures out as a ZIP, to a folder or as a training dataset.
 - **Goal:** Share & connect · **Workspace:** Media
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** export, download, save, save as, save to disk, copy out, take out, ZIP, zip archive, archive, bulk download, batch export, folder export, send to folder, dataset, training dataset, COCO, Ideogram, bounding boxes, annotations, labels, captions, export recipe
 - **Illustration:** the Export panel over 24 selected pictures, *Bounding boxes* set to COCO.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -477,6 +505,7 @@ Send a read-only link to a picture, set, person or project, and revoke it later.
 - **Goal:** Share & connect · **Workspace:** Media, Settings
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** share, sharing, link, share link, public link, send, send to a friend, show someone, client, gallery link, read-only, view-only, guest, embed, watermark, watermarking, signature, revoke, unshare, stop sharing, remove share, remote access, access from phone, access from anywhere, outside my network, internet, remote, port
 - **Illustration:** the Share dialog for a set, read-only, *Embed watermark* ticked, `example.com` link.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -494,6 +523,7 @@ Script PixlStash from your own tools with a token and the REST API.
 - **Goal:** Share & connect · **Workspace:** Settings
 - **Needs:** none (`POST /pictures/import` fills an empty library)
 - **Startup:** no · **New:** no
+- **Search terms:** API, REST, REST API, HTTP, endpoint, endpoints, token, API token, API key, key, bearer, access token, personal access token, automation, automate, script, scripting, Python, curl, integration, developer, programmatic, OpenAPI, Swagger, Scalar, API docs, API reference, permissions, scopes, read-only token, revoke token
 - **Illustration:** the API reference page at `/scalar` beside a `curl` call with a Bearer token.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -510,6 +540,7 @@ Let an AI assistant search and tag your library over MCP.
 - **Goal:** Share & connect · **Workspace:** Settings
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** AI agent, agent, assistant, AI assistant, chatbot, chat, LLM, MCP, Model Context Protocol, MCP server, Claude, Claude Desktop, Claude Code, copilot, ask questions, talk to my library, natural language, tools, tool use, AI tagging, connect agent
 - **Illustration:** an agent chat answering "find my best lake pictures and tag them portfolio" with a `search_pictures` call.
 
 | Task | Entry point | File | Needs | Illustration |
@@ -526,6 +557,7 @@ Undo a change, bring back deleted pictures and restore a snapshot.
 - **Goal:** Keep it safe · **Workspace:** Media, Settings
 - **Needs:** picture
 - **Startup:** no · **New:** no
+- **Search terms:** undo, redo, revert, go back, history, operation history, Ctrl+Z, mistake, oops, recover, recovery, restore, bring back, undelete, deleted pictures, trash, recycle bin, bin, wastebasket, scrapheap, snapshot, snapshots, backup, back up, restore point, rollback, roll back, time machine, ghosts, gone pictures, removed models, lost pictures
 - **Illustration:** the title-bar History panel listing the last four operations.
 
 | Task | Entry point | File | Needs | Illustration |
