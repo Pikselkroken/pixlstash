@@ -164,3 +164,42 @@ describe("Escape and the sidebar's Find in library (#2448)", () => {
     expect(sidebar.clearFind).not.toHaveBeenCalled();
   });
 });
+
+describe("F1 is the Guide, ? is Keyboard shortcuts (#2825)", () => {
+  let openGuide;
+  let shortcuts;
+  let host;
+
+  beforeEach(() => {
+    openGuide = vi.fn();
+    shortcuts = ref(false);
+    host = mount(
+      {
+        setup() {
+          useGlobalKeydown({
+            gridContainer: ref(null),
+            sidebarRef: ref(null),
+            shortcutsDialogOpen: shortcuts,
+            openGuide,
+          });
+          return () => null;
+        },
+      },
+      { attachTo: document.body },
+    );
+  });
+
+  afterEach(() => host.unmount());
+
+  it("F1 opens the Guide and leaves the shortcuts closed", () => {
+    press("F1", { ctrlKey: false });
+    expect(openGuide).toHaveBeenCalledTimes(1);
+    expect(shortcuts.value).toBe(false);
+  });
+
+  it("? toggles the shortcuts and does not open the Guide", () => {
+    press("?", { ctrlKey: false });
+    expect(shortcuts.value).toBe(true);
+    expect(openGuide).not.toHaveBeenCalled();
+  });
+});

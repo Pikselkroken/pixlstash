@@ -454,6 +454,7 @@ watch(
           size="sm"
           icon-left="robot-outline"
           :disabled="tokensLoading"
+          data-guide="connect-agent.connect-agent"
           @click="connectAgentDialogOpen = true"
         >
           Connect AI agent
@@ -463,6 +464,7 @@ watch(
           size="sm"
           icon-left="plus"
           :disabled="tokensLoading"
+          data-guide="api.create-token"
           @click="createTokenDialogOpen = true"
         >
           New token

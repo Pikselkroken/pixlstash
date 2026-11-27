@@ -8,7 +8,6 @@ import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { ref } from "vue";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore.js";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useProjectStore } from "../../stores/useProjectStore.js";
 import { useSortStore } from "../../stores/useSortStore.js";
@@ -156,40 +155,6 @@ describe("grid open gesture", () => {
     wrapper.vm.touchSelectMode = true;
     wrapper.vm.handleThumbnailDblClick(IMG, click());
     expect(wrapper.vm.lightboxOpen).toBe(false);
-  });
-
-  // The 2.0 What's changed checklist (#2145) replaced the one-time hint: the
-  // grid reports the gesture, the store decides whether a list is up.
-  it("a plain click ticks the checklist's click step, in either mode", () => {
-    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
-    const wrapper = mountGrid();
-    wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    expect(tick).toHaveBeenCalledWith("click");
-    tick.mockClear();
-    useUserPrefsStore().gridOpenGesture = "single";
-    wrapper.vm.handleThumbnailClick(IMG, 0, click());
-    expect(tick).toHaveBeenCalledWith("click");
-  });
-
-  it("a modified click is not the gesture and ticks nothing", () => {
-    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
-    const wrapper = mountGrid();
-    wrapper.vm.handleThumbnailClick(IMG, 0, click({ ctrlKey: true }));
-    expect(tick).not.toHaveBeenCalled();
-  });
-
-  it("right-clicking a picture ticks the menu step", () => {
-    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
-    const wrapper = mountGrid();
-    wrapper.vm.handleImageContextMenu(IMG, { clientX: 5, clientY: 5 });
-    expect(tick).toHaveBeenCalledWith("menu");
-  });
-
-  it("right-clicking a face box on a picture ticks it too", () => {
-    const tick = vi.spyOn(useWhatsChangedStore(), "tick");
-    const wrapper = mountGrid();
-    wrapper.vm.handleFaceBboxContextMenu(IMG, { face: { id: 3 } }, { clientX: 5, clientY: 5 });
-    expect(tick).toHaveBeenCalledWith("menu");
   });
 
   it("a double-click while the lightbox is already up does not reopen it", () => {

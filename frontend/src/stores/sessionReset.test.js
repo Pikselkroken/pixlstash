@@ -57,6 +57,7 @@ import { useOperationStore } from "./useOperationStore";
 import { useLibrariesStore } from "./useLibrariesStore";
 import { useModelShelfStore } from "./useModelShelfStore";
 import { useStudioStore } from "./useStudioStore";
+import { useGuideStore } from "./useGuideStore";
 import { useModelFoldersStore } from "./useModelFoldersStore";
 import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
@@ -78,6 +79,17 @@ import { useTagGroupsStore } from "./useTagGroupsStore";
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // What the library holds, read for the Guide's greying (#2825): another
+    // library's answer would grey (or light) the wrong concepts.
+    name: "useGuideStore",
+    use: useGuideStore,
+    seed: (s) => {
+      s.met = { picture: true, person: false };
+      s.readAt = 1;
+    },
+    isEmpty: (s) => Object.keys(s.met).length === 0 && s.readAt === 0,
+  },
   {
     // The owner's scenes, cast, outfits, locations and props (#2819): every
     // /studio route is owner-only, so a session change must not keep them.
@@ -622,9 +634,6 @@ describe("the store matrix is complete", () => {
       "the owner's own preferences, re-hydrated from /config on login; " +
       "clearing them mid-transition would flash the theme (see the issue)",
     "useViewStore.js": "which view is open",
-    "useWhatsChangedStore.js":
-      "the owner's own What's changed progress, re-hydrated from /config; " +
-      "every surface is hidden in a read-only session",
     "useWsStore.js": "the per-tab client id and socket status",
   };
 

@@ -42,3 +42,6 @@ export const WORKFLOW_ROUTES = ["workflows"];
 
 /** The Studio (#2819): scenes, cast, locations and props. */
 export const STUDIO_ROUTES = ["studio"];
+
+/** The Guide (#2825): the concept grid, and one concept opened in place. */
+export const GUIDE_ROUTES = ["guide", "guide-concept"];

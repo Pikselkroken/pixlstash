@@ -21,15 +21,15 @@ import GhostsSection from "./GhostsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import NeedsYouBox from "./NeedsYouBox.vue";
 import { VIcon } from "vuetify/components";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
+import { useRouter } from "vue-router";
 
 const appVersion = __APP_VERSION__;
 
-// The version and the What's new pill beside it bring back the 2.0 checklist
-// and the training tour card, whichever were dismissed (#2145). The store is
-// read on the click, so the dialog still mounts where no Pinia is installed.
+// The version and the What's new pill beside it open the Guide on New in
+// 2.x (#2825), which took over from the 2.0 checklist and tour.
+const router = useRouter();
 function openWhatsNew() {
-  useWhatsChangedStore().reopen();
+  router?.push({ path: "/guide", query: { in: "new" } });
   dialogOpen.value = false;
 }
 
@@ -476,8 +476,8 @@ watch(
 </template>
 
 <style scoped>
-/* The version reads as the subtitle it was; both it and the pill reopen
-   What's new. */
+/* The version reads as the subtitle it was; both it and the pill open the
+   Guide on New in 2.x. */
 .settings-version {
   padding: 0;
   border: 1px solid transparent;

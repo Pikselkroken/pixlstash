@@ -29,6 +29,7 @@
           <template #activator="{ props: menuProps }">
             <div
               class="bar-split-button"
+              data-guide="filters-smart-sets.sort"
               :class="{ 'bar-split-button--open': gbSortMenuOpen }"
             >
               <AppBarButton
@@ -227,6 +228,7 @@
               :badge="filterChipCount || null"
               tooltip="Filters"
               aria-label="Filters"
+              data-guide="filters-smart-sets.filter-grid"
               ><span class="tb-label">Filter</span></AppBarButton
             >
           </template>
@@ -253,6 +255,7 @@
               :open="gbViewMenuOpen"
               tooltip="View options"
               aria-label="View options"
+              data-guide="browse-inspect.grid-layouts"
               ><span class="tb-label">View</span></AppBarButton
             >
           </template>
@@ -411,6 +414,7 @@
              and drops its list; View (and, in a bar of 700px or less, Sort's
              value) steps aside meanwhile. -->
         <SearchTokenField
+          data-guide="search.search-field"
           ref="searchInputRef"
           :all-pictures-view="isAllPicturesView"
           :count-base-query="props.filterCountBaseQuery"

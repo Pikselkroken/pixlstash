@@ -47,6 +47,7 @@
         :aria-disabled="row.unavailable ? 'true' : undefined"
         :aria-label="row.label"
         :data-uuid="row.library.uuid"
+        data-guide="libraries.switch-library"
         @click="pick(row)"
       >
         <Tooltip v-if="row.reason" :text="row.reason" activator="parent" />
@@ -74,6 +75,7 @@
         type="button"
         class="ctx-item"
         role="menuitem"
+        data-guide="import-pictures.add-library"
         @click="addLibrary"
       >
         <span class="ctx-icon" aria-hidden="true"></span>
@@ -83,6 +85,7 @@
         type="button"
         class="ctx-item"
         role="menuitem"
+        data-guide="libraries.manage-libraries"
         @click="manageLibraries"
       >
         <span class="ctx-icon" aria-hidden="true"></span>

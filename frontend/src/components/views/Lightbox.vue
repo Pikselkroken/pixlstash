@@ -196,6 +196,7 @@
              Z: at fit → snap to 100%, otherwise → snap to fit. -->
         <AppBarButton
           class="zoom-btn"
+          data-guide="browse-inspect.zoom"
           icon="magnify"
           :aria-label="zoomButtonTitle"
           :tooltip="zoomButtonTitle"
@@ -959,6 +960,7 @@
                 size="sm"
                 on-dark
                 icon-left="vector-square-plus"
+                data-guide="people.draw-face-box"
                 @click="drawFaceFromPanel"
               >
                 Draw a face box
@@ -1281,7 +1283,6 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import {
   normalizeWheelDelta,
   ZOOM_EXIT_GESTURE_GAP_MS,
@@ -2111,7 +2112,6 @@ const lightboxPluginParameters = ref({});
 const lockedSetsStore = useLockedSetsStore();
 const userPrefsStore = useUserPrefsStore();
 // The 2.0 checklist ticks a gesture when it is done for real (#2145).
-const whatsChanged = useWhatsChangedStore();
 const isCurrentLocked = computed(() =>
   lockedSetsStore.isLocked(image.value?.id),
 );
@@ -3681,7 +3681,6 @@ function handleMiddleClick(event) {
   if (middleClickKept(event)) return;
   if (menuWasOpenOnPointerDown) return;
   event.preventDefault();
-  whatsChanged.tick("close");
   emit("close");
 }
 
@@ -3814,8 +3813,7 @@ function handleLightboxClick(event) {
   // Ahead of the chrome branches: the dark area closes whether the chrome is
   // shown or hidden.
   if (isDarkAreaClick(event, target)) {
-    whatsChanged.tick("close");
-    emit("close");
+      emit("close");
     return;
   }
   if (chromeHidden.value) {
@@ -4037,7 +4035,6 @@ function onCanvasWheel(event) {
     !event.metaKey &&
     (event.shiftKey ||
       (!paintActive.value && userPrefsStore.viewerWheelAction === "browse"));
-  whatsChanged.tick("wheel");
   if (browse) {
     wheelBrowse(event);
     return;

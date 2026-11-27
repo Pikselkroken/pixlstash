@@ -1,4 +1,5 @@
 import {
+  GUIDE_ROUTES,
   MODEL_SHELF_ROUTES,
   STUDIO_ROUTES,
   WORKFLOW_ROUTES,
@@ -439,6 +440,12 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     () => !isReadOnly.value && STUDIO_ROUTES.includes(route.name),
   );
 
+  // The Guide (#2825) is a place of its own, owner-only like the Studio: its
+  // greying reads owner-only lists, and its welcome writes the owner's config.
+  const isGuideView = computed(
+    () => !isReadOnly.value && GUIDE_ROUTES.includes(route.name),
+  );
+
   // …and a pasted /models URL is bounced to the library rather than left on a
   // route that renders the grid under a Models heading. The title bar's segment cannot
   // reach this: it is inert for a READ session, so the only way in is an
@@ -469,6 +476,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
         (MODEL_SHELF_ROUTES.includes(name) ||
           WORKFLOW_ROUTES.includes(name) ||
           STUDIO_ROUTES.includes(name) ||
+          GUIDE_ROUTES.includes(name) ||
           name === "insights" ||
           name === "moves" ||
           name === "inbox")
@@ -592,6 +600,7 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
     isInboxView,
     isWorkflowsView,
     isStudioView,
+    isGuideView,
     handleSelectInsights,
     handleSelectMoves,
     handleSelectInbox,

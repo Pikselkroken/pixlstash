@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WELCOME_EDITION } from '../src/guide/catalogue.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const AUTH_DIR = resolve(__dirname, '.auth')
@@ -64,12 +65,13 @@ export default async function globalSetup(config) {
   // Decide first-run prompts up front so their modal scrims never block test
   // interactions. Telemetry remains explicitly opted out; its prompted flag
   // only records that this throwaway e2e user has already answered. The
-  // running version counts as seen, or the fixture library (pictures, no
-  // stored version) reads as an upgrade and opens What's changed (#2145).
+  // Guide's welcome counts as seen, or the fixture library (pictures, nothing
+  // stored) opens it over every spec (#2825).
   const { version } = await (await ctx.get('/version')).json()
   const cfg = await ctx.patch('/api/v1/users/me/config', {
     data: {
       last_seen_version: version,
+      guide_welcome_seen: WELCOME_EDITION,
       check_for_updates: false,
       telemetry_send_install_id: false,
       telemetry_send_feature_usage: false,

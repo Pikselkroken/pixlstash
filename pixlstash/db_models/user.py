@@ -102,6 +102,9 @@ class User(SQLModel, table=True):
     # nothing to show. The frontend writes it when it finds the upgrade.
     last_seen_version: Optional[str] = Field(default=None)
     whats_changed: Optional[str] = Field(default=None)
+    # The Guide's welcome (#2825): the newest "New in 2.x" headline id the
+    # owner was welcomed with; NULL means the welcome has never been shown.
+    guide_welcome_seen: Optional[str] = Field(default=None)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

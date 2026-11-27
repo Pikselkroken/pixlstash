@@ -633,6 +633,7 @@
               { 'thumbnail-card-new': isImageRecentlyAdded(img.id) },
             ]"
             :role="img.id && !isImageGhosted(img) ? 'gridcell' : 'presentation'"
+            data-guide="browse-inspect.open-lightbox"
             @click.stop="handleThumbnailClick(img, img.idx, $event)"
             @dblclick="handleThumbnailDblClick(img, $event)"
           >
@@ -1325,7 +1326,6 @@ import {
   isSupportedImportFile,
 } from "../../utils/media";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { usePublishTransientProgress } from "../../composables/usePublishTransientProgress";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1554,7 +1554,6 @@ const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 // The 2.0 checklist ticks a gesture when it is done for real (#2145).
-const whatsChanged = useWhatsChangedStore();
 
 const emit = defineEmits([
   "update:lightbox-open",
@@ -6052,7 +6051,6 @@ async function handleArrivingGridDrop(event) {
     isFileDrag(dataTransfer) &&
     !isInternalImageDrag(dataTransfer);
   if (external) {
-    whatsChanged.tick("drop");
     importArrivals.beginReading(
       Array.from(dataTransfer.files || []).filter(
         (file) =>
@@ -8448,13 +8446,11 @@ function handleThumbnailClick(img, idx, event) {
   if (userPrefsStore.gridOpenGesture !== "single") {
     handleImageCardClick(img, idx, event);
     event.stopPropagation();
-    whatsChanged.tick("click");
     return;
   }
   // Desktop, single-click mode: open lightbox directly
   openLightbox(img);
   event.stopPropagation();
-  whatsChanged.tick("click");
 }
 
 function handleThumbnailDblClick(img, event) {
@@ -8498,7 +8494,6 @@ function handleImageContextMenu(img, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
-  whatsChanged.tick("menu");
 }
 
 function handleFaceBboxContextMenu(img, overlay, event) {
@@ -8512,7 +8507,6 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuX.value = event.clientX;
   contextMenuY.value = event.clientY;
   contextMenuVisible.value = true;
-  whatsChanged.tick("menu");
 }
 
 // ── Lightbox context menu ─────────────────────────────────────────

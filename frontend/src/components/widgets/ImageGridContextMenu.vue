@@ -382,6 +382,7 @@
         <button
           v-if="showCreateStackButton"
           class="ctx-item"
+          data-guide="stacks-duplicates.stack-pictures"
           :disabled="isReadOnly"
           @click="onAction('create-stack')"
         >
@@ -457,7 +458,7 @@
           </button>
           <div v-if="openGroup === 'analyse'" v-submenu-fit class="ctx-submenu" role="menu">
             <template v-if="taggerPlugins.length">
-              <div class="ctx-label section-label">Tag automatically</div>
+              <div class="ctx-label section-label" data-guide="tags-descriptions.tag-automatically">Tag automatically</div>
               <button
                 v-for="plugin in taggerPlugins"
                 :key="plugin.name"
@@ -474,7 +475,7 @@
               </button>
             </template>
             <template v-if="captionerPlugins.length">
-              <div class="ctx-label section-label">Generate description</div>
+              <div class="ctx-label section-label" data-guide="tags-descriptions.generate-description">Generate description</div>
               <button
                 v-for="plugin in captionerPlugins"
                 :key="plugin.name"
@@ -544,6 +545,7 @@
               v-if="comfyuiConfigured"
               class="ctx-item"
               :disabled="!selectedImageIds.length || isReadOnly"
+              data-guide="generate-comfyui.make-more"
               @click="delegate('make-more')"
             >
               <Tooltip
@@ -557,6 +559,7 @@
               v-if="comfyuiConfigured"
               class="ctx-item"
               :disabled="!selectedImageIds.length || isReadOnly"
+              data-guide="generate-comfyui.run-workflow"
               @click="delegate('run-workflow')"
             >
               <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
@@ -566,6 +569,7 @@
               v-if="comfyuiConfigured"
               class="ctx-item"
               :disabled="!selectedImageIds.length || isReadOnly"
+              data-guide="edit-picture.edit-tab"
               @click="delegate('edit-pictures')"
             >
               <Tooltip
@@ -743,6 +747,7 @@
               v-if="contextImage?.id"
               class="ctx-item"
               :disabled="!selectedImageIds.length"
+              data-guide="similar-faces.reverse-image-search"
               @click="onAction('reverse-image-search')"
             >
               <Tooltip text="Find visually similar images" activator="parent" />
@@ -753,6 +758,7 @@
             <button
               class="ctx-item"
               :disabled="!!compareBlockReason"
+              data-guide="browse-inspect.compare"
               @click="delegate('compare-pictures')"
             >
               <Tooltip
@@ -792,6 +798,7 @@
         <button
           class="ctx-item"
           :disabled="isReadOnly"
+          data-guide="share-links.share-picture"
           @click="onAction('share-picture')"
         >
           <v-icon class="ctx-icon">mdi-link-variant</v-icon>
@@ -800,6 +807,7 @@
         <button
           v-if="isShared"
           class="ctx-item ctx-item--danger"
+          data-guide="share-links.remove-shares"
           :disabled="isReadOnly"
           @click="onAction('remove-picture-shares')"
         >

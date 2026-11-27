@@ -14,6 +14,7 @@ import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useVersionCheck } from "../composables/useVersionCheck";
 import {
+  GUIDE_ROUTES,
   MODEL_SHELF_ROUTES,
   STUDIO_ROUTES,
   WORKFLOW_ROUTES,
@@ -63,7 +64,10 @@ const currentWorkspace = computed(() =>
       ? "models"
       : STUDIO_ROUTES.includes(route.name)
         ? "studio"
-        : "media",
+        : // The Guide is not a workspace: with it open, no segment is lit.
+          GUIDE_ROUTES.includes(route.name)
+          ? "guide"
+          : "media",
 );
 
 // The project is one choice across Media and the Studio (#2819): the project
@@ -360,6 +364,18 @@ const close = () => desktop?.windowClose?.();
         anchor="inline"
       />
       <TitleBarTasks v-if="!isReadOnly" />
+      <!-- The Guide (#2825): what PixlStash can do, and where to click. -->
+      <RouterLink v-if="!isReadOnly" v-slot="{ navigate }" to="/guide" custom>
+        <AppBarButton
+          icon="book-open-variant"
+          tooltip="What PixlStash can do (F1)"
+          :active="currentWorkspace === 'guide'"
+          :aria-current="currentWorkspace === 'guide' ? 'page' : undefined"
+          data-testid="titlebar-guide"
+          @click="navigate"
+          >Guide</AppBarButton
+        >
+      </RouterLink>
       <AppBarButton
         class="titlebar-settings"
         icon="cog-outline"

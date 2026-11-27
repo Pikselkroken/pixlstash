@@ -20,6 +20,7 @@ import { isTypingTarget } from "../utils/dom.js";
  * @param {import("vue").Ref} deps.sidebarRef - the sidebar, same.
  * @param {import("vue").Ref} deps.shortcutsDialogOpen - the keyboard-help
  *   dialog, which its own shortcut toggles.
+ * @param {() => void} [deps.openGuide] - F1: the Guide (#2825).
  */
 /**
  * Coalescing key for the "nothing that way" answer beside a local receipt, so
@@ -32,6 +33,7 @@ export function useGlobalKeydown({
   gridContainer,
   sidebarRef,
   shortcutsDialogOpen,
+  openGuide = null,
 }) {
   const reviewSessionsStore = useReviewSessionsStore();
   const noticeStore = useNoticeStore();
@@ -188,7 +190,7 @@ export function useGlobalKeydown({
       }
     }
     if (
-      (e.key === "?" || e.key === "F1") &&
+      e.key === "?" &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
@@ -196,6 +198,18 @@ export function useGlobalKeydown({
     ) {
       e.preventDefault();
       shortcutsDialogOpen.value = !shortcutsDialogOpen.value;
+    }
+    // F1 is help: the Guide (#2825). Keyboard shortcuts keep `?`.
+    if (
+      e.key === "F1" &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      openGuide &&
+      !isReadOnly.value
+    ) {
+      e.preventDefault();
+      openGuide();
     }
     if (
       e.key === "F2" &&

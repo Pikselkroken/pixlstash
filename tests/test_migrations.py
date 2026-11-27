@@ -1673,6 +1673,38 @@ def test_0143_adds_whats_changed_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0152_adds_guide_welcome_seen_to_a_populated_vault():
+    """The column arrives on an existing user as NULL (never welcomed), the
+    downgrade drops it, and a re-run is a no-op."""
+    previous = "0151_add_studio"
+
+    def present_columns(conn):
+        return {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        down = _run_alembic(["downgrade", previous], db_url, _MIGRATIONS_DIR)
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert "guide_welcome_seen" not in present_columns(conn)
+            _insert_minimal_row(conn, "user", username="owner")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert conn.execute(
+                "SELECT username, guide_welcome_seen FROM user"
+            ).fetchall() == [("owner", None)]
+            conn.execute("UPDATE alembic_version SET version_num = ?", (previous,))
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0145_adds_control_state_to_a_populated_vault():
     """The column arrives, an existing suggestion reads as not a control, and a
     re-run is a no-op."""

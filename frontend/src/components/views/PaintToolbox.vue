@@ -5,7 +5,7 @@
        further down, and undo is the footer's Ctrl+Z. -->
   <div class="paint-toolbox">
     <div class="section-label section-label--on-dark paint-toolbox-head">
-      <span>Mark where</span>
+      <span data-guide="edit-picture.mark-where">Mark where</span>
       <span v-if="current" class="paint-toolbox-current">{{
         current.label
       }}</span>
