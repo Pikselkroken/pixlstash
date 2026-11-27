@@ -501,6 +501,14 @@ test.describe('guide illustrations', () => {
           await page.goto('/')
           await expect(page.locator('.thumbnail-img').first()).toBeVisible({ timeout: 60_000 })
         }
+        // `import-pictures` registers a throwaway library: detach it (never the
+        // active one, which the API refuses) so later shots list only theirs.
+        const listed = await (await apiContext.get('/api/v1/libraries')).json()
+        for (const library of listed.libraries) {
+          if (library.name !== 'New library' || library.uuid === home.uuid) continue
+          const removed = await apiContext.delete(`/api/v1/libraries/${library.uuid}`)
+          expect(removed.ok(), `could not detach the throwaway library: ${removed.status()}`).toBe(true)
+        }
       }
     })
   }
