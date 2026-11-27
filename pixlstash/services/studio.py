@@ -380,6 +380,16 @@ def sheet_tile(
         smart = p.smart_score if p.smart_score is not None else float("-inf")
         return (p.picture_id != thumbnail_id, -(p.rating or 0), -smart, -p.picture_id)
 
+    # Panels are found before stacks thin the list: a stacked panel is still
+    # one of its sheet's six.
+    cuts: dict[int, list[int]] = {}
+    for p in pictures:
+        if p.source_picture_id is not None:
+            cuts.setdefault(p.source_picture_id, []).append(p.picture_id)
+    sheets = [sorted(ids) for ids in cuts.values() if len(ids) == PANEL_COUNT]
+    # The newest sheet: panels are imported as it is cut, so its ids are highest.
+    panels = max(sheets, default=[], key=lambda ids: ids[0])
+
     ranked, stacks = [], set()
     for p in sorted(pictures, key=rank):
         if p.stack_id is not None:
@@ -387,13 +397,6 @@ def sheet_tile(
                 continue
             stacks.add(p.stack_id)
         ranked.append(p)
-
-    cuts: dict[int, list[int]] = {}
-    for p in ranked:
-        if p.source_picture_id is not None:
-            cuts.setdefault(p.source_picture_id, []).append(p.picture_id)
-    sheets = [sorted(ids) for ids in cuts.values() if len(ids) == PANEL_COUNT]
-    panels = max(sheets, default=[], key=lambda ids: ids[0])
 
     heads = [p.picture_id for p in ranked[:1] if p.picture_id == thumbnail_id]
     heads += panels[:HEADSHOT_SLOTS]
@@ -448,7 +451,9 @@ def sheet_tiles(
     for cid, bbox, pid, w, h, orientation, source, stack, score, smart in rows:
         box, area = None, -1.0
         try:
-            x1, y1, x2, y2 = json.loads(bbox)[:4] if bbox else (0, 0, 0, 0)
+            x1, y1, x2, y2 = (
+                (float(v) for v in json.loads(bbox)[:4]) if bbox else (0, 0, 0, 0)
+            )
         except (ValueError, TypeError) as exc:
             logger.warning(
                 "Unreadable face box %r on picture %s (person %s); its framing "

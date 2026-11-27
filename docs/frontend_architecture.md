@@ -8849,7 +8849,8 @@ inside its lightboxes, so the rail is empty on `/studio`.
   beside the kind's word. Scenes are ink. Selection stays olive.
 - **The grids are sheet tiles**: each card is a small copy of the sheet its
   kind is drawn on, 5:3 (`SIZES` in `character_sheet.py`), two across at
-  1280px (`minmax(400px, 1fr)`), 8px apart, the panels of one card 2px apart.
+  1280px (`minmax(400px, 1fr)`), 8px apart across and 12px down, the panels
+  of one card 2px apart; a scene's chip for a deleted person hides itself.
   A person is four headshots two by two and two body shots (the overview's
   `headshot_ids` and `body_ids`); a location or prop its four views or angles,
   labelled. A scene keeps its latest take, 3:2, with the cast's faces on it.

@@ -24,6 +24,7 @@ from pixlstash.services.studio import (
     compose_shot,
     place_words,
     sheet_tile,
+    sheet_tiles,
 )
 from tests.utils import (
     API_PREFIX,
@@ -706,6 +707,30 @@ def test_unknown_framings_and_one_stack_member_fill_what_is_left():
     heads, bodies = sheet_tile(pictures)
     assert heads == [1, 5, 3]
     assert bodies == [4]
+
+
+def test_a_stacked_sheet_panel_still_marks_its_sheet():
+    panels = [_tile(10 + i, source_picture_id=99) for i in range(6)]
+    panels[1].stack_id = panels[2].stack_id = 3
+    heads, bodies = sheet_tile(panels)
+    assert heads[0] == 10 and bodies == [14, 15]
+
+
+def test_tiles_read_the_largest_face_and_survive_a_bad_box():
+    person = SimpleNamespace(id=5, thumbnail_picture_id=None)
+    face = [100, 100, 300, 400]
+    rows = [
+        # Picture 1: a big face high in a tall frame reads as a close-up; a
+        # second, smaller face of the same person on it does not change that.
+        (5, json.dumps(face), 1, 600, 400, None, None, None, 3, None),
+        (5, json.dumps([10, 10, 20, 20]), 1, 600, 400, None, None, None, 3, None),
+        # Picture 2: a small face over a tall frame reads as full body.
+        (5, json.dumps([100, 10, 130, 40]), 2, 600, 2000, None, None, None, 1, None),
+        # Picture 3: an unreadable box costs its framing, not the overview.
+        (5, json.dumps([None, "a", 1, 2]), 3, 600, 400, None, None, None, 0, None),
+    ]
+    session = SimpleNamespace(exec=lambda _query: SimpleNamespace(all=lambda: rows))
+    assert sheet_tiles(session, [person]) == {5: ([1, 3], [2], 3)}
 
 
 def test_a_person_s_card_carries_their_slots_in_the_overview(env):

@@ -131,6 +131,7 @@
                     :src="chip"
                     alt=""
                     loading="lazy"
+                    @error="$event.target.hidden = true"
                   />
                 </span>
                 <span
