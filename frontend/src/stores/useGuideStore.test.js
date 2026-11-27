@@ -109,6 +109,16 @@ describe("the welcome", () => {
     expect(store.welcome).toBe(null);
   });
 
+  it("a session change during the read lets the new session decide again", async () => {
+    const store = storeWith({ guide_welcome_seen: null });
+    readNeeds.mockReturnValueOnce(new Promise(() => {}));
+    store.evaluateWelcome({ libraryEmpty: false });
+    sessionResets.at(-1)();
+    readNeeds.mockResolvedValue(PICTURES);
+    await store.evaluateWelcome({ libraryEmpty: false });
+    expect(store.welcome?.concepts).toHaveLength(6);
+  });
+
   it("closing records the edition in the owner's config", async () => {
     const store = storeWith({ guide_welcome_seen: null });
     await store.evaluateWelcome({ libraryEmpty: false });
@@ -144,6 +154,23 @@ describe("the welcome", () => {
     await store.replayWelcome();
     expect(store.welcome?.withNew).toBe(true);
     expect(store.welcome?.concepts).toHaveLength(6);
+  });
+});
+
+describe("reading the library", () => {
+  it("a read orphaned by a session change does not free the newer read's slot", async () => {
+    const store = useGuideStore();
+    let finishOld;
+    readNeeds.mockReturnValueOnce(new Promise((r) => (finishOld = r)));
+    store.refresh();
+    sessionResets.at(-1)();
+    readNeeds.mockReturnValueOnce(new Promise(() => {}));
+    store.refresh();
+    finishOld(PICTURES);
+    await Promise.resolve();
+    await Promise.resolve();
+    store.refresh();
+    expect(readNeeds).toHaveBeenCalledTimes(2);
   });
 });
 

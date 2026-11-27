@@ -58,7 +58,8 @@ export const useGuideStore = defineStore("guide", () => {
         readAt.value = Date.now();
       })
       .finally(() => {
-        reading = null;
+        // After a reset a newer read may hold the slot: only clear our own.
+        if (started === epoch) reading = null;
       });
     return reading;
   }
@@ -71,6 +72,9 @@ export const useGuideStore = defineStore("guide", () => {
     readAt.value = 0;
     wizard.value = null;
     welcome.value = null;
+    // The new session makes its own decision; a welcome already closed stays
+    // closed, since "seen" is the user's.
+    evaluated = false;
   }
 
   const startHere = computed(() =>
