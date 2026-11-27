@@ -5019,7 +5019,7 @@ a burst of requests it could never satisfy (issue #1014). Three parts fix it:
   renders an explanatory body instead (`dedup-read-only`). The queue can do that
   because its toolbar is small and its body is a list of the library's own
   pictures; the shelf's body IS the host machine's filesystem, so a read-only
-  render would be an empty state under a live sidebar of owner-only verbs — Add models,
+  render would be an empty state under a live sidebar of owner-only verbs — Add folder,
   Manage model folders, the scan. The row above is where the
   destination explains itself, which is where a visitor meets it.
 

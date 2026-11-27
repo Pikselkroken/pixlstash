@@ -63,6 +63,8 @@ onMounted(() => {
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => measure());
     resizeObserver.observe(bandEl.value);
+    // The key's own size moves when its font loads.
+    resizeObserver.observe(keyEl.value);
   }
   // "Import" becomes "Import to Portraits" without the band changing size.
   if (typeof MutationObserver !== "undefined") {

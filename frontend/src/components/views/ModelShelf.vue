@@ -4131,6 +4131,13 @@ watch([newSetAsked, setGridRef], ([asked, grid]) => {
   newSetAsked.value = false;
   grid.openTemplatePicker();
 });
+// Left before the grid came up: the ask is spent, not saved for a later visit.
+watch(
+  () => store.place,
+  (place) => {
+    if (place !== "sets") newSetAsked.value = false;
+  },
+);
 
 /**
  * The shelf runs the dialogs the sidebar asks for. Each one returns focus to the
