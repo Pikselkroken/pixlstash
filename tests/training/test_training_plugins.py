@@ -116,12 +116,20 @@ def _create(env, name: str) -> dict:
 
 
 def _wait_for(env, job_id: int, statuses: set, timeout: float = 30.0) -> dict:
+    """Poll until the job reaches one of *statuses*.
+
+    A ``completed`` row with no ``completed_at`` is still importing its
+    checkpoints, so it has not arrived at ``completed`` yet.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        r = env["client"].get(f"/training/jobs/{job_id}/status")
+        r = env["client"].get(f"/training/jobs/{job_id}")
         assert r.status_code == 200, r.text
         body = r.json()
-        if body["status"] in statuses or time.monotonic() > deadline:
+        importing = body["status"] == "completed" and not body["completed_at"]
+        if (body["status"] in statuses and not importing) or (
+            time.monotonic() > deadline
+        ):
             return body
         time.sleep(0.05)
 
@@ -139,6 +147,7 @@ def test_a_fake_run_trains_lands_on_the_shelf_and_refuses_train_longer(env):
     job = _create(env, "fake run")
     status = _wait_for(env, job["id"], {"completed", "error", "stopped"})
     assert status["status"] == "completed", status
+    assert status["completed_at"], f"the run never finished importing: {status}"
     run = training_runs.get_run(
         env["server"].vault.hub, env["server"].vault.library_uuid, job["id"]
     )
