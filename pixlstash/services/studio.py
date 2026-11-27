@@ -13,17 +13,29 @@ order, so a set's members by ascending id are its angles.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Character, PictureSet, PictureSetMember
+from pixlstash.db_models import (
+    Character,
+    Face,
+    Picture,
+    PictureSet,
+    PictureSetMember,
+)
 from pixlstash.db_models.adapter_attachment import (
     ENTITY_CHARACTER,
     AdapterAttachment,
 )
 from pixlstash.db_models.character_reference import CharacterReferenceMember
 from pixlstash.db_models.studio import Scene
+from pixlstash.pixl_logging import get_logger
+from pixlstash.services.character_sheet import PANEL_COUNT
+from pixlstash.training.dataset_picker import face_room, framing_label
+
+logger = get_logger(__name__)
 
 LOCATION_VIEWS = ("Wide", "Reverse", "Left", "Right")
 SHOTS = {
@@ -316,3 +328,156 @@ def shot_for(
         from_picture_id=from_picture_id,
         max_references=max_references,
     )
+
+
+# ── a person's sheet tile ───────────────────────────────────────────────────
+
+HEADSHOT_SLOTS = 4
+BODY_SLOTS = 2
+_HEADSHOT_FRAMINGS = ("close-up", "portrait")
+_BODY_FRAMINGS = ("upper body", "full body")
+
+
+@dataclass
+class TilePicture:
+    """One of a person's pictures, as their sheet tile weighs it."""
+
+    picture_id: int
+    framing: str | None = None
+    source_picture_id: int | None = None
+    stack_id: int | None = None
+    rating: int | None = None
+    smart_score: float | None = None
+
+
+def tile_framing(
+    box: tuple[float, float, float, float] | None,
+    width: int | None,
+    height: int | None,
+    orientation: int | None,
+) -> str | None:
+    """The framing the training-set picker reads off the person's face box."""
+    if box is None:
+        return None
+    return framing_label(set(), face_room(box, width, height, orientation))
+
+
+def sheet_tile(
+    pictures: list[TilePicture], thumbnail_id: int | None = None
+) -> tuple[list[int], list[int]]:
+    """A person's Studio card: up to four headshots and two body shots.
+
+    The chosen thumbnail is the first headshot. A drawn character sheet's six
+    panels (pictures cut from one source, passport photos first) fill the
+    slots next, the newest sheet's. Then close-ups and portraits fill the
+    headshots and upper and full body the body shots, best rated first, one
+    picture per stack. A picture whose framing is unknown, or that its own
+    kind has no room for, fills whatever slot is still empty, so the card has
+    no hole while the person has pictures left.
+    """
+
+    def rank(p: TilePicture):
+        smart = p.smart_score if p.smart_score is not None else float("-inf")
+        return (p.picture_id != thumbnail_id, -(p.rating or 0), -smart, -p.picture_id)
+
+    ranked, stacks = [], set()
+    for p in sorted(pictures, key=rank):
+        if p.stack_id is not None:
+            if p.stack_id in stacks:
+                continue
+            stacks.add(p.stack_id)
+        ranked.append(p)
+
+    cuts: dict[int, list[int]] = {}
+    for p in ranked:
+        if p.source_picture_id is not None:
+            cuts.setdefault(p.source_picture_id, []).append(p.picture_id)
+    sheets = [sorted(ids) for ids in cuts.values() if len(ids) == PANEL_COUNT]
+    panels = max(sheets, default=[], key=lambda ids: ids[0])
+
+    heads = [p.picture_id for p in ranked[:1] if p.picture_id == thumbnail_id]
+    heads += panels[:HEADSHOT_SLOTS]
+    heads += [p.picture_id for p in ranked if p.framing in _HEADSHOT_FRAMINGS]
+    bodies = panels[HEADSHOT_SLOTS:]
+    bodies += [p.picture_id for p in ranked if p.framing in _BODY_FRAMINGS]
+    heads = list(dict.fromkeys(heads))[:HEADSHOT_SLOTS]
+    bodies = [pid for pid in dict.fromkeys(bodies) if pid not in heads][:BODY_SLOTS]
+    taken = set(heads) | set(bodies)
+    for p in ranked:
+        if p.picture_id in taken:
+            continue
+        if len(heads) < HEADSHOT_SLOTS:
+            heads.append(p.picture_id)
+        elif len(bodies) < BODY_SLOTS:
+            bodies.append(p.picture_id)
+        else:
+            break
+    return heads, bodies
+
+
+def sheet_tiles(
+    session: Session, people: list[Character]
+) -> dict[int, tuple[list[int], list[int], int]]:
+    """Each person's :func:`sheet_tile` and how many pictures they are in.
+
+    One read of every face the people have: a picture's framing is measured
+    on the person's largest face in it.
+    """
+    if not people:
+        return {}
+    rows = session.exec(
+        select(
+            Face.character_id,
+            Face.bbox_,
+            Picture.id,
+            Picture.width,
+            Picture.height,
+            Picture.orientation,
+            Picture.source_picture_id,
+            Picture.stack_id,
+            Picture.score,
+            Picture.smart_score,
+        )
+        .join(Picture, Face.picture_id == Picture.id)
+        .where(
+            Face.character_id.in_([c.id for c in people]),
+            Picture.deleted.is_(False),
+        )
+    ).all()
+    found: dict[int, dict[int, tuple[float, TilePicture]]] = {}
+    for cid, bbox, pid, w, h, orientation, source, stack, score, smart in rows:
+        box, area = None, -1.0
+        try:
+            x1, y1, x2, y2 = json.loads(bbox)[:4] if bbox else (0, 0, 0, 0)
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "Unreadable face box %r on picture %s (person %s); its framing "
+                "is unknown on their Studio card: %s",
+                bbox,
+                pid,
+                cid,
+                exc,
+            )
+            x1 = y1 = x2 = y2 = 0
+        if x2 > x1 and y2 > y1:
+            box, area = (x1, y1, x2, y2), (x2 - x1) * (y2 - y1)
+        mine = found.setdefault(cid, {})
+        if pid in mine and mine[pid][0] >= area:
+            continue
+        mine[pid] = (
+            area,
+            TilePicture(
+                picture_id=pid,
+                framing=tile_framing(box, w, h, orientation),
+                source_picture_id=source,
+                stack_id=stack,
+                rating=score,
+                smart_score=smart,
+            ),
+        )
+    tiles = {}
+    for person in people:
+        pictures = [p for _area, p in found.get(person.id, {}).values()]
+        heads, bodies = sheet_tile(pictures, person.thumbnail_picture_id)
+        tiles[person.id] = (heads, bodies, len(pictures))
+    return tiles

@@ -406,3 +406,91 @@ describe("a scene", () => {
     expect(wrapper.text()).toContain("takes no picture");
   });
 });
+
+describe("the sheet tiles", () => {
+  const panels = (wrapper, testid) =>
+    wrapper
+      .find(`[data-testid="${testid}"]`)
+      .findAll(".studio-tile-panel")
+      .map((p) => {
+        const img = p.find("img");
+        return [p.attributes("style"), img.exists() ? img.attributes("src") : null];
+      });
+
+  const withCast = (cast) =>
+    api.getStudioOverview.mockResolvedValue({ ...OVERVIEW, cast });
+
+  it("draws a person as their sheet: four headshots two by two, two body shots", async () => {
+    withCast([
+      { ...OVERVIEW.cast[0], headshot_ids: [50, 51, 52, 53], body_ids: [54, 55], picture_count: 9 },
+    ]);
+    const wrapper = await mountAt("/studio?section=cast");
+    expect(panels(wrapper, "studio-card-cast-5")).toEqual([
+      ["grid-area: 1 / 1;", "/thumb/50.webp"],
+      ["grid-area: 1 / 2;", "/thumb/51.webp"],
+      ["grid-area: 2 / 1;", "/thumb/52.webp"],
+      ["grid-area: 2 / 2;", "/thumb/53.webp"],
+      ["grid-area: 1 / 3 / 3 / 4;", "/thumb/54.webp"],
+      ["grid-area: 1 / 4 / 3 / 5;", "/thumb/55.webp"],
+    ]);
+    expect(wrapper.find('[data-testid="studio-draw-sheet-5"]').exists()).toBe(false);
+    // A single-kind grid drops the kind badge: the toolbar names the kind.
+    expect(wrapper.find(".studio-badge").exists()).toBe(false);
+  });
+
+  it("shows a person short of pictures without holes, and offers a sheet", async () => {
+    withCast([
+      { ...OVERVIEW.cast[0], headshot_ids: [50, 51], body_ids: [], picture_count: 2 },
+      { ...OVERVIEW.cast[1], headshot_ids: [60], body_ids: [], picture_count: 1 },
+    ]);
+    const wrapper = await mountAt("/studio?section=cast");
+    // Two pictures: the first fills the headshot half, the other the body half.
+    expect(panels(wrapper, "studio-card-cast-5")).toEqual([
+      ["grid-area: 1 / 1 / 3 / 3;", "/thumb/50.webp"],
+      ["grid-area: 1 / 3 / 3 / 5;", "/thumb/51.webp"],
+    ]);
+    // One picture: it fills the headshot half and the rest offers a sheet.
+    expect(panels(wrapper, "studio-card-cast-6")).toEqual([
+      ["grid-area: 1 / 1 / 3 / 3;", "/thumb/60.webp"],
+      ["grid-area: 1 / 3 / 3 / 5;", null],
+    ]);
+    expect(wrapper.text()).toContain("One picture. A sheet fills the other five.");
+    await wrapper.find('[data-testid="studio-draw-sheet-6"]').trigger("click");
+    const [[payload]] = wrapper.emitted("item-sheets");
+    expect(payload.kind).toBe("character");
+    expect(payload.character).toMatchObject({ id: 6, name: "Juno", image_count: 1 });
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+  });
+
+  it("says a person with no pictures has none", async () => {
+    withCast([{ ...OVERVIEW.cast[1], thumbnail_picture_id: null, headshot_ids: [], body_ids: [], picture_count: 0 }]);
+    const wrapper = await mountAt("/studio?section=cast");
+    expect(wrapper.text()).toContain("No pictures yet");
+    expect(wrapper.find('[data-testid="studio-draw-sheet-6"]').exists()).toBe(true);
+  });
+
+  it("labels a location's four views and keeps a scene's take with its cast", async () => {
+    const wrapper = await mountAt("/studio?section=locations");
+    const labels = wrapper
+      .find('[data-testid="studio-card-location-30"]')
+      .findAll(".studio-tile-label")
+      .map((l) => l.text());
+    expect(labels).toEqual(["Wide", "Reverse", "Left", "Right"]);
+
+    const scenes = await mountAt("/studio");
+    const take = scenes.find('[data-testid="studio-card-scene-1"]');
+    expect(take.find(".studio-tile-media--scene").exists()).toBe(true);
+    expect(take.findAll(".studio-tile-chips img")).toHaveLength(2);
+  });
+
+  it("shows an item short of its four angles as its first picture, whole", async () => {
+    api.getStudioOverview.mockResolvedValue({
+      ...OVERVIEW,
+      props: [{ ...OVERVIEW.props[0], picture_ids: [41, 42] }],
+    });
+    const wrapper = await mountAt("/studio?section=props");
+    expect(panels(wrapper, "studio-card-prop-40")).toEqual([
+      ["grid-area: 1 / 1;", "/thumb/41.webp"],
+    ]);
+  });
+});

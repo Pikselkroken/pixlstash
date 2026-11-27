@@ -89,12 +89,12 @@
       <p v-if="store.error" class="studio-error" role="alert">
         {{ store.error }}
       </p>
-      <div class="studio-scroll">
+      <div class="studio-scroll studio-scroll--tiles">
         <div v-if="store.loaded && !cards.length" class="studio-empty">
           <v-icon size="32">{{ emptyIcon }}</v-icon>
           <span>{{ emptyText }}</span>
         </div>
-        <div v-else class="studio-grid" role="list">
+        <div v-else class="studio-grid studio-grid--tiles" role="list">
           <div
             v-for="card in cards"
             :key="`${card.kind}:${card.id}`"
@@ -108,27 +108,66 @@
               @click="openItem(card.kind, card.id)"
             >
               <span
-                class="studio-card__ph"
-                :class="{
-                  'studio-card__ph--land':
-                    card.kind === 'location' || card.kind === 'scene',
-                }"
+                class="studio-card__ph studio-tile-media"
+                :class="`studio-tile-media--${card.tile.shape}`"
               >
-                <img v-if="card.thumb" :src="card.thumb" alt="" loading="lazy" />
-                <span v-else class="studio-card__empty"
+                <span
+                  v-for="panel in card.tile.panels"
+                  :key="panel.key"
+                  class="studio-tile-panel"
+                  :class="{ 'studio-tile-panel--empty': !panel.src }"
+                  :style="{ gridArea: panel.area }"
+                  :data-testid="panel.src ? `studio-panel-${panel.key}` : undefined"
+                >
+                  <img v-if="panel.src" :src="panel.src" alt="" loading="lazy" />
+                  <span v-if="panel.label" class="studio-tile-label">{{
+                    panel.label
+                  }}</span>
+                </span>
+                <span v-if="card.tile.chips.length" class="studio-tile-chips">
+                  <img
+                    v-for="chip in card.tile.chips"
+                    :key="chip"
+                    :src="chip"
+                    alt=""
+                    loading="lazy"
+                  />
+                </span>
+                <span
+                  v-if="!card.tile.panels.length && !card.tile.prompt"
+                  class="studio-card__empty"
                   ><v-icon size="28">{{ STUDIO_KINDS[card.kind].icon }}</v-icon></span
                 >
-                <span class="studio-badge" :style="kindStyle(card.kind)">
+                <span
+                  v-if="section === 'favourites'"
+                  class="studio-badge"
+                  :style="kindStyle(card.kind)"
+                >
                   <span class="studio-tile"
                     ><v-icon size="12">{{ STUDIO_KINDS[card.kind].icon }}</v-icon></span
                   >{{ STUDIO_KINDS[card.kind].label }}
                 </span>
               </span>
-              <span class="studio-card__name"
-                >{{ card.name
-                }}<span class="studio-card__meta">{{ card.meta }}</span></span
+              <span class="studio-card__name studio-card__line"
+                ><span class="studio-card__title">{{ card.name }}</span
+                ><span class="studio-card__meta">{{ card.meta }}</span></span
               >
             </button>
+            <span
+              v-if="card.tile.prompt"
+              class="studio-tile-prompt"
+              :class="`studio-tile-prompt--${card.tile.prompt.where}`"
+            >
+              <span>{{ card.tile.prompt.text }}</span>
+              <AppButton
+                variant="secondary"
+                size="sm"
+                icon-left="draw"
+                :data-testid="`studio-draw-sheet-${card.id}`"
+                @click="drawSheet(card, $event)"
+                >Draw a character sheet…</AppButton
+              >
+            </span>
             <span class="studio-fav">
               <FavouriteHeart
                 variant="cover"
@@ -245,6 +284,7 @@ import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
 import StudioScene from "./StudioScene.vue";
+import { characterThumbnailUrl } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { listPictureSets } from "../../api/pictureSets";
 import {
@@ -256,8 +296,10 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import {
+  ITEM_ANGLES,
   KIND_LIST,
   KIND_SECTION,
+  LOCATION_VIEWS,
   STUDIO_KINDS,
   fromOption,
   kindStyle,
@@ -384,12 +426,102 @@ function metaOf(kind, item) {
   return `In ${item.scene_count} ${item.scene_count === 1 ? "scene" : "scenes"}`;
 }
 
+// Each card is a small copy of the sheet its kind is drawn on (5:3): a
+// person's four headshots two by two and two body shots, an item's four views
+// or angles two by two. A scene has no sheet: its latest take, 3:2, with the
+// cast's faces on it. Fewer pictures than slots never leaves a hole.
+const HEAD_AREAS = ["1 / 1", "1 / 2", "2 / 1", "2 / 2"];
+
+function castTile(item) {
+  const heads =
+    item.headshot_ids ?? (item.thumbnail_picture_id ? [item.thumbnail_picture_id] : []);
+  const bodies = item.body_ids ?? [];
+  const panel = (id, area) => ({ key: id, area, src: pictureThumbnailUrl(id) });
+  if (!heads.length && !bodies.length) {
+    return {
+      shape: "sheet",
+      panels: [{ key: "empty", area: "1 / 1 / 3 / 5" }],
+      chips: [],
+      prompt: { where: "all", text: "No pictures yet" },
+    };
+  }
+  const full = heads.length === HEAD_AREAS.length;
+  const left = full
+    ? heads.map((id, i) => panel(id, HEAD_AREAS[i]))
+    : [panel(heads[0] ?? bodies[0], "1 / 1 / 3 / 3")];
+  const shown = new Set(left.map((p) => p.key));
+  const right = [...bodies, ...heads].filter((id) => !shown.has(id)).slice(0, 2);
+  const panels = [
+    ...left,
+    ...right.map((id, i) =>
+      panel(id, right.length === 1 ? "1 / 3 / 3 / 5" : `1 / ${3 + i} / 3 / ${4 + i}`),
+    ),
+  ];
+  if (right.length) return { shape: "sheet", panels, chips: [], prompt: null };
+  const one = (item.picture_count ?? 1) <= 1;
+  return {
+    shape: "sheet",
+    panels: [...panels, { key: "empty", area: "1 / 3 / 3 / 5" }],
+    chips: [],
+    prompt: {
+      where: "rest",
+      text: one ? "One picture. A sheet fills the other five." : "No full-length pictures yet.",
+    },
+  };
+}
+
+function tileOf(kind, item) {
+  if (kind === "cast") return castTile(item);
+  if (kind === "scene") {
+    const thumb = thumbOf(kind, item);
+    return {
+      shape: "scene",
+      panels: thumb ? [{ key: "cover", area: "1 / 1", src: thumb }] : [],
+      chips: item.cast_ids.map((id) => characterThumbnailUrl(id)),
+      prompt: null,
+    };
+  }
+  const ids = item.picture_ids ?? [];
+  if (ids.length < 4) {
+    return {
+      shape: "one",
+      panels: ids.length ? [{ key: ids[0], area: "1 / 1", src: pictureThumbnailUrl(ids[0]) }] : [],
+      chips: [],
+      prompt: null,
+    };
+  }
+  const labels = kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES;
+  return {
+    shape: "quad",
+    panels: ids.slice(0, 4).map((id, i) => ({
+      key: id,
+      area: HEAD_AREAS[i],
+      src: pictureThumbnailUrl(id),
+      label: labels[i],
+    })),
+    chips: [],
+    prompt: null,
+  };
+}
+
 const asCard = (kind) => (item) => ({
   ...item,
   kind,
-  thumb: thumbOf(kind, item),
+  tile: tileOf(kind, item),
   meta: metaOf(kind, item),
 });
+
+function drawSheet(card, event) {
+  emit("item-sheets", {
+    kind: "character",
+    character: {
+      id: card.id,
+      name: card.name,
+      image_count: card.picture_count ?? 0,
+      returnFocusTo: event?.currentTarget ?? null,
+    },
+  });
+}
 
 const favourites = computed(() =>
   Object.entries(KIND_LIST).flatMap(([kind, list]) =>
@@ -571,6 +703,10 @@ async function addSet() {
   min-width: 0;
 }
 
+.studio-scroll--tiles {
+  padding: var(--space-4);
+}
+
 .studio-form {
   display: flex;
   flex-direction: column;
@@ -579,5 +715,140 @@ async function addSet() {
 
 .studio-hint--error {
   color: rgb(var(--v-theme-error));
+}
+
+/* ── the sheet tiles ──────────────────────────────────────────────────────
+   Two across at 1280px, four at 1920px; 8px between cards, 2px between the
+   panels of one card (the seam of a sheet, so wider reads as two items). */
+.studio-grid--tiles {
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: var(--space-4) var(--space-3);
+}
+
+.studio-tile-media {
+  display: grid;
+  gap: var(--space-1);
+  aspect-ratio: 5 / 3;
+  background: rgb(var(--v-theme-background));
+}
+
+.studio-tile-media--sheet {
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: 1fr 1fr;
+}
+
+.studio-tile-media--quad {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.studio-tile-media--one {
+  grid-template-columns: 1fr;
+  background: rgb(var(--v-theme-surface));
+}
+
+.studio-tile-media--scene {
+  grid-template-columns: 1fr;
+  aspect-ratio: 3 / 2;
+  background: rgb(var(--v-theme-surface));
+}
+
+.studio-tile-panel {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.studio-tile-panel--empty {
+  background: rgb(var(--v-theme-surface));
+}
+
+.studio-tile-label {
+  position: absolute;
+  left: var(--space-2);
+  bottom: var(--space-2);
+  display: flex;
+  align-items: center;
+  height: var(--badge-size);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-on-secondary));
+  font-size: var(--text-2xs);
+}
+
+/* The cast's faces on a scene's take. */
+.studio-tile-chips {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  z-index: var(--z-raised);
+  display: flex;
+  gap: var(--space-2);
+}
+
+.studio-card__ph .studio-tile-chips img {
+  width: 40px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-on-secondary), 0.55);
+}
+
+/* Name and counts on one line under the card. */
+.studio-card__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.studio-card__title {
+  flex: none;
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-semibold);
+}
+
+.studio-card__line .studio-card__meta {
+  display: inline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+}
+
+/* A person short of pictures: what is missing and the way to draw it, over
+   the empty half (or the whole card). A sibling of the card's button, not
+   inside it; clicks off the button fall through to the card. */
+.studio-tile-prompt {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: var(--z-raised);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-size: var(--text-xs);
+  text-align: center;
+  pointer-events: none;
+}
+
+.studio-tile-prompt--rest {
+  width: calc(50% - var(--space-1) / 2);
+  aspect-ratio: 5 / 6;
+}
+
+.studio-tile-prompt--all {
+  width: 100%;
+  aspect-ratio: 5 / 3;
+}
+
+.studio-tile-prompt :deep(.app-btn) {
+  pointer-events: auto;
 }
 </style>
