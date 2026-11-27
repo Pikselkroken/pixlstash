@@ -196,9 +196,8 @@ function thumbOf(kind, item) {
           <span class="sidebar-list-icon" aria-hidden="true">
             <span
               class="studio-kind-tile"
-              :class="{ 'studio-kind-tile--ink': !row.kind || row.kind === 'scene' }"
               :style="kindStyle(row.kind)"
-              ><v-icon size="14">{{ row.icon }}</v-icon></span
+              ><v-icon size="16">{{ row.icon }}</v-icon></span
             >
           </span>
           <span class="sidebar-list-label sidebar-list-label-text">{{
@@ -252,9 +251,8 @@ function thumbOf(kind, item) {
             <span class="sidebar-list-icon" aria-hidden="true">
               <span
                 class="studio-kind-tile"
-                :class="{ 'studio-kind-tile--ink': sec.kind === 'scene' }"
                 :style="kindStyle(sec.kind)"
-                ><v-icon size="14">{{ STUDIO_KINDS[sec.kind].icon }}</v-icon></span
+                ><v-icon size="16">{{ STUDIO_KINDS[sec.kind].icon }}</v-icon></span
               >
             </span>
             <span class="sidebar-list-label sidebar-list-label-text">{{
@@ -298,7 +296,7 @@ function thumbOf(kind, item) {
               >
                 <span class="sidebar-list-icon" aria-hidden="true">
                   <span class="studio-kind-tile" :style="kindStyle('location')"
-                    ><v-icon size="12">{{ STUDIO_KINDS.location.icon }}</v-icon></span
+                    ><v-icon size="16">{{ STUDIO_KINDS.location.icon }}</v-icon></span
                   >
                 </span>
                 <span class="sidebar-list-label sidebar-list-label-text">{{
@@ -315,7 +313,7 @@ function thumbOf(kind, item) {
               >
                 <span class="sidebar-list-icon" aria-hidden="true">
                   <span class="studio-kind-tile" :style="kindStyle('cast')"
-                    ><v-icon size="12">{{ STUDIO_KINDS.cast.icon }}</v-icon></span
+                    ><v-icon size="16">{{ STUDIO_KINDS.cast.icon }}</v-icon></span
                   >
                 </span>
                 <span class="sidebar-list-label sidebar-list-label-text">{{
@@ -335,7 +333,7 @@ function thumbOf(kind, item) {
               >
                 <span class="sidebar-list-icon" aria-hidden="true">
                   <span class="studio-kind-tile" :style="kindStyle('outfit')"
-                    ><v-icon size="12">{{ STUDIO_KINDS.outfit.icon }}</v-icon></span
+                    ><v-icon size="16">{{ STUDIO_KINDS.outfit.icon }}</v-icon></span
                   >
                 </span>
                 <span class="sidebar-list-label sidebar-list-label-text">{{
@@ -382,29 +380,18 @@ function thumbOf(kind, item) {
   --depth: 1;
 }
 
-/* A category is a rounded square with its icon; a project is a round dot,
-   so raspberry and a red project never read as one thing. Scenes are ink. */
+/* A category is its icon in the kind's colour, no tile behind it; a project
+   is a round dot. Scenes and Favourites have no kind colour, so they are ink. */
 .studio-kind-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: var(--sidebar-thumb-size);
   height: var(--sidebar-thumb-size);
-  border-radius: var(--radius-sm);
-  background: var(--kind-tile);
 }
 
 .studio-kind-tile .v-icon {
-  color: rgb(var(--v-theme-on-secondary)) !important;
-}
-
-.studio-kind-tile--ink {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-sidebar-text), 0.6);
-}
-
-.studio-kind-tile--ink .v-icon {
-  color: rgb(var(--v-theme-sidebar-text)) !important;
+  color: var(--kind-tile, rgb(var(--v-theme-sidebar-text))) !important;
 }
 
 .studio-section-title {

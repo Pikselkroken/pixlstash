@@ -133,7 +133,7 @@
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
-/* The kind badge over a card: its tile, then its word. */
+/* The kind badge over a card: its icon, then its word. */
 .studio-badge {
   position: absolute;
   top: var(--space-2);
@@ -159,13 +159,11 @@
   justify-content: center;
   width: var(--badge-size);
   height: var(--badge-size);
-  border-radius: var(--radius-sm);
-  background: var(--kind-tile, transparent);
-  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-surface), 0.35);
 }
 
+/* A kind's icon in the kind's colour, no tile behind it; a scene's is ink. */
 .studio-tile .v-icon {
-  color: rgb(var(--v-theme-on-secondary)) !important;
+  color: var(--kind-tile, currentColor) !important;
 }
 
 .studio-fav {
