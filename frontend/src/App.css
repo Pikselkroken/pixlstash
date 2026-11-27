@@ -1314,6 +1314,34 @@ kbd .mdi-subdirectory-arrow-left {
   pointer-events: none;
 }
 
+/* A create verb's "+" (AppBarButton `createMark`): one amber mark, the same
+   on every sibling of a footer band's key action. Drawn, not a glyph, so the
+   + is amber while the shape around it keeps the bar's ink. Inside a shape it
+   is centred on the point the button names; on a solid shape it sits
+   top-right and the glyph shrinks toward bottom-left to make room. */
+.bar-create-mark {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  transform: translate(-50%, -50%);
+  background:
+    linear-gradient(rgb(var(--v-theme-accent)) 0 0) center / 100% 2px no-repeat,
+    linear-gradient(rgb(var(--v-theme-accent)) 0 0) center / 2px 100% no-repeat;
+  pointer-events: none;
+}
+
+.bar-create-mark--corner {
+  left: 81%;
+  top: 19%;
+  width: 8px;
+  height: 8px;
+}
+
+.bar-btn-glyph--cornered {
+  transform: scale(0.82);
+  transform-origin: 0 100%;
+}
+
 .bar-separator {
   width: 1px;
   height: 24px;

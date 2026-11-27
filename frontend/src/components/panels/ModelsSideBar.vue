@@ -160,71 +160,23 @@
       </div>
     </nav>
 
-    <!-- The one amber action on this screen. -->
-    <div class="sidebar-footer-band">
-      <v-menu v-model="addMenuOpen" location="top start" :offset="4">
-        <template #activator="{ props: menuProps }">
-          <AppButton
-            v-bind="withRef(menuProps, (el) => (addTrigger = el))"
-            variant="primary"
-            block
-            icon-left="plus"
-            aria-haspopup="menu"
-            data-testid="models-add"
-            >Add models<v-icon size="16" aria-hidden="true"
-              >mdi-menu-down</v-icon
-            ></AppButton
-          >
-        </template>
-        <div
-          class="ctx-menu"
-          role="menu"
-          aria-label="Add models"
-          tabindex="-1"
-          @keydown="onMenuKeydown"
-        >
-          <button
-            type="button"
-            class="ctx-item"
-            role="menuitem"
-            @click="ask('add-folder', addTrigger)"
-          >
-            <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-            <span class="ctx-label-text">Add folder…</span>
-          </button>
-          <button
-            type="button"
-            class="ctx-item"
-            role="menuitem"
-            @click="ask('add-file', addTrigger)"
-          >
-            <v-icon class="ctx-icon">mdi-file-plus-outline</v-icon>
-            <span class="ctx-label-text">Add file…</span>
-          </button>
-          <!-- Only while unset: ai-toolkit writes every run under one root, so
-               setting it is a once-ever act (as it was on the toolbar's Add). -->
-          <template v-if="!foldersStore.sourceFolder">
-            <div class="ctx-sep" role="separator"></div>
-            <button
-              type="button"
-              class="ctx-item"
-              role="menuitem"
-              @click="ask('set-source', addTrigger)"
-            >
-              <AiToolkitIcon class="ctx-icon" />
-              <span class="ctx-label-text">Set ai-toolkit output folder…</span>
-            </button>
-          </template>
-        </div>
-      </v-menu>
-    </div>
+    <!-- The one amber action on this screen, and the other adds beside it. -->
+    <SidebarFooterBand :verbs="footerVerbs">
+      <AppButton
+        variant="primary"
+        icon-left="plus"
+        data-testid="models-add"
+        @click="ask('add-folder', $event.currentTarget)"
+        >Add folder</AppButton
+      >
+    </SidebarFooterBand>
   </aside>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { VIcon, VMenu } from "vuetify/components";
+import { VIcon } from "vuetify/components";
 
 import { DOWNLOADS_KIND, SOURCE_KIND } from "../../api/modelFolders";
 import { useModelFolderGates } from "../../composables/useModelFolderGates";
@@ -239,14 +191,12 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useTrainingRunsStore } from "../../stores/useTrainingRunsStore";
 import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
-import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { relativeDate } from "../../utils/snapshots.js";
-import { withRef } from "../../utils/withRef.js";
-import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ModelFolderNameField from "./ModelFolderNameField.vue";
 import ModelFolderTree from "./ModelFolderTree.vue";
+import SidebarFooterBand from "./SidebarFooterBand.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 
 const store = useModelShelfStore();
@@ -260,11 +210,6 @@ const router = useRouter();
 
 // The width every workspace's sidebar shares, so a switch does not move the edge.
 const { width, narrow } = useSidebarWidth();
-
-const addMenuOpen = ref(false);
-// The trigger outlives its menu, so a dialog opened from it hands focus back
-// to it. Not reactive: only `ask` reads it.
-let addTrigger = null;
 
 onMounted(() => {
   // The counts need the sets ("In no set yet"); the tree needs the folders,
@@ -471,7 +416,6 @@ function openFolder(scope) {
  * confirmations, because the toolbar's Add and Model folders used to.
  */
 function ask(what, el = null) {
-  addMenuOpen.value = false;
   const target = el?.el ?? el ?? null;
   // Back on the button first, so the dialog that opens next returns there.
   target?.focus?.();
@@ -514,6 +458,40 @@ function pickPlace(row) {
   store.setPlace(row.id);
   if (onRuns.value) router.push({ name: "models" });
 }
+
+// The band's adds beside Add folder. Set ai-toolkit output folder… sets
+// rather than makes, so it wears no "+", and only while unset: ai-toolkit
+// writes every run under one root, so setting it is a once-ever act.
+const footerVerbs = computed(() => [
+  {
+    id: "add-file",
+    label: "Add file…",
+    icon: "mdi-file-outline",
+    mark: [12, 14.5],
+    run: (el) => ask("add-file", el),
+  },
+  {
+    id: "new-set",
+    label: "New workflow set",
+    icon: "mdi-layers-outline",
+    mark: true,
+    run: (el) => {
+      // The Sets grid's New tile opens the template picker; go there first.
+      pickPlace({ id: "sets" });
+      ask("new-set", el);
+    },
+  },
+  ...(foldersStore.sourceFolder
+    ? []
+    : [
+        {
+          id: "set-source",
+          label: "Set ai-toolkit output folder…",
+          icon: "mdi-folder-arrow-down-outline",
+          run: (el) => ask("set-source", el),
+        },
+      ]),
+]);
 
 function openRuns() {
   if (!onRuns.value) router.push({ name: "models-runs" });

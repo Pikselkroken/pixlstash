@@ -37,9 +37,22 @@
            is drawn on a 24-unit grid, and a labelled glyph tracks its text. -->
       <v-icon
         :size="iconSize || (iconOnly ? 24 : 18)"
-        :class="{ 'mdi-spin': loading }"
+        :class="{
+          'mdi-spin': loading,
+          'bar-btn-glyph--cornered': createMark === true && !loading,
+        }"
         >{{ loading ? "mdi-loading" : iconName }}</v-icon
       >
+      <!-- The amber "+" that says this makes a new one (the footer band's
+           create verbs). Inside the glyph at [x, y] on its 24-unit grid when
+           the shape has room, else top-right with the glyph pulled aside. -->
+      <span
+        v-if="createMark && !loading"
+        class="bar-create-mark"
+        :class="{ 'bar-create-mark--corner': createMark === true }"
+        :style="createMarkStyle"
+        aria-hidden="true"
+      ></span>
       <span
         v-if="badge != null && badge !== '' && !loading"
         class="bar-filter-badge"
@@ -84,12 +97,24 @@ const props = defineProps({
   // The tip, and an icon-only button's accessible name (buttons.md, "Tooltips").
   tooltip: { type: String, default: "" },
   tooltipLocation: { type: String, default: "bottom" },
+  // The amber "+" of a create verb: true for the top-right corner, or [x, y]
+  // on the glyph's 24-unit grid to put it inside a shape with room for it.
+  createMark: { type: [Boolean, Array], default: false },
 });
 
 const slots = useSlots();
 const iconOnly = computed(() => !slots.default && !props.prefix);
 const iconName = computed(() =>
   props.icon.startsWith("mdi-") ? props.icon : `mdi-${props.icon}`,
+);
+
+const createMarkStyle = computed(() =>
+  Array.isArray(props.createMark)
+    ? {
+        left: `${(props.createMark[0] / 24) * 100}%`,
+        top: `${(props.createMark[1] / 24) * 100}%`,
+      }
+    : undefined,
 );
 
 const rootEl = ref(null);

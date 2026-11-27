@@ -287,6 +287,9 @@ function settings() {
   open.value = false;
   emit("open-settings", "comfyui");
 }
+
+// The footer band's New ComfyUI connection… opens the same dialog.
+defineExpose({ newConnection });
 </script>
 
 <style scoped>

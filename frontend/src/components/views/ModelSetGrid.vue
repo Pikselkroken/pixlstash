@@ -1962,7 +1962,12 @@ async function unpick([modelId]) {
   }
 }
 
-defineExpose({ openOffer, selectedCardGroups, focusedCardKey });
+defineExpose({
+  openOffer,
+  selectedCardGroups,
+  focusedCardKey,
+  openTemplatePicker,
+});
 
 /**
  * Right-click a card or a tray row: the shelf's full verb inventory, at the
