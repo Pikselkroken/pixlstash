@@ -1049,6 +1049,16 @@ async function dropTake(pictureId) {
   }
 }
 
+// The sidebar's row menu stars it too, and the Studio reads it again.
+watch(
+  () => store.byKey.get(`scene:${props.sceneId}`)?.favourite,
+  (favourite) => {
+    if (scene.value && favourite !== undefined && favourite !== scene.value.favourite) {
+      scene.value = { ...scene.value, favourite };
+    }
+  },
+);
+
 async function toggleFavourite() {
   try {
     await setStudioFavourite("scene", props.sceneId, !scene.value.favourite);
