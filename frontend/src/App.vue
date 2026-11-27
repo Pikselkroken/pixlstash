@@ -1111,7 +1111,10 @@ defineExpose({
             @open-settings="openSettingsDialog"
           />
           <ModelsSideBar v-else-if="isModelsView" />
-          <StudioSidebar v-else-if="isStudioView" />
+          <StudioSidebar
+            v-else-if="isStudioView"
+            @item-sheets="openSheets($event)"
+          />
           <div
             v-show="!isWorkflowsView && !isModelsView && !isStudioView"
             style="display: contents"
