@@ -168,15 +168,19 @@ const workspaceLabels = computed(() =>
 const needLabel = (key) => NEEDS[key]?.label ?? key;
 const firstName = (key) => firstConceptFor(key)?.name ?? needLabel(key);
 
-function openFirst(key) {
+async function openFirst(key) {
   const target = firstConceptFor(key);
   if (!target) return;
   // What comes first is on this page (People › Create a person): ring it.
   if (target.id === props.concept.id) {
-    router.replace({ query: { ...route.query, view: undefined, task: firstReady.value ?? undefined } });
-    document
-      .querySelector(`[data-testid="guide-task-${firstReady.value}"]`)
-      ?.scrollIntoView?.({ block: "center" });
+    const task = firstReady.value;
+    // From Read the task list renders only after the route has changed.
+    await router.replace({ query: { ...route.query, view: undefined, task: task ?? undefined } });
+    await nextTick();
+    if (task)
+      document
+        .querySelector(`[data-testid="guide-task-${task}"]`)
+        ?.scrollIntoView?.({ block: "center" });
     return;
   }
   router.push({ path: `/guide/${target.id}`, query: { in: route.query.in } });

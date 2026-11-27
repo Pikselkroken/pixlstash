@@ -128,6 +128,17 @@ describe("the welcome", () => {
     expect(patchUserConfig).not.toHaveBeenCalled();
   });
 
+  it("a replay is dropped when the session changes while the library is read", async () => {
+    const store = storeWith({ guide_welcome_seen: WELCOME_EDITION });
+    let answer;
+    readNeeds.mockReturnValue(new Promise((r) => (answer = r)));
+    const pending = store.replayWelcome();
+    sessionResets.at(-1)();
+    answer(PICTURES);
+    await pending;
+    expect(store.welcome).toBe(null);
+  });
+
   it("Play the welcome again shows it with New, whatever was seen", async () => {
     const store = storeWith({ guide_welcome_seen: WELCOME_EDITION });
     await store.replayWelcome();

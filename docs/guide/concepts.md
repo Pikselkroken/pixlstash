@@ -59,8 +59,9 @@ file.
   audits demo data.
 - **Unstable** marks a concept or task whose controls may still move. Pass 2
   and the capture rig must not freeze screenshots of it until it ships.
-- **Startup** marks the six concepts in the welcome carousel, plus the two
-  the welcome offers on an empty library instead. **New** marks a
+- **Startup** marks the six concepts in the welcome carousel, plus
+  *Import pictures*, which the welcome offers on an empty library with
+  Generate with ComfyUI (in both). **New** marks a
   concept that owns a *New in 2.x* headline.
 
 ## Prerequisites and where they are answered

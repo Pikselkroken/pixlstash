@@ -136,7 +136,9 @@ export const useGuideStore = defineStore("guide", () => {
 
   /** Play the welcome again (the Guide's toolbar). */
   async function replayWelcome() {
+    const started = epoch;
     await refresh();
+    if (started !== epoch) return;
     welcome.value = {
       concepts: slidesFor(met.value.picture === false),
       withNew: true,

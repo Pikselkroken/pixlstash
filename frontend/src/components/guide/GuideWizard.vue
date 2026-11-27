@@ -75,7 +75,12 @@ function visibleMatch(selector) {
 }
 
 function measure() {
-  targetEl = step.value?.target ? visibleMatch(step.value.target) : null;
+  const found = step.value?.target ? visibleMatch(step.value.target) : null;
+  // The scrim takes the wheel, so a target below the fold could never be
+  // scrolled to: bring it into view once, as it appears.
+  if (found && found !== targetEl)
+    found.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  targetEl = found;
   const r = targetEl?.getBoundingClientRect();
   rect.value = r
     ? {
