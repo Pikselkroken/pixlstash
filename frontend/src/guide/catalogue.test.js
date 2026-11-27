@@ -10,16 +10,16 @@ import {
   CONCEPTS,
 } from "./catalogue.js";
 
-// The routes the Guide may navigate to, and the settings tabs it may open
-// (ids from UserSettingsDialog.vue).
-const ROUTES = ["/", "/workflows", "/models", "/models/runs", "/studio", "/duplicates", "/inbox", "/insights", "/scrapheap"];
-const SETTINGS_TABS = [
-  "appearance", "privacy", "libraries", "recovery", "behaviour", "smart-score",
-  "models", "training", "comfyui", "compute", "backend", "account",
-];
-
 const HERE = dirname(fileURLToPath(import.meta.url));
-const COMPONENTS = resolve(HERE, "..", "components");
+const SRC = resolve(HERE, "..");
+const read = (path) => readFileSync(resolve(SRC, path), "utf8");
+
+// The routes the Guide may navigate to, and the settings tabs it may open,
+// read from their sources so a rename there fails here.
+const ROUTES = [...read("router/index.js").matchAll(/path: "(\/[^":]*)"/g)].map((m) => m[1]);
+const SETTINGS_TABS = [
+  ...read("components/settings/UserSettingsDialog.vue").matchAll(/^\s+id: "([a-z-]+)",$/gm),
+].map((m) => m[1]);
 
 function vueSources(dir) {
   const out = [];
@@ -149,6 +149,11 @@ describe("catalogue: completeness", () => {
 });
 
 describe("catalogue: navigation targets", () => {
+  it("reads the routes and settings tabs it checks against", () => {
+    expect(ROUTES).toEqual(expect.arrayContaining(["/", "/workflows", "/models/runs"]));
+    expect(SETTINGS_TABS).toEqual(expect.arrayContaining(["appearance", "libraries", "comfyui"]));
+  });
+
   it("every go is a known route or settings tab", () => {
     for (const { concept, task, step } of allSteps) {
       if (step.go === undefined) continue;
@@ -161,7 +166,7 @@ describe("catalogue: navigation targets", () => {
 });
 
 describe("catalogue: data-guide hooks", () => {
-  const source = vueSources(COMPONENTS).join("\n");
+  const source = vueSources(SRC).join("\n");
 
   it("every data-guide used in a target exists in a component", () => {
     const missing = [];

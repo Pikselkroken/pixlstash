@@ -197,6 +197,16 @@ describe("F1 is the Guide, ? is Keyboard shortcuts (#2825)", () => {
     expect(shortcuts.value).toBe(false);
   });
 
+  it("F1 in a text field leaves the page alone", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "F1", bubbles: true }),
+    );
+    input.remove();
+    expect(openGuide).not.toHaveBeenCalled();
+  });
+
   it("? toggles the shortcuts and does not open the Guide", () => {
     press("?", { ctrlKey: false });
     expect(shortcuts.value).toBe(true);

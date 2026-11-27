@@ -3,9 +3,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
+const sessionResets = vi.hoisted(() => []);
 vi.mock("../utils/apiClient", async () => {
   const { ref } = await import("vue");
-  return { isReadOnly: ref(false), onSessionReset: () => () => {} };
+  return {
+    isReadOnly: ref(false),
+    onSessionReset: (fn) => {
+      sessionResets.push(fn);
+      return () => {};
+    },
+  };
 });
 vi.mock("../api/config", () => ({ patchUserConfig: vi.fn(async () => ({})) }));
 vi.mock("../guide/needs", async (importOriginal) => ({
@@ -88,6 +95,17 @@ describe("the welcome", () => {
     await store.evaluateWelcome({ libraryEmpty: false });
     await store.closeWelcome();
     await store.evaluateWelcome({ libraryEmpty: false });
+    expect(store.welcome).toBe(null);
+  });
+
+  it("is dropped when the session changes while the library is read", async () => {
+    const store = storeWith({ guide_welcome_seen: null });
+    let answer;
+    readNeeds.mockReturnValue(new Promise((r) => (answer = r)));
+    const pending = store.evaluateWelcome({ libraryEmpty: false });
+    sessionResets.at(-1)();
+    answer(PICTURES);
+    await pending;
     expect(store.welcome).toBe(null);
   });
 

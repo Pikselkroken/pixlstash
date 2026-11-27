@@ -875,7 +875,7 @@ name loses its own name to the ellipsis and the user reads "Settings".
 **One dialog has no visible way out.** `ShortcutsDialog` is 480px of `v-card`
 holding a table: no close button, no footer, no button of any kind, no key
 handler of its own. Escape and a scrim click work and its own content lists
-`?` / `F1` as the toggle, so a keyboard user is told; a pointer user is given
+`?` as the toggle, so a keyboard user is told; a pointer user is given
 nothing to aim at. Six of the 18 have no action bar; this is one of the two
 with no button anywhere.
 

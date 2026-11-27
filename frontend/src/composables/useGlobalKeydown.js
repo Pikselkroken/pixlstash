@@ -205,6 +205,7 @@ export function useGlobalKeydown({
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
+      !isEditable &&
       openGuide &&
       !isReadOnly.value
     ) {

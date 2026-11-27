@@ -1,7 +1,6 @@
 <script setup>
-// A Guide task as a wizard on the real screen (#2825). It grew out of the
-// 2.0 LoRA tour (WhatsChangedTour): the same scrim with a hole cut over the
-// control, but its steps are data (guide/catalogue.js) rather than code.
+// A Guide task as a wizard on the real screen (#2825): a scrim with a hole cut
+// over the control, its steps data (guide/catalogue.js) rather than code.
 //
 // Each step can first go somewhere (a route, or a Settings pane), then rings
 // its `target` once it is on screen and waits for the user to click,
@@ -117,8 +116,11 @@ function onAct(event) {
   }, 0);
 }
 
+// Esc ends the wizard and nothing else: a menu or dialog it rings stays open.
 function onKeydown(event) {
-  if (event.key === "Escape") guide.endWizard();
+  if (event.key !== "Escape") return;
+  event.stopPropagation();
+  guide.endWizard();
 }
 
 const cardRef = ref(null);

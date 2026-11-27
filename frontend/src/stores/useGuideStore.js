@@ -123,7 +123,11 @@ export const useGuideStore = defineStore("guide", () => {
     if (seen === WELCOME_EDITION) return;
     const firstLaunch = seen === null;
     if (firstLaunch && libraryEmpty) return;
+    const started = epoch;
     await refresh();
+    // A session change (another library, a share token) while the needs were
+    // read: that session decides its own welcome, if any.
+    if (started !== epoch || isReadOnly.value) return;
     welcome.value = {
       concepts: slidesFor(met.value.picture === false),
       withNew: !firstLaunch,
