@@ -97,8 +97,9 @@ are under `/api/v1`.
 | **location** | a Studio location exists | `GET /studio/overview` → `locations` non-empty |
 | **scene** | a Studio scene exists | `GET /studio/overview` → `scenes` non-empty |
 
-The "needs a count" rows are left for pass 2 or the build to decide. Do not
-answer them by reading the library database.
+The "needs a count" rows have no endpoint, and the build adds none: their
+tasks stay lit (owner's ruling, #2825). Do not answer them by reading the
+library database.
 
 ## New in 2.x
 
@@ -187,7 +188,7 @@ Move through the grid, open a picture large, zoom, compare and score it.
 | Filmstrip | the strip along the lightbox's bottom | `frontend/src/components/views/LightboxFilmstrip.vue` | 2 pictures | the filmstrip with two pictures Ctrl-picked |
 | Video storyboard | lightbox on a video › band switch › *Frames of this clip* | `frontend/src/components/views/Lightbox.vue`, `frontend/src/components/widgets/VideoStoryboard.vue` | video | a clip's eleven frames under the player |
 | Favourites and stars | thumbnail hover stars and heart; sidebar *Favourites* | `frontend/src/components/widgets/StarRatingOverlay.vue`, `frontend/src/components/panels/SideBar.vue` | picture | a thumbnail with its hover stars, four lit, heart filled |
-| Keyboard shortcuts | `?` or the floating F1 button | `frontend/src/components/widgets/ShortcutsDialog.vue` | none | the Keyboard shortcuts dialog |
+| Keyboard shortcuts | `?` or the floating `?` button | `frontend/src/components/widgets/ShortcutsDialog.vue` | none | the Keyboard shortcuts dialog |
 
 ### Search
 
@@ -624,12 +625,12 @@ picture, a recipe, a workflow of the user's own or a person.
 - **Exiting:** Esc, × or *Not now* at any step. It never shows again for that
   version, and can be replayed from the Guide (*Play the welcome again*).
 - **Where "seen" is stored:** beside `last_seen_version` and `whats_changed` in
-  the server-side user config (`pixlstash/db_models/user.py`). The build picks
-  the field. A session holding only a read-only token never writes it.
-- **Open:** on a library with pictures and no person (the likely first launch),
-  slides 5 and 6 are greyed. The design assumes *Try it* there shows
-  "First: People", as a greyed task does. The alternative is to leave those two
-  slides out until a person exists. This needs the owner's ruling.
+  the server-side user config (`pixlstash/db_models/user.py`), as
+  `guide_welcome_seen`. A session holding only a read-only token never writes
+  it.
+- **Greyed slides:** on a library with pictures and no person (the likely
+  first launch), slides 5 and 6 are greyed and *Try it* reads "First: People",
+  as a greyed task does (owner's ruling, #2825).
 
 ## Where this departs from the plan
 
@@ -663,9 +664,8 @@ Checking each task against `develop` changed these:
   watched Downloads folder, not a downloads list. The Moves row exists only
   while moves are pending. Remote access is desktop-only.
 - **Similarity sort needs a person**: the sort is "Similarity to" a person.
-- **F1 is taken.** `?` and F1 open Keyboard shortcuts today, and the design
-  gives F1 to the Guide. The build must choose one: move shortcuts to `?`
-  only, or give the Guide another key.
+- **F1 opens the Guide.** Keyboard shortcuts keep `?` only (owner's ruling,
+  #2825).
 - **Some needs have no endpoint yet** ("person with a LoRA", "text in a
   picture", a share of a person, set or project). They are marked "needs a
   count".
