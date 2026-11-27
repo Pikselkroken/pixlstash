@@ -201,7 +201,24 @@ describe("the Studio sidebar's row menus", () => {
     });
     await flushPromises();
     expect(verbs(wrapper)).toEqual(["open", "favourite", "new-sheets", "stop-using"]);
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    // A lightbox listens for Esc on the window; the menu's Esc must not reach it.
+    const lightboxEsc = vi.fn();
+    window.addEventListener("keydown", lightboxEsc);
+    try {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flushPromises();
+      expect(wrapper.find("[data-testid=studio-menu]").exists()).toBe(false);
+      expect(lightboxEsc).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", lightboxEsc);
+    }
+  });
+
+  it("closes when the Studio moves somewhere else", async () => {
+    const wrapper = await mountAt("/studio?project=7");
+    await rightClick(wrapper, "studio-item-prop-40");
+    expect(verbs(wrapper)).not.toEqual([]);
+    await router.push("/studio?project=7&section=props");
     await flushPromises();
     expect(wrapper.find("[data-testid=studio-menu]").exists()).toBe(false);
   });

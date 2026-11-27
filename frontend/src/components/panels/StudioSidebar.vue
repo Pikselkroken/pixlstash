@@ -12,7 +12,7 @@
  * Every row has a menu (right-click, the Menu key or Shift+F10) holding what
  * its grid's toolbar or its lightbox can do, as Media's sidebar rows do.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -189,6 +189,7 @@ const SEP = "sep";
 const menu = ref(null); // { target, x, y }
 const menuEl = ref(null);
 const menuH = ref(0);
+const menuW = ref(0);
 let menuTrigger = null;
 
 function sectionEntries(id) {
@@ -268,7 +269,10 @@ function itemEntries(kind, id) {
         label: "More angles…",
         icon: "mdi-rotate-orbit",
         reason: item.picture_ids.length ? "" : "No pictures yet to start from.",
-        run: () => (anglesOf.value = item),
+        run: (trigger) => {
+          anglesTrigger = trigger;
+          anglesOf.value = item;
+        },
       },
     );
   }
@@ -304,9 +308,10 @@ async function showMenu(target, x, y, trigger) {
   if (!entriesFor(target).length) return false;
   menuTrigger = trigger;
   menu.value = { target, x, y };
-  // Its height depends on the target, so the flip upward reads it once drawn.
+  // Its size depends on the target, so the clamp and flip read it once drawn.
   await nextTick();
   menuH.value = menuEl.value?.offsetHeight ?? 0;
+  menuW.value = menuEl.value?.offsetWidth ?? 0;
   return true;
 }
 
@@ -338,9 +343,8 @@ function closeMenu({ refocus = false } = {}) {
 
 const menuStyle = computed(() => {
   if (!menu.value) return {};
-  const MENU_W = 220;
   const { x, y } = menu.value;
-  const left = `${Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8))}px`;
+  const left = `${Math.max(8, Math.min(x, window.innerWidth - menuW.value - 8))}px`;
   return y + menuH.value > window.innerHeight - 8
     ? { left, bottom: `${window.innerHeight - y}px` }
     : { left, top: `${y}px` };
@@ -352,7 +356,7 @@ function runEntry(entry) {
   const trigger = menuTrigger;
   closeMenu();
   trigger?.focus?.();
-  entry.run();
+  entry.run(trigger);
 }
 
 function onMenuKey(event) {
@@ -375,6 +379,9 @@ function onEscape(event) {
   event.preventDefault();
   closeMenu({ refocus: true });
 }
+
+// Back, Forward or a lightbox's own links move on: the menu was for there.
+watch(() => route.fullPath, () => closeMenu());
 
 document.addEventListener("mousedown", onOutside);
 document.addEventListener("keydown", onEscape, true);
@@ -437,8 +444,17 @@ async function stopUsing(kind, item) {
   }
 }
 
-// More angles…, the location lightbox's dialog, opened from its row.
+// More angles…, the location lightbox's dialog, opened from its row. Opened
+// from code, so focus goes back to the row by hand on close.
 const anglesOf = ref(null);
+let anglesTrigger = null;
+
+function closeAngles() {
+  anglesOf.value = null;
+  const trigger = anglesTrigger;
+  anglesTrigger = null;
+  nextTick(() => trigger?.focus?.());
+}
 </script>
 
 <template>
@@ -656,13 +672,13 @@ const anglesOf = ref(null);
     <LocationAnglesDialog
       :open="!!anglesOf"
       :location="anglesOf"
-      @close="anglesOf = null"
+      @close="closeAngles"
       @done="store.refresh()"
     />
 
     <Teleport to="body">
       <div
-        v-if="menu"
+        v-if="menu && menuEntries.length"
         ref="menuEl"
         class="ctx-menu studio-ctx-menu"
         role="menu"

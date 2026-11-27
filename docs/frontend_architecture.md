@@ -8830,8 +8830,10 @@ inside its lightboxes, so the rail is empty on `/studio`.
 - **Every sidebar row has a menu** (right-click, the Menu key, Shift+F10): a
   teleported `.ctx-menu` like Media's. A kind's row holds its grid's toolbar
   (New scene…, Add a set…, Draw … sheets…); an item's row holds Open, the
-  favourite and its lightbox's verbs (Delete the scene…, New outfit…, New
-  scene here…, More angles…, New sheets…, Stop using in the Studio). New
+  favourite and the lightbox verbs that need nothing on screen (Delete the
+  scene…, New outfit…, New scene here…, More angles…, New sheets…, Stop
+  using in the Studio). Shooting stays in the scene, beside its stage and
+  its workflow picks. New
   scene and Add a set reach the grid's own dialogs through one-shot route
   keys, `?new=1` or `?new=location:<id>` and `?add=1`.
 - **`StudioScene`** is blocking on the picture: the location's view (the
