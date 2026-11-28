@@ -92,6 +92,7 @@ function measure() {
   // screen will do: the hole spans all of them, clipped to the window since a
   // grid renders rows past the fold.
   let box = null;
+  let anyWhole = false;
   for (const el of targets) {
     const r = el.getBoundingClientRect();
     const x1 = Math.max(r.left, 0);
@@ -99,6 +100,8 @@ function measure() {
     const x2 = Math.min(r.right, vw);
     const y2 = Math.min(r.bottom, vh);
     if (x2 <= x1 || y2 <= y1) continue;
+    if (r.left >= 0 && r.top >= 0 && r.right <= vw && r.bottom <= vh)
+      anyWhole = true;
     box = box
       ? {
           x1: Math.min(box.x1, x1),
@@ -109,8 +112,8 @@ function measure() {
       : { x1, y1, x2, y2 };
   }
   // The scrim takes the wheel, so a target below the fold could never be
-  // scrolled to: with none on screen, bring the first into view once.
-  if (!box && targets[0] && targets[0] !== scrolledTo) {
+  // scrolled to: with none wholly on screen, bring the first into view once.
+  if (!anyWhole && targets[0] && targets[0] !== scrolledTo) {
     scrolledTo = targets[0];
     scrolledTo.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }
