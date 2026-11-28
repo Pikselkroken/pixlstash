@@ -1,0 +1,179 @@
+{
+  "1": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Scene pictures"
+    }
+  },
+  "2": {
+    "inputs": {
+      "clip_sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c",
+      "type": "moss_image"
+    },
+    "class_type": "PixlStashCLIPLoader"
+  },
+  "3": {
+    "inputs": {
+      "vae_sha256": "d8d52ba036475f5fb07c8b435e176d3d97ebfa82f0d1a1c317f9cc1e25bd013b"
+    },
+    "class_type": "PixlStashVAELoader"
+  },
+  "4": {
+    "inputs": {
+      "unet_name": "moss_image_sft_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "5": {
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "adapter_kind": "\u2014 Any \u2014",
+      "base_model": "MOSS-Image",
+      "adapter_sha256": "17a48b8c605dcffdedb92a2b887d18cf316505be90802717669fb6556098dcdf",
+      "strength_model": 1.0
+    },
+    "class_type": "PixlStashAdapterLoader"
+  },
+  "6": {
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "double_layers": "",
+      "single_layers": "22",
+      "start_percent": 0,
+      "end_percent": 1
+    },
+    "class_type": "SkipLayerGuidanceDiTSimple"
+  },
+  "7": {
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "prompt": "A wide establishing shot of the location in the pictures, same architecture, materials and light.",
+      "edit_format": "Moss-Image-Edit",
+      "image_strength": 1,
+      "vae": [
+        "3",
+        0
+      ],
+      "images.image_0": [
+        "scene_resize",
+        0
+      ]
+    },
+    "class_type": "TextEncodeMOSSImageEdit",
+    "_meta": {
+      "title": "Text Encode MOSS-Image Edit (positive)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "prompt": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact",
+      "edit_format": "Moss-Image-Edit",
+      "image_strength": 1,
+      "vae": [
+        "3",
+        0
+      ],
+      "images.image_0": [
+        "scene_resize",
+        0
+      ]
+    },
+    "class_type": "TextEncodeMOSSImageEdit",
+    "_meta": {
+      "title": "Text Encode MOSS-Image Edit (negative)"
+    }
+  },
+  "9": {
+    "inputs": {
+      "width": 1536,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Scene canvas"
+    }
+  },
+  "10": {
+    "inputs": {
+      "model": [
+        "6",
+        0
+      ],
+      "seed": 42,
+      "steps": 30,
+      "cfg": 4,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "8",
+        0
+      ],
+      "latent_image": [
+        "9",
+        0
+      ],
+      "denoise": 1
+    },
+    "class_type": "KSampler"
+  },
+  "11": {
+    "inputs": {
+      "samples": [
+        "10",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "12": {
+    "inputs": {
+      "images": [
+        "11",
+        0
+      ],
+      "filename_prefix": "Scene-MOSS-Image"
+    },
+    "class_type": "SaveImage"
+  },
+  "scene_resize": {
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "megapixels": 1,
+      "resolution_steps": 16
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Image Scale To Total Pixels (reference)"
+    }
+  }
+}
