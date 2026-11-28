@@ -1459,8 +1459,8 @@ export const CONCEPTS = [
       {
         id: "cast-and-wardrobe",
         name: "Cast and wardrobe",
-        sentence: "Dress a person in outfits, each drawn from four angles.",
-        entry: "Studio › Cast › a person › Wardrobe › New outfit…; or right-click a person in Media › Draw outfit sheets…",
+        sentence: "Dress a person in outfits, each drawn from four angles; the Wardrobe holds every outfit, anyone's or no one's.",
+        entry: "Studio › Cast › a person › Wardrobe › New outfit…; Studio › Wardrobe › Draw outfit sheets… or Add a set…; or right-click a person in Media › Draw outfit sheets…",
         needs: ["person"],
         unstable: true,
         steps: [

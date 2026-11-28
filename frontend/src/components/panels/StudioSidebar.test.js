@@ -148,6 +148,21 @@ describe("the Studio sidebar's row menus", () => {
     expect(router.currentRoute.value.query).toMatchObject({ section: "locations", add: "1" });
   });
 
+  it("lists the Wardrobe as its own section, every outfit in it, a person's too", async () => {
+    const top = await mountAt("/studio", { inProject: false });
+    expect(top.find("[data-testid=studio-row-wardrobe]").text()).toContain("Wardrobe");
+    await rightClick(top, "studio-row-wardrobe");
+    expect(verbs(top)).toEqual(["show", "add-set", "draw-sheets"]);
+    await verb(top, "draw-sheets").trigger("click");
+    expect(top.emitted("item-sheets")).toEqual([[{ kind: "outfit" }]]);
+    top.unmount();
+
+    const wrapper = await mountAt("/studio");
+    // Under the Wardrobe, and still under its wearer once they are open.
+    expect(wrapper.find("[data-testid=studio-item-outfit-20]").exists()).toBe(true);
+    expect(wrapper.find("[data-testid=studio-all-wardrobe]").exists()).toBe(true);
+  });
+
   it("asks for a new scene at the location it was opened on", async () => {
     const wrapper = await mountAt("/studio?project=7");
     await rightClick(wrapper, "studio-item-location-30");

@@ -8829,8 +8829,10 @@ inside its lightboxes, so the rail is empty on `/studio`.
 - **`useStudioStore`** holds one `GET /studio/overview` for the scope:
   scenes, cast, outfits, locations, props. Every list, grid and lightbox reads
   it; a change calls `refresh()`.
-- **Any project** lists the kinds (All scenes, Favourites, Cast, Locations,
-  Props), each a grid with filters in its toolbar. **In a project** the
+- **Any project** lists the kinds (All scenes, Favourites, Cast, Wardrobe,
+  Locations, Props), each a grid with filters in its toolbar. The Wardrobe
+  holds every outfit, a person's and those that are no one's (filter *Worn
+  by*); a person's outfits are under that person too. **In a project** the
   sidebar lists the items under an All … row per section; the open scene
   unfolds to its location and cast, the open person to their wardrobe.
 - **Every sidebar row has a menu** (right-click, the Menu key, Shift+F10): a

@@ -124,6 +124,7 @@ const TOP = [
   { id: "scenes", kind: "scene", label: "All scenes", list: "scenes" },
   { id: "favourites", kind: null, label: "Favourites", list: null },
   { id: "cast", kind: "cast", label: "Cast", list: "cast" },
+  { id: "wardrobe", kind: "outfit", label: "Wardrobe", list: "outfits" },
   { id: "locations", kind: "location", label: "Locations", list: "locations" },
   { id: "props", kind: "prop", label: "Props", list: "props" },
 ];
@@ -185,6 +186,16 @@ const sections = computed(() => [
     })),
   },
   {
+    id: "wardrobe",
+    kind: "outfit",
+    title: "Wardrobe",
+    // Every outfit, a person's too: they are under that person as well.
+    items: lists.value.outfits.map((o) => ({
+      ...o,
+      meta: peopleById.value.get(o.character_id)?.name ?? "",
+    })),
+  },
+  {
     id: "locations",
     kind: "location",
     title: "Locations",
@@ -235,7 +246,7 @@ function sectionEntries(id) {
   if (id === "scenes") {
     return [show, SEP, { key: "new-scene", label: "New scene…", icon: "mdi-plus", run: () => newScene() }];
   }
-  if (kind === "location" || kind === "prop") {
+  if (kind === "outfit" || kind === "location" || kind === "prop") {
     return [
       show,
       SEP,
@@ -247,7 +258,7 @@ function sectionEntries(id) {
       },
       {
         key: "draw-sheets",
-        label: kind === "location" ? "Draw location sheets…" : "Draw prop sheets…",
+        label: `Draw ${STUDIO_KINDS[kind].label.toLowerCase()} sheets…`,
         icon: "mdi-draw",
         run: () => emit("item-sheets", { kind }),
       },

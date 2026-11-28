@@ -258,6 +258,34 @@ describe("the Studio's grids", () => {
     expect(location.props("modelValue")).toBe("30");
   });
 
+  it("lists every outfit in the Wardrobe, filtered by who wears it, and adds a set as an outfit", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push({ id: 25, name: "Yellow wellies", character_id: null, picture_ids: [26], favourite: false, scene_count: 0 });
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=wardrobe");
+    expect(wrapper.find(".studio-title").text()).toBe("Wardrobe");
+    expect(cardKeys(wrapper)).toEqual(["outfit-20", "outfit-25"]);
+    expect(wrapper.text()).toContain("Mira's outfit");
+    expect(wrapper.text()).toContain("Not anyone's");
+
+    const filter = wrapper.findComponent('[data-testid="studio-filter-wearer"]');
+    await filter.vm.$emit("update:modelValue", "nobody");
+    expect(cardKeys(wrapper)).toEqual(["outfit-25"]);
+    await filter.vm.$emit("update:modelValue", "5");
+    expect(cardKeys(wrapper)).toEqual(["outfit-20"]);
+
+    await wrapper.find('[data-testid="studio-draw-sheets"]').trigger("click");
+    expect(wrapper.emitted("item-sheets")).toEqual([[{ kind: "outfit" }]]);
+    await wrapper.find('[data-testid="studio-add-set"]').trigger("click");
+    await flushPromises();
+    const dialog = wrapper.findAllComponents({ name: "AppDialog" }).find((d) => d.props("title") === "Add an outfit");
+    expect(dialog.props("open")).toBe(true);
+    await wrapper.findComponent('[data-testid="studio-add-set-pick"]').vm.$emit("update:modelValue", "88");
+    await dialog.findAllComponents({ name: "AppButton" }).find((b) => b.text() === "Add").trigger("click");
+    await flushPromises();
+    expect(api.listSetInStudio).toHaveBeenCalledWith(88, "outfit");
+  });
+
   it("opens Add a set when a sidebar row menu asks for it", async () => {
     const wrapper = await mountAt("/studio?section=props&add=1");
     expect(router.currentRoute.value.query).toEqual({ section: "props" });

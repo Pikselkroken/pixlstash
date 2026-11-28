@@ -49,6 +49,17 @@
             @update:model-value="atLocation = fromOption($event)"
           />
         </template>
+        <AppSelect
+          v-if="section === 'wardrobe'"
+          :model-value="optionValue(wornBy)"
+          class="studio-filter"
+          compact
+          hide-label
+          label="Worn by"
+          :options="wearerOptions"
+          data-testid="studio-filter-wearer"
+          @update:model-value="wornBy = $event === 'nobody' ? 'nobody' : fromOption($event)"
+        />
         <Segmented
           v-if="section === 'favourites'"
           v-model="favouriteKind"
@@ -57,7 +68,7 @@
         />
         <span class="studio-spacer"></span>
         <AppButton
-          v-if="section === 'locations' || section === 'props'"
+          v-if="SET_SECTIONS[section]"
           variant="ghost"
           icon-left="playlist-plus"
           data-testid="studio-add-set"
@@ -65,18 +76,12 @@
           >Add a set…</AppButton
         >
         <AppButton
-          v-if="section === 'locations' || section === 'props'"
+          v-if="SET_SECTIONS[section]"
           variant="secondary"
           icon-left="draw"
           data-testid="studio-draw-sheets"
-          @click="
-            emit('item-sheets', {
-              kind: section === 'locations' ? 'location' : 'prop',
-            })
-          "
-          >{{
-            section === "locations" ? "Draw location sheets…" : "Draw prop sheets…"
-          }}</AppButton
+          @click="emit('item-sheets', { kind: SET_SECTIONS[section].kind })"
+          >{{ SET_SECTIONS[section].draw }}</AppButton
         >
         <AppButton
           v-if="section === 'scenes'"
@@ -295,7 +300,7 @@
 
     <AppDialog
       :open="addSetOpen"
-      :title="section === 'locations' ? 'Add a location' : 'Add a prop'"
+      :title="`Add ${{ wardrobe: 'an outfit', locations: 'a location' }[section] ?? 'a prop'}`"
       subtitle="From a picture set you already have"
       size="sm"
       @close="addSetOpen = false"
@@ -375,6 +380,7 @@ import {
   KIND_LIST,
   KIND_SECTION,
   LOCATION_VIEWS,
+  SECTION_KIND,
   STUDIO_KINDS,
   fromOption,
   kindStyle,
@@ -423,9 +429,16 @@ onMounted(() => store.refresh());
 const sectionTitle = computed(() =>
   section.value === "favourites"
     ? "Favourites"
-    : (STUDIO_KINDS[{ scenes: "scene", cast: "cast", locations: "location", props: "prop" }[section.value]]?.all ??
-      "All scenes"),
+    : (STUDIO_KINDS[SECTION_KIND[section.value]]?.all ?? "All scenes"),
 );
+
+// The sections a picture set is listed in, as what it is: Add a set… and
+// Draw … sheets… in their toolbars.
+const SET_SECTIONS = {
+  wardrobe: { kind: "outfit", draw: "Draw outfit sheets…" },
+  locations: { kind: "location", draw: "Draw location sheets…" },
+  props: { kind: "prop", draw: "Draw prop sheets…" },
+};
 
 const backLabel = computed(() => {
   const name = section.value === "favourites" ? "Favourites" : sectionTitle.value;
@@ -453,11 +466,19 @@ function openItem(kind, id, { fromSidebar = false } = {}) {
 const withPerson = ref(null);
 const atLocation = ref(null);
 const favouriteKind = ref("all");
+// The Wardrobe's filter: a person's id, "nobody" for clothes of their own,
+// or null for every outfit.
+const wornBy = ref(null);
 
 const people = computed(() => store.overview.cast);
 const personOptions = computed(() => [
   { label: "With anyone", value: "" },
   ...people.value.map((p) => ({ label: `With ${p.name}`, value: String(p.id) })),
+]);
+const wearerOptions = computed(() => [
+  { label: "Worn by anyone", value: "" },
+  { label: "Not anyone's", value: "nobody" },
+  ...people.value.map((p) => ({ label: `Worn by ${p.name}`, value: String(p.id) })),
 ]);
 const locationOptions = computed(() => [
   { label: "At any location", value: "" },
@@ -486,7 +507,7 @@ function metaOf(kind, item) {
   }
   if (kind === "outfit") {
     const who = store.byKey.get(`cast:${item.character_id}`)?.name;
-    return who ? `${who}'s outfit` : "Outfit";
+    return who ? `${who}'s outfit` : "Not anyone's";
   }
   return `In ${item.scene_count} ${item.scene_count === 1 ? "scene" : "scenes"}`;
 }
@@ -620,6 +641,16 @@ const cards = computed(() => {
         : favourites.value.filter((c) => c.kind === favouriteKind.value);
     case "cast":
       return store.overview.cast.map(asCard("cast"));
+    case "wardrobe":
+      return store.overview.outfits
+        .filter((o) =>
+          wornBy.value == null
+            ? true
+            : wornBy.value === "nobody"
+              ? o.character_id == null
+              : o.character_id === wornBy.value,
+        )
+        .map(asCard("outfit"));
     case "locations":
       return store.overview.locations.map(asCard("location"));
     case "props":
@@ -640,6 +671,7 @@ const emptyIcon = computed(
     ({
       favourites: "mdi-heart-outline",
       cast: STUDIO_KINDS.cast.icon,
+      wardrobe: STUDIO_KINDS.outfit.icon,
       locations: STUDIO_KINDS.location.icon,
       props: STUDIO_KINDS.prop.icon,
     })[section.value] ?? STUDIO_KINDS.scene.icon,
@@ -650,6 +682,10 @@ const emptyText = computed(
     ({
       favourites: "Nothing starred yet. The heart on any card adds it here.",
       cast: "No people here yet. People are made in Media; their outfits are drawn from their lightbox here.",
+      wardrobe:
+        wornBy.value != null
+          ? "No outfit matches this filter."
+          : "No outfits yet. Draw outfit sheets, or add a set of pictures of one; a person's own are drawn from their lightbox.",
       locations: "No locations yet. Draw location sheets, or add a set of pictures of one place.",
       props: "No props yet. Draw prop sheets, or add a set of pictures of one.",
     })[section.value] ??
@@ -1008,7 +1044,7 @@ const setOptions = computed(() => {
 });
 
 async function addSet() {
-  const kind = section.value === "locations" ? "location" : "prop";
+  const kind = SET_SECTIONS[section.value]?.kind ?? "prop";
   try {
     await listSetInStudio(addSetId.value, kind);
     addSetOpen.value = false;
