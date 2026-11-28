@@ -16,6 +16,8 @@ vi.mock("../../api/pictureImport", () => ({
 
 import ImageImporter from "./ImageImporter.vue";
 import * as api from "../../api/pictureImport";
+import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 let wrapper = null;
 
@@ -146,5 +148,56 @@ describe("ImageImporter staging", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(api.stageFiles.mock.calls[0][0].signal.aborted).toBe(true);
     expect(api.stageFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancel while checking keeps what arrived and drops the rest", async () => {
+    let keys = [];
+    api.stageFiles.mockImplementation(async (args) => {
+      keys = args.keys;
+      args.onUploadProgress({ loaded: 200, total: 200 });
+      return { staged: 2, received: [], skipped: [] };
+    });
+    api.commitStaging.mockResolvedValue({ taskId: "t1", stagedCount: 2 });
+    let stopped = false;
+    api.cancelStaging.mockImplementation(async () => {
+      stopped = true;
+      return {};
+    });
+    api.fetchStagingStatus.mockImplementation(async ({ outcomesFrom }) => ({
+      stage: stopped ? "completed" : "importing",
+      total: 2,
+      processed: 1,
+      importedCount: 1,
+      cancelledCount: stopped ? 1 : null,
+      outcomes:
+        outcomesFrom === 0 ? [{ key: keys[0], outcome: "new" }] : [],
+    }));
+    wrapper = mount(ImageImporter);
+    wrapper.vm.startImport([
+      new File([new Uint8Array(100)], "a.png"),
+      new File([new Uint8Array(100)], "b.png"),
+    ]);
+    await vi.advanceTimersByTimeAsync(1500);
+
+    const arrivals = useImportArrivalsStore();
+    const tasks = useTasksStore();
+    const run = arrivals.runs[0];
+    expect(run.stage).toBe("checking");
+    expect(tasks.importRuns[run.id].abortable).toBe(true);
+
+    tasks.abortImportRun(run.id);
+    expect(run.stopping).toBe(true);
+    expect(api.cancelStaging).toHaveBeenCalledWith(
+      expect.objectContaining({ stagingId: "s1" }),
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(run.stage).toBe("landed");
+    expect(run.tiles.map((t) => [t.name, t.state])).toEqual([
+      ["a.png", "landed"],
+    ]);
+    expect(run.counts.cancelled).toBe(1);
+    expect(wrapper.emitted("import-cancelled")).toBeUndefined();
+    expect(wrapper.emitted("import-finished")?.[0]?.[0].importedCount).toBe(1);
   });
 });

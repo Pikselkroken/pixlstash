@@ -15,6 +15,7 @@ import asyncio
 import io
 import os
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -26,6 +27,7 @@ from sqlmodel import select
 from pixlstash.db_models import Character, Picture, PictureSet, PictureSetMember, Tag
 from pixlstash.routes.pictures import _import as import_routes
 from pixlstash.server import Server
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -259,6 +261,62 @@ def test_staging_cancel_discards_without_importing(owner_server):
     r = client.get(f"{API}/pictures/import/staging/{staging_id}/status")
     assert r.status_code == 404
     assert client.get(f"{API}/pictures").json() == []
+
+
+def test_staging_cancel_after_commit_keeps_what_already_arrived(
+    owner_server, monkeypatch
+):
+    """Cancelling a committed import stops it; what it brought in stays."""
+    srv, client = owner_server
+    reached = threading.Event()
+    release = threading.Event()
+    real_hash = ImageUtils.calculate_hash_from_file_path
+    calls = []
+
+    def held_hash(file_path):
+        # Hold the task on its second file until the test has cancelled.
+        calls.append(file_path)
+        if len(calls) == 2:
+            reached.set()
+            assert release.wait(10), "the test never released the import"
+        return real_hash(file_path)
+
+    monkeypatch.setattr(
+        ImageUtils, "calculate_hash_from_file_path", staticmethod(held_hash)
+    )
+
+    r = client.post(f"{API}/pictures/import/staging", json={})
+    staging_id = r.json()["staging_id"]
+    colors = [(200, 10, 10), (10, 200, 10), (10, 10, 200), (200, 200, 10)]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[
+            ("file", (f"p{i}.png", _png_bytes(color), "image/png"))
+            for i, color in enumerate(colors)
+        ],
+    )
+    assert r.json()["staged"] == 4, r.text
+    r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 200, r.text
+    assert reached.wait(10), "the import never reached its second file"
+
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["stage"] == "importing"
+    release.set()
+
+    status = _wait_for_stage(client, staging_id, target=("completed", "failed"))
+    assert status["stage"] == "completed", status
+    # The file being hashed when the cancel came finishes; the rest never start.
+    assert status["imported_count"] == 2, status
+    assert status["cancelled_count"] == 2, status
+    assert len(client.get(f"{API}/pictures").json()) == 2
+    staging_dir = os.path.join(srv.vault.image_root, ".staging", staging_id)
+    assert not os.path.isdir(staging_dir), "the dropped files must not linger"
+
+    # A finished import has nothing left to cancel.
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 409, r.text
 
 
 def test_staging_status_unknown_session_404(owner_server):

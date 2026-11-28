@@ -1650,19 +1650,40 @@ def register_routes(router, server):
         "/pictures/import/staging/{staging_id}",
         summary="Cancel a staging session",
         description=(
-            "Cancels an async import staging session that has not yet been "
-            "committed, discarding its streamed files. After commit the import "
-            "runs to completion in the background and cannot be cancelled here."
+            "Before commit, discards the session and its streamed files. After "
+            "commit, stops the background import at the next file: the pictures "
+            "it already brought in are kept, the rest are dropped with the "
+            "staging dir, and the import completes with them in "
+            "``cancelled_count``. Poll the status for the outcome."
         ),
         response_model=StagingStatusResponse,
     )
     def cancel_staging_session(request: Request, staging_id: str):
         session = _get_session_or_404(request, staging_id)
+        task = session.get("task")
+        if session["stage"] == "importing" and task is not None:
+            # The task checks this between files and still inserts what it had
+            # already copied in, so the import ends as ``completed``.
+            task.on_cancel()
+            session["last_update_epoch_ms"] = int(time.time() * 1000)
+            logger.info(
+                "Staging session import stopping: staging_id=%s task_id=%s",
+                staging_id,
+                session.get("task_id"),
+            )
+            return {
+                "staging_id": staging_id,
+                "stage": "importing",
+                "staged": len(session.get("staged_files") or []),
+                "total": int(getattr(task, "_total_count", 0) or 0),
+                "processed": int(getattr(task, "_processed_count", 0) or 0),
+                "task_id": session.get("task_id"),
+            }
         if session["stage"] not in ("staging",):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Cannot cancel a committed staging session "
+                    "Cannot cancel a finished staging session "
                     f"(stage={session['stage']})"
                 ),
             )

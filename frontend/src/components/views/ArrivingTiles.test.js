@@ -9,6 +9,7 @@ import { nextTick } from "vue";
 
 import ArrivingTiles from "./ArrivingTiles.vue";
 import { useImportArrivalsStore } from "../../stores/useImportArrivalsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const DWELL = 8000;
 const BUTTON = { template: "<button type=\"button\"><slot /></button>" };
@@ -207,5 +208,44 @@ describe("ArrivingTiles fold caret", () => {
 
     await caret.trigger("click");
     expect(shown()).toBe(true);
+  });
+});
+
+describe("ArrivingTiles cancel while checking", () => {
+  it("offers Cancel, then says it is stopping", async () => {
+    const store = useImportArrivalsStore();
+    const tasks = useTasksStore();
+    const abort = vi.fn(() => store.markStopping("r1"));
+    tasks.registerImportAbort("r1", abort);
+    store.begin("r1", [new File(["x"], "a.png")]);
+    store.markChecking("r1");
+    await mountTiles();
+
+    const cancel = () =>
+      wrapper.findAll("button").find((b) => /Cancel|Stopping/.test(b.text()));
+    expect(cancel().text()).toBe("Cancel");
+    await cancel().trigger("click");
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(cancel().text()).toBe("Stopping…");
+    expect(cancel().attributes("disabled")).toBeDefined();
+  });
+
+  it("lands with only what arrived, and says the rest was not imported", async () => {
+    const store = useImportArrivalsStore();
+    const keys = store.begin("r1", [
+      new File(["x"], "a.png"),
+      new File(["y"], "b.png"),
+    ]);
+    store.markChecking("r1");
+    store.applyOutcomes("r1", [{ key: keys[0], outcome: "new" }]);
+    store.land("r1", { cancelled: 1 });
+    await mountTiles();
+
+    const states = wrapper
+      .findAll("[data-arriving-state]")
+      .map((t) => t.attributes("data-arriving-state"));
+    expect(states).toEqual(["landed"]);
+    expect(wrapper.text()).toContain("1 not imported, stopped");
+    expect(wrapper.text()).not.toContain("Cancel");
   });
 });

@@ -63,7 +63,9 @@ function bytesPair(sent, total) {
 
 function stageText(run) {
   if (run.stage === "uploading") return "Uploading";
-  if (run.stage === "checking") return "Checking for duplicates";
+  if (run.stage === "checking") {
+    return run.stopping ? "Stopping" : "Checking for duplicates";
+  }
   if (run.stage === "error") return "Import failed";
   return run.counts.added
     ? plural(run.counts.added, "picture", "pictures")
@@ -121,6 +123,13 @@ function chips(run) {
       text: `${count(c.failed)} could not be read`,
       action: "List",
       n: c.failed,
+    },
+    // A stopped import: the files it never reached are not in the library.
+    landed && {
+      id: "cancelled",
+      icon: "mdi-cancel",
+      text: `${count(c.cancelled)} not imported, stopped`,
+      n: c.cancelled,
     },
   ].filter((chip) => chip && (chip.id === "added" || chip.n > 0));
 }
@@ -422,8 +431,13 @@ onBeforeUnmount(() => {
             >
           </component>
         </div>
-        <AppBarButton v-if="run.stage === 'uploading'" @click="cancel(run)">
-          Cancel
+        <!-- While checking, Cancel stops the server: what arrived stays. -->
+        <AppBarButton
+          v-if="run.stage === 'uploading' || run.stage === 'checking'"
+          :disabled="run.stopping"
+          @click="cancel(run)"
+        >
+          {{ run.stopping ? "Stopping…" : "Cancel" }}
         </AppBarButton>
         <AppBarButton
           v-if="run.stage === 'landed' || run.stage === 'error'"

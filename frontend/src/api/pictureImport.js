@@ -16,7 +16,8 @@ import { apiClient } from "../utils/apiClient";
  *     into it batch by batch while the tab stays open. Closing/refreshing the
  *     tab mid-stream aborts the upload - this is the window the beforeunload
  *     guard protects. `openStagingSession()` starts it; `stageFiles()` streams a
- *     batch; `cancelStaging()` discards a not-yet-committed session.
+ *     batch; `cancelStaging()` discards a not-yet-committed session, or stops
+ *     a committed one's import (what arrived stays; poll for the outcome).
  *
  *   Safe transition:  once every byte is staged, `commitStaging()` hands off to a
  *     background `PictureImportTask` on the server's task runner and returns the

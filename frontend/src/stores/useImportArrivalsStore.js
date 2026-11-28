@@ -17,6 +17,9 @@
 //               (`pictureId` names it)
 //   unsupported refused by name before upload, or by the server's staging
 //   failed      the server could not read or ingest it
+//
+// A run cancelled while it is being checked (`stopping`) keeps what the server
+// already brought in; the files it never reached leave the group at landing.
 
 import { defineStore } from "pinia";
 import { onScopeDispose, reactive } from "vue";
@@ -52,7 +55,14 @@ function previewUrlFor(file, kind) {
 }
 
 function emptyCounts() {
-  return { added: 0, duplicate: 0, scrapheaped: 0, unsupported: 0, failed: 0 };
+  return {
+    added: 0,
+    duplicate: 0,
+    scrapheaped: 0,
+    unsupported: 0,
+    failed: 0,
+    cancelled: 0,
+  };
 }
 
 export const useImportArrivalsStore = defineStore("importArrivals", () => {
@@ -135,6 +145,7 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
       checked: 0,
       total: tiles.length - refused.length,
       error: null,
+      stopping: false,
       counts,
       tiles,
     });
@@ -205,11 +216,32 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     }
   }
 
-  /** The run committed: what was new is now in the library. */
-  function land(runId) {
+  /** A cancel was sent after the handoff: the server stops at its next file. */
+  function markStopping(runId) {
+    const run = runById(runId);
+    if (run) run.stopping = true;
+  }
+
+  /**
+   * The run committed: what was new is now in the library. `cancelled` counts
+   * the files a stopped run never reached; their tiles leave the group.
+   */
+  function land(runId, { cancelled = 0 } = {}) {
     const run = runById(runId);
     if (!run) return;
     run.stage = "landed";
+    run.stopping = false;
+    run.counts.cancelled = cancelled;
+    if (cancelled) {
+      // Undecided means never reached, so these are not in the library.
+      const reached = run.tiles.filter((tile) => tile.state !== "checking");
+      for (const tile of run.tiles) {
+        if (tile.state === "checking" && tile.previewUrl) {
+          URL.revokeObjectURL(tile.previewUrl);
+        }
+      }
+      run.tiles.splice(0, run.tiles.length, ...reached);
+    }
     for (const tile of run.tiles) {
       if (tile.state === "new") tile.state = "landed";
       // Never decided (an older backend sends no outcomes): the totals are
@@ -265,6 +297,7 @@ export const useImportArrivalsStore = defineStore("importArrivals", () => {
     setBytesSent,
     markSkipped,
     markChecking,
+    markStopping,
     setProgress,
     applyOutcomes,
     land,
