@@ -22,6 +22,12 @@ export const STUDIO_PIPELINE_WORKFLOWS = new Set([
 
 const IMAGE_TYPES = new Set(["img2img", "txt2img"]);
 
+/** One of the built-in scene workflows, made to take every picture a scene
+ * sends (its picture input fans out), so Shoot offers it first. */
+export function isSceneWorkflow(card) {
+  return !!card?.built_in && /\bScene \(PixlStash\)$/.test(card.name || "");
+}
+
 /** Whether *card* may be offered at all, whatever it makes. */
 function offerable(card) {
   return (

@@ -116,7 +116,10 @@ class SceneUpdate(BaseModel):
 class ShotRequest(BaseModel):
     kind: Literal["still", "clip"] = "still"
     from_picture_id: Optional[int] = None
-    max_references: int = Field(default=8, ge=0, le=16)
+    # A workflow input that fans out takes up to 100 (MiniMax H3 Image's).
+    max_references: int = Field(default=8, ge=0, le=100)
+    # How the workflow's model names a reference: the pre-flight's `picture_tag`.
+    picture_tag: Literal["picture {n}", "<Picture {n}>"] = "picture {n}"
 
 
 class Shot(BaseModel):
@@ -719,7 +722,8 @@ def create_router(server) -> APIRouter:
             "camera takes, each cast member in their outfit doing what the "
             "scene says, the props, and what the location is doing. Each "
             "reference is named in the prompt by its number, so only "
-            "`max_references` (the workflow's picture inputs) are named. A "
+            "`max_references` (the workflow's picture inputs) are named, "
+            "written as `picture_tag` says the workflow's model reads them. A "
             "clip `from_picture_id` (a still take) has that still as its one "
             "reference. Stores nothing."
         ),
@@ -746,6 +750,7 @@ def create_router(server) -> APIRouter:
                 kind=payload.kind,
                 from_picture_id=payload.from_picture_id,
                 max_references=payload.max_references,
+                picture_tag=payload.picture_tag,
             )
 
         return server.vault.db.run_immediate_read_task(read)

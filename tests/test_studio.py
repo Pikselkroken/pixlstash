@@ -17,6 +17,7 @@ from pixlstash.db_models import Picture
 from pixlstash.db_models.studio import Scene
 from pixlstash.server import Server
 from pixlstash.services import comfyui_service, location_angles
+from pixlstash.services import studio as studio_service
 from pixlstash.services.studio import (
     Item,
     Person,
@@ -124,6 +125,34 @@ def test_a_three_person_shot_names_everyone_in_their_outfit_with_the_prop_held()
     assert "A red stick umbrella (picture 6), open, held by Juno." in prompt
     assert "Heavy rain, night." in prompt
     assert shot["loras"] == []
+
+
+def test_a_minimax_shot_names_each_picture_as_its_conditioning_reads_it():
+    people, outfits, cast = _three_people()
+    shot = compose_shot(
+        _scene(cast=cast),
+        location=STREET,
+        people=people,
+        outfits=outfits,
+        props={},
+        picture_tag="<Picture {n}>",
+    )
+    prompt = shot["prompt"]
+    assert "a neon-lit street, wet asphalt (<Picture 1>)" in prompt
+    assert "short red hair (the person in <Picture 2>)" in prompt
+    assert "wearing a mustard-yellow raincoat (<Picture 3>)" in prompt
+    assert "(picture " not in prompt
+    clip = compose_shot(
+        _scene(cast=cast),
+        location=STREET,
+        people=people,
+        outfits=outfits,
+        props={},
+        kind="clip",
+        from_picture_id=900,
+        picture_tag="<Picture {n}>",
+    )
+    assert clip["prompt"].startswith("Bring <Picture 1> to life")
 
 
 def test_a_lora_cast_member_brings_their_lora_and_not_their_reference():
@@ -263,7 +292,7 @@ def _item(client, kind, **set_body) -> int:
     return set_id
 
 
-def test_a_scene_is_made_cast_and_listed_in_its_project(env):
+def test_a_scene_is_made_cast_and_listed_in_its_project(env, monkeypatch):
     client = env.client
     project = _project(client)
     other = _project(client)
@@ -329,6 +358,29 @@ def test_a_scene_is_made_cast_and_listed_in_its_project(env):
 
     shot = client.post(f"{API_PREFIX}/studio/scenes/{scene['id']}/shot", json={}).json()
     assert "waving" in shot["prompt"] and "held by" in shot["prompt"]
+    # The pre-flight's tag reaches the prompt writer; only the two known ones
+    # are read.
+    asked = {}
+    real_shot_for = studio_service.shot_for
+
+    def shot_for(*args, **kwargs):
+        asked.update(kwargs)
+        return real_shot_for(*args, **kwargs)
+
+    monkeypatch.setattr(studio_service, "shot_for", shot_for)
+    client.post(
+        f"{API_PREFIX}/studio/scenes/{scene['id']}/shot",
+        json={"picture_tag": "<Picture {n}>", "max_references": 40},
+    )
+    assert asked["picture_tag"] == "<Picture {n}>"
+    assert asked["max_references"] == 40
+    assert (
+        client.post(
+            f"{API_PREFIX}/studio/scenes/{scene['id']}/shot",
+            json={"picture_tag": "{n.__class__}"},
+        ).status_code
+        == 422
+    )
 
 
 def test_the_studio_reads_the_library_open_now_not_the_one_it_started_with(env):

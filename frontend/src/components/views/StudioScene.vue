@@ -498,7 +498,11 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
-import { isSceneClipCandidate, isSceneStillWorkflow } from "../../utils/studioWorkflows";
+import {
+  isSceneClipCandidate,
+  isSceneStillWorkflow,
+  isSceneWorkflow,
+} from "../../utils/studioWorkflows";
 import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
@@ -946,12 +950,18 @@ watch(clipWorkflow, (id) => keepChoice("clip", id));
 const stillCards = computed(() =>
   cards.value
     .filter(isSceneStillWorkflow)
-    .sort((a, b) => (b.reference_inputs || 0) - (a.reference_inputs || 0)),
+    .sort(
+      (a, b) =>
+        isSceneWorkflow(b) - isSceneWorkflow(a) ||
+        (b.reference_inputs || 0) - (a.reference_inputs || 0),
+    ),
 );
 const stillOptions = computed(() =>
   stillCards.value.length
     ? stillCards.value.map((c) => ({
-        label: `${c.name} · ${c.reference_inputs} ${c.reference_inputs === 1 ? "picture" : "pictures"} in`,
+        label: isSceneWorkflow(c)
+          ? `${c.name} · takes every picture`
+          : `${c.name} · ${c.reference_inputs} ${c.reference_inputs === 1 ? "picture" : "pictures"} in`,
         value: c.id,
       }))
     : [{ label: "No workflow here takes reference pictures in", value: "", disabled: true }],
@@ -1023,6 +1033,24 @@ async function pictureInputs(workflowId) {
     .filter((input) => input.mode !== "fixed");
 }
 
+/** The run's picture inputs for *references*, in order: one each, then the
+ * rest fanned out over the inputs that take more (picture N is the N-th).
+ * ponytail: numbering holds for one fanning input, which every scene workflow
+ * has; several would need the pre-flight to say how their slots interleave. */
+function fillInputs(inputs, references) {
+  const fills = inputs.slice(0, references.length).map((input, i) => ({
+    slot_label: input.slot_label,
+    input_name: input.input_name,
+    picture_id: references[i],
+  }));
+  const rest = references.slice(fills.length);
+  for (const [i, fill] of fills.entries()) {
+    const more = rest.splice(0, inputs[i].more_pictures || 0);
+    if (more.length) fill.more_picture_ids = more;
+  }
+  return fills;
+}
+
 async function shoot(kind, fromPictureId = null) {
   const workflowId = kind === "clip" ? clipWorkflow.value : stillWorkflow.value;
   if (!workflowId || shooting.value) return;
@@ -1035,20 +1063,18 @@ async function shoot(kind, fromPictureId = null) {
     if (fromPictureId != null && !inputs.length) {
       throw new Error("That video workflow takes no picture, so it can't start from a still. Pick an image-to-video workflow.");
     }
+    // An input that fans out takes more pictures than its one slot.
     const written = await writeShot(props.sceneId, {
       kind,
       ...(fromPictureId != null ? { from_picture_id: fromPictureId } : {}),
-      max_references: inputs.length,
+      max_references: inputs.reduce((n, input) => n + 1 + (input.more_pictures || 0), 0),
+      picture_tag: inputs[0]?.picture_tag || "picture {n}",
     });
     const answer = await runWorkflowCard({
       workflow_id: workflowId,
       prompt: written.prompt,
       negative: written.negative,
-      inputs: written.references.slice(0, inputs.length).map((pictureId, i) => ({
-        slot_label: inputs[i].slot_label,
-        input_name: inputs[i].input_name,
-        picture_id: pictureId,
-      })),
+      inputs: fillInputs(inputs, written.references),
       add_loras: written.loras.map((sha256) => ({ sha256, strength_model: 1, strength_clip: 1 })),
       count: kind === "clip" ? 1 : count.value,
       label: `${kind === "clip" ? "Clip" : "Take"} · ${scene.value.name}`,

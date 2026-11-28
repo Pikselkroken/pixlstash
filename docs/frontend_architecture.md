@@ -8850,7 +8850,11 @@ inside its lightboxes, so the rail is empty on `/studio`.
   picture input (asked once per card). Hidden ones, drafts, sheet workflows
   and the Studio's own pipeline built-ins (Location Shots, Restore a Frame,
   the sheet and wide-picture ones) are never offered; with none left the
-  picker says so and the clip button says why it is off.
+  picker says so and the clip button says why it is off. The built-in
+  *… Scene (PixlStash)* workflows come first: their one picture input fans
+  out, so Shoot asks the shot for as many references as the pre-flight's
+  `more_pictures` allow, numbered in its `picture_tag`, and sends the extras
+  as that input's `more_picture_ids`.
 - **The grids select as the picture grid does**: click selects one,
   Ctrl/Cmd+click adds or takes away, Shift+click takes the run from the first
   selected, Ctrl+A takes all, Esc or a click on the empty grid clears;

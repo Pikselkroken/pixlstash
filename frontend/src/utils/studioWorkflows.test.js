@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSceneClipCandidate, isSceneStillWorkflow } from "./studioWorkflows";
+import { isSceneClipCandidate, isSceneStillWorkflow, isSceneWorkflow } from "./studioWorkflows";
 
 const card = (over) => ({ name: "Some workflow", type: "img2img", reference_inputs: 1, ...over });
 
@@ -27,5 +27,11 @@ describe("the workflows a scene offers", () => {
     expect(
       isSceneClipCandidate(card({ type: "video", name: "MiniMax H3 Location Shots (PixlStash)" })),
     ).toBe(false);
+  });
+
+  it("knows the built-in scene workflows, and only those", () => {
+    expect(isSceneWorkflow(card({ name: "Krea 2 Scene (PixlStash)", built_in: true }))).toBe(true);
+    expect(isSceneWorkflow(card({ name: "Krea 2 Scene (PixlStash)" }))).toBe(false);
+    expect(isSceneWorkflow(card({ name: "MiniMax H3 Image Sheet (PixlStash)", built_in: true }))).toBe(false);
   });
 });

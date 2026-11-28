@@ -1009,7 +1009,11 @@ describe("a scene", () => {
     await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
     await flushPromises();
     // The fixed input is not counted, so two references are asked for.
-    expect(api.writeShot).toHaveBeenLastCalledWith(1, { kind: "still", max_references: 2 });
+    expect(api.writeShot).toHaveBeenLastCalledWith(1, {
+      kind: "still",
+      max_references: 2,
+      picture_tag: "picture {n}",
+    });
     const body = api.runWorkflowCard.mock.calls[0][0];
     expect(body.workflow_id).toBe("manual:edit");
     expect(body.prompt).toBe("A medium shot in a neon street (picture 1).");
@@ -1023,6 +1027,54 @@ describe("a scene", () => {
       { key: "run-b", kind: "still", from_picture_id: null },
     ]);
     expect(wrapper.findAll(".scene-take--drawing")).toHaveLength(2);
+  });
+
+  it("offers a scene workflow first and fans every picture into its one input", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:edit", name: "Image Edit", type: "img2img", reference_inputs: 2 },
+        {
+          id: "builtin:scene",
+          name: "MiniMax H3 Image Scene (PixlStash)",
+          type: "txt2img",
+          reference_inputs: 1,
+          built_in: true,
+        },
+      ],
+    });
+    api.preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          picture_inputs: [
+            {
+              slot_label: "Scene pictures",
+              input_name: "image",
+              mode: "fill",
+              more_pictures: 98,
+              picture_tag: "<Picture {n}>",
+            },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
+    await flushPromises();
+    expect(api.writeShot).toHaveBeenLastCalledWith(1, {
+      kind: "still",
+      max_references: 99,
+      picture_tag: "<Picture {n}>",
+    });
+    const body = api.runWorkflowCard.mock.calls[0][0];
+    expect(body.workflow_id).toBe("builtin:scene");
+    expect(body.inputs).toEqual([
+      {
+        slot_label: "Scene pictures",
+        input_name: "image",
+        picture_id: 31,
+        more_picture_ids: [77, 21],
+      },
+    ]);
   });
 
   it("keeps handing a shoot's runs to the scene when the first hand-over fails", async () => {
@@ -1056,6 +1108,7 @@ describe("a scene", () => {
       kind: "clip",
       from_picture_id: 900,
       max_references: 2,
+      picture_tag: "picture {n}",
     });
     const body = api.runWorkflowCard.mock.calls[0][0];
     expect(body.workflow_id).toBe("manual:i2v");
