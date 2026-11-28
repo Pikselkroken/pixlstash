@@ -1,0 +1,10 @@
+{
+  "id": "4-compute-the-full-file-hash-only-when-ano",
+  "number": 4,
+  "title": "Compute the full-file hash only when another file has the same sampled hash and size",
+  "body": "Today every incoming file gets a full SHA-256, even though the full hash is only needed when some other file, in the library or earlier in the same import, has the same sampled hash and size. The idea is to compute the cheap sampled hash and size first, and only read the whole file for the full hash when such a match exists. It might help because most files in a typical import are new and have no match, so their full read for hashing would be skipped entirely; a file of 10 MB would then be read only for picture creation. It worked if the per-file time for the all-new set drops, the all-duplicates set is no slower, and every outcome is unchanged, including two incoming files that share a sampled hash but differ in content.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}

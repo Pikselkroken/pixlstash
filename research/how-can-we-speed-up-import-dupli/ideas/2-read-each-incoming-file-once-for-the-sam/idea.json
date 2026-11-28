@@ -1,0 +1,10 @@
+{
+  "id": "2-read-each-incoming-file-once-for-the-sam",
+  "number": 2,
+  "title": "Read each incoming file once for the sampled hash, the full hash and the size",
+  "body": "The staged import reads each incoming file three separate times: once for the sampled hash, once for the full SHA-256, and once more when it creates the picture. The idea is to read the file once and compute both hashes from the same bytes, then hand those bytes on to picture creation. It might help because, for large files on a slow disk, reading the file is probably the main cost and each repeat read costs roughly the same again; on a fast disk with a warm cache it may barely matter, which is why it should follow the timing idea. It worked if the per-file import time on the fixed set drops measurably (say 20 percent or more for files over a few megabytes) and every file's outcome (new, duplicate, Scrapheap) is unchanged.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}

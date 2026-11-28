@@ -1,0 +1,10 @@
+{
+  "id": "6-hash-the-staged-import-s-files-in-parall",
+  "number": 6,
+  "title": "Hash the staged import's files in parallel threads",
+  "body": "The staged import hashes files one after another, while the one-shot upload path already hashes them in a thread pool. The idea is to hash several staged files at once. It might help because hashing alternates between waiting for the disk and using one CPU core, and Python's hashlib releases the interpreter lock while it hashes large buffers, so several threads can overlap; on a single spinning disk, parallel reads could instead slow things down. It worked if hashing time per file falls on the fixed set on the owner's own disk, with outcomes unchanged and no out-of-order results.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}

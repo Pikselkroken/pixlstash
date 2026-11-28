@@ -1,0 +1,10 @@
+{
+  "id": "1-time-each-step-of-the-import-duplicate-c",
+  "number": 1,
+  "title": "Time each step of the import duplicate check on one fixed library and one fixed set of files",
+  "body": "Import a fixed set of files into a fixed copy of a library through the staged import (the path a big zip or folder import takes, `pixlstash/tasks/picture_import_task.py`) and time each step per file: the sampled hash (`pixel_sha`, a SHA-256 of a few small chunks of the file), the full-file SHA-256, the database lookup on the writer thread, the confirmation that re-reads the matching library file, and the creation of the picture with its thumbnail. Run it twice, once with a set that is all new files and once with a set that is all duplicates of pictures already in the library, so the cost of each outcome is seen separately. This does not speed anything up by itself; it says which step is worth attacking, since today the guesses come only from reading the code. It has worked if it gives a per-step table in seconds per file for both sets, repeatable within about 10 percent across two runs, and a per-file total that matches the import's overall wall-clock time.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}

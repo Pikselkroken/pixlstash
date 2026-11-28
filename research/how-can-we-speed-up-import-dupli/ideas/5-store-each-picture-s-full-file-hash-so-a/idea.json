@@ -1,0 +1,10 @@
+{
+  "id": "5-store-each-picture-s-full-file-hash-so-a",
+  "number": 5,
+  "title": "Store each picture's full-file hash so a duplicate is confirmed without re-reading the library file",
+  "body": "To confirm that an incoming file really matches a picture already in the library, import re-reads the library picture's file in full and hashes it, every time. The idea is to keep the full-file SHA-256 in the database once it is known (when a picture is imported, or the first time it is confirmed) and compare against the stored value, falling back to reading the file only when no value is stored yet. It might help most when importing many duplicates, for example re-importing a folder that is already in the library, where each file currently costs two full reads. Note that the architecture document (`docs/backend_architecture.md` §22.1) rejected a full-hash column for the duplicate scan because filling it for the whole library means reading every file; filling it lazily avoids that, but the column still needs a migration. It worked if importing the all-duplicates set gets clearly faster on a second run, with the same outcomes, and a file changed on disk after its hash was stored is not wrongly called a duplicate.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}

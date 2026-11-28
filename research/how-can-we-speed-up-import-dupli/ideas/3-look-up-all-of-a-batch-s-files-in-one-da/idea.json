@@ -1,0 +1,10 @@
+{
+  "id": "3-look-up-all-of-a-batch-s-files-in-one-da",
+  "number": 3,
+  "title": "Look up all of a batch's files in one database query instead of one query per file",
+  "body": "In the staged import every file makes its own trip to the database writer thread to ask whether a picture with the same sampled hash and size already exists. The one-shot upload path already asks for a whole batch at once with a single `IN (...)` query. The idea is to hash a batch of files first and then ask once for the whole batch, keeping the check for duplicates inside the batch. It might help because the writer thread is shared with all other background work, so each round trip can wait behind other writes, and many small queries cost more than one larger one. It worked if the time spent on lookups per file falls clearly (for example from milliseconds to well under one) on a library with background tasks running, with the same outcome for every file. If the timing idea shows lookups are already negligible, this is not worth doing.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:52:26.591Z",
+  "reopenings": []
+}
