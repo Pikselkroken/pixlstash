@@ -161,8 +161,11 @@ function followNextTarget() {
   }
   const next = task.value?.steps[at + 1]?.target;
   if (next) {
-    if (!nextTargetShown(next)) nextWasAbsent = true;
-    else if (nextWasAbsent && userActed) guide.nextStep();
+    if (!nextTargetShown(next)) {
+      // Only an act from here on can be what brings it up.
+      if (!nextWasAbsent) userActed = false;
+      nextWasAbsent = true;
+    } else if (nextWasAbsent && userActed) guide.nextStep();
   }
   followFrame = requestAnimationFrame(followNextTarget);
 }
