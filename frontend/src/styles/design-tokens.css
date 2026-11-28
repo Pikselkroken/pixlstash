@@ -467,7 +467,7 @@
   --tenant-pixlstash: var(--v-theme-accent);      /* PixlStash's own work */
   --tenant-comfyui: var(--v-theme-tertiary);      /* ComfyUI */
   --tenant-aitoolkit: var(--v-theme-quaternary);  /* AI Toolkit */
-  /* The Studio's categories (#2819): a kind tile's fill, white glyph on it.
+  /* The Studio's categories (#2819): a kind's icon colour, with no tile behind it.
      Scenes have none: ink, since a scene is what combines the other three. */
   --kind-cast: var(--v-theme-secondary);          /* raspberry: people, outfits */
   --kind-location: var(--v-theme-tertiary);       /* teal: locations */

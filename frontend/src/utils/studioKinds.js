@@ -73,7 +73,7 @@ export const KIND_SECTION = {
 export const LOCATION_VIEWS = ["Wide", "Reverse", "Left", "Right"];
 export const ITEM_ANGLES = ["Front", "¾", "Side", "Back"];
 
-/** `{"--kind-tile": ...}` for an element drawing a kind tile, or nothing. */
+/** `{"--kind-tile": ...}`, the colour a kind's icon is drawn in, or nothing. */
 export function kindStyle(kind) {
   const token = STUDIO_KINDS[kind]?.color;
   return token ? { "--kind-tile": `rgb(var(${token}))` } : {};
