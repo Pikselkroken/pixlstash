@@ -379,6 +379,19 @@ describe("selecting Studio cards", () => {
     expect(api.deleteScene).toHaveBeenCalledWith(9);
   });
 
+  it("takes a half-made set copy away again when its pictures cannot be added", async () => {
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 32 } });
+    api.bulkAddPicturesToSet.mockRejectedValueOnce(new Error("offline"));
+    api.deletePictureSet.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    verb("duplicate").click();
+    await flushPromises();
+    expect(api.deletePictureSet).toHaveBeenCalledWith(32);
+    expect(api.listSetInStudio).not.toHaveBeenCalled();
+  });
+
   it("duplicates a set as a set of the same pictures, listed as the same kind; never a person", async () => {
     api.createPictureSet.mockResolvedValue({ picture_set: { id: 31 } });
     const wrapper = await mountAt("/studio?section=favourites");

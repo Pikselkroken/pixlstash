@@ -74,8 +74,16 @@ export async function duplicateCard(card, takenNames) {
     project_ids: card.project_ids ?? [],
     ...(card.character_id != null ? { parent_character_id: card.character_id } : {}),
   });
-  if (card.picture_ids?.length) await bulkAddPicturesToSet(made.id, card.picture_ids);
-  await listSetInStudio(made.id, card.kind);
+  try {
+    if (card.picture_ids?.length) await bulkAddPicturesToSet(made.id, card.picture_ids);
+    await listSetInStudio(made.id, card.kind);
+  } catch (e) {
+    // Half a copy is not a copy: take the half-made set away again.
+    await deletePictureSet(made.id).catch((err) =>
+      console.warn("Couldn't remove a half-made set copy", made.id, err),
+    );
+    throw e;
+  }
   return { id: made.id, name };
 }
 
