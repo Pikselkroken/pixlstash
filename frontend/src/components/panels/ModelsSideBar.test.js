@@ -321,14 +321,22 @@ describe("ModelsSideBar", () => {
   it("asks the shelf for its dialogs", async () => {
     const wrapper = mountBar();
     await flushPromises();
-    const items = wrapper.findAll(".ctx-item");
-    const byText = (text) => items.find((one) => one.text().includes(text));
-    await byText("Add file…").trigger("click");
+    const verb = (id) => wrapper.find(`[data-verb="${id}"]`);
+    await verb("add-file").trigger("click");
     expect(store.shellRequest.what).toBe("add-file");
-    await byText("Add folder…").trigger("click");
+    await wrapper.find('[data-testid="models-add"]').trigger("click");
     expect(store.shellRequest.what).toBe("add-folder");
     // ai-toolkit's root is registered, so the band does not offer to set it.
-    expect(byText("Set ai-toolkit output folder…")).toBe(undefined);
+    expect(verb("set-source").exists()).toBe(false);
+  });
+
+  it("New workflow set opens the Sets place and asks for its picker", async () => {
+    store.setPlace("all");
+    const wrapper = mountBar();
+    await flushPromises();
+    await wrapper.find('[data-verb="new-set"]').trigger("click");
+    expect(store.place).toBe("sets");
+    expect(store.shellRequest.what).toBe("new-set");
   });
 
   it("opens Training runs as a route and lights it there", async () => {

@@ -1116,6 +1116,7 @@ defineExpose({
           <StudioSidebar
             v-else-if="isStudioView"
             @item-sheets="openSheets($event)"
+            @new-person="(project, done) => sidebarRef?.createCharacter(project, done)"
           />
           <div
             v-show="!isWorkflowsView && !isModelsView && !isStudioView"

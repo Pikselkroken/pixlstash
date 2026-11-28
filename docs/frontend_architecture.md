@@ -639,7 +639,9 @@ Two things the fix must not undo, both asserted: a card the server reports **no*
 Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingLightboxGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
 
 #### `SideBar.vue`
-The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds Find in library and the dock button, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**. Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch. The three workspace sidebars (this one, `WorkflowsSidebar.vue`, `ModelsSideBar.vue`) are one sidebar in code as well as in look:
+The Media workspace's sidebar. Expanded, it is a fixed frame (#2159): the **header slot** (`--sidebar-slot-h`, the toolbar band's height, so its rule continues the toolbar's) holds Find in library and the dock button, one list scrolls under it, and the 52px **footer band** (`--sidebar-band-h`) holds the one amber action, **Import**, at its label's width, then the workspace's other create verbs (New project…, New person…, New set…). Every workspace's sidebar uses the same two tokens, so the frame keeps its shape on a switch.
+
+  **The footer band is one component, `SidebarFooterBand.vue`**, in all four sidebars. Its default slot is the amber key (`AppButton` primary); its `verbs` prop is `{id, label, icon, mark, run(el)}`, drawn as icon-only `AppBarButton`s whose tooltip is the label. `mark` is `AppBarButton`'s `createMark`, the one amber "+" that says a verb makes something: `[x, y]` on the glyph's 24-unit grid puts it inside a shape with room (a folder, a file), `true` puts it top-right and shrinks the glyph toward bottom-left; a verb that sets rather than makes leaves it out. When the key's unclipped label and the verbs do not fit side by side (measured, so "Import to ‹project›" folds sooner than "Import") the verbs fold into a caret on the key, a split button whose menu names each one; under the 150px narrow width the band is the key alone, full width. Per workspace: Media (Import · New project… · New person… · New set…), Workflows (Add workflow · From a template · New ComfyUI connection…, owner only), Models (Add folder · Add file… · New workflow set · Set ai-toolkit output folder… while unset), Studio (Scene · New cast member… · Add a location… · Add a prop…). The three workspace sidebars (this one, `WorkflowsSidebar.vue`, `ModelsSideBar.vue`) are one sidebar in code as well as in look:
   - **One width, one resize.** `composables/useSidebarWidth.js` holds the width (`userPrefsStore.sidebarWidth`, clamped 140–300, and a module-level live drag width), so a drag in any workspace moves every sidebar's edge and a switch never does. `SidebarResizeHandle.vue` is the right-edge grip each of them mounts (pointer drag committed once on release, arrow keys step 8px, Shift 24px; `role="separator"` with its value and range). Media hides it while docked; the other two have no docked form.
   - **One row.** `SidebarNav.css` holds the shell (`.sidebar-panel`), the nav list (`.sidebar-nav-list`: full-width 32px rows, a 20px icon slot with a 16px glyph, `--space-3` to the label), the row (`.sidebar-list-item` with `-icon`, `-label`, `-label-text`, `-count`, `--unavailable`, `.active`), the section head (`.sidebar-section-header`, `-title`, `.sidebar-header-actions`, `.sidebar-section-add`), the narrow rule (`.sidebar--narrow` drops the counts under 150px) and the footer band (`.sidebar-footer-band`). Each sidebar imports it **scoped and before its own sheet**, so in `SideBar` the rules keep the specificity and order they had in `SideBar.css`, and a component's own rules refine them. The row's left edge stays the row system's (`SideBar.global.css`). A new workspace sidebar uses these classes rather than a private row.
 
@@ -5017,7 +5019,7 @@ a burst of requests it could never satisfy (issue #1014). Three parts fix it:
   renders an explanatory body instead (`dedup-read-only`). The queue can do that
   because its toolbar is small and its body is a list of the library's own
   pictures; the shelf's body IS the host machine's filesystem, so a read-only
-  render would be an empty state under a live sidebar of owner-only verbs — Add models,
+  render would be an empty state under a live sidebar of owner-only verbs — Add folder,
   Manage model folders, the scan. The row above is where the
   destination explains itself, which is where a visitor meets it.
 
@@ -5399,7 +5401,7 @@ real link with `aria-current` (#2158).
 
 **What left the bar, and what stayed (#904, #2168, #2203).** `Add`, `Model folders` and the
 folder choice are the sidebar's: the slot's *Model folders* button, the Folders tree, and the
-amber *Add models ▾* (`ModelsSideBar.vue`). The bar keeps what changes the view. An open folder
+footer band's amber *Add folder* and its adds (`ModelsSideBar.vue`). The bar keeps what changes the view. An open folder
 is not a bar control: it is a row of the tree, and the bar names it with a breadcrumb. Every other verb is on the row's context menu
 or the selection pill, so a mutation is never one stray click from a view switch.
 
@@ -5584,11 +5586,13 @@ neither edge moves on a workspace switch.
 - **Counts** (`placeCounts`) are over every
   offered row, stacks folded as the list folds them: a folder is a place now,
   not a scope over the others. *Sets* counts the cards.
-- **The sidebar owns no dialog.** *Add models ▾* (the sidebar's amber
-  button: Add folder…, Add file…, and Set ai-toolkit output folder… while
-  unset) and the slot's button go through `store.requestShell(what, el)`;
+- **The sidebar owns no dialog.** The footer band (amber *Add folder*, then
+  Add file…, New workflow set, and Set ai-toolkit output folder… while unset)
+  and the slot's button go through `store.requestShell(what, el)`;
   `ModelShelf` watches `store.shellRequest` and opens the dialog it always
-  owned, returning focus to `el`.
+  owned, returning focus to `el`. `new-set` is the Sets grid's template
+  picker: the band opens the Sets place first, and the shelf opens the picker
+  (`ModelSetGrid`'s exposed `openTemplatePicker`) once the grid is mounted.
 - **Training**, directly under the places: the **Training runs** row, the
   `models-runs` route, with the amber dot while an AI Toolkit lease is held or
   waiting (the tasks poll, which runs on every screen; the runs store's job
@@ -7077,7 +7081,7 @@ difficulty: a dropped `File` carries a name and bytes but never a location, so
 only the desktop shell can answer where it came from
 (`window.pixlstashDesktop.getDroppedFilePath`, `webUtils.getPathForFile` behind
 the preload bridge). In a browser tab there is nothing to resolve and nothing to
-send, and the drop says so, naming `Add models ▾ → Add file…` rather than failing
+send, and the drop says so, naming the band's `Add file…` rather than failing
 quietly — that menu works in a browser because the *server* enumerates the
 filesystem, which is the direction a drop cannot run in. A drop carrying both a
 model and pictures is split: the model goes to the shelf, and the pictures go to
@@ -7126,8 +7130,8 @@ a second drop coalesces onto the first one's sticky progress card and then
 dismisses it, leaving a running copy with nothing on screen.
 
 **Set ai-toolkit output folder… is in the sidebar, and only while nothing is set.** The
-*Add models ▾* menu carries it behind `v-if="!foldersStore.sourceFolder"`, so once a source folder
-is registered the item is not drawn at all. The import itself is the Training runs view's, whose
+footer band carries it only while `!foldersStore.sourceFolder`, so once a source folder
+is registered the button is not drawn at all. The import itself is the Training runs view's, whose
 Import button names what is ticked (`Import N runs · …`).
 
 **Receipts are notices, not `useActionReceipt`** — except the workflow-set
@@ -7444,7 +7448,7 @@ The registry is **Settings › Model folders** (`settings/ModelFoldersSection.vu
 memory, VRAM and tagger settings that pane used to hold are the **Tagging**
 entry beside it (`BehaviourSection.vue`, nav id still `behaviour` because the
 server's library insights deep-link to it). The shelf's doors are the sidebar's *Model folders* slot button and
-its *Add models ▾* menu (*Add folder…*). Each reaches `openFolders`, which emits
+its footer band's *Add folder*. Each reaches `openFolders`, which emits
 `open-settings` with `"models"`.
 
 The pane fills Settings' fixed-height content box as a flex column, and **the
@@ -7781,8 +7785,10 @@ the library sidebar docked, both still draw at full width.
   the mount read). A
   READ session draws no slot and never the not-set-up state, since it cannot
   read the config.
-- **The footer band** is one amber *Add workflow* (`requestAdd()`, see
-  `WorkflowsView`). There is no Hidden row (Show hidden stays in Filter).
+- **The footer band** is the amber *Add workflow* (`requestAdd()`, see
+  `WorkflowsView`), then *From a template* (the Templates place) and *New
+  ComfyUI connection…* (the slot's dialog, through its exposed
+  `newConnection`); a READ session gets Add workflow alone. There is no Hidden row (Show hidden stays in Filter).
 - **`store.viewName`** names the view for the rail head: "ComfyUI templates",
   else the lit facet's label, else the place's name.
 

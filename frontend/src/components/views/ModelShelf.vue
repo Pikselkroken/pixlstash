@@ -4123,6 +4123,22 @@ const emptyPlaceLine = computed(() => {
   return NO_MODELS_LINE;
 });
 
+// New workflow set from the band: the sidebar has just opened the Sets place,
+// so the grid may not be mounted yet; its picker opens once it is.
+const newSetAsked = ref(false);
+watch([newSetAsked, setGridRef], ([asked, grid]) => {
+  if (!asked || !grid) return;
+  newSetAsked.value = false;
+  grid.openTemplatePicker();
+});
+// Left before the grid came up: the ask is spent, not saved for a later visit.
+watch(
+  () => store.place,
+  (place) => {
+    if (place !== "sets") newSetAsked.value = false;
+  },
+);
+
 /**
  * The shelf runs the dialogs the sidebar asks for. Each one returns focus to the
  * control that asked, which the sidebar passes along.
@@ -4137,6 +4153,8 @@ watch(
       openAddFile(request.el);
     } else if (request.what === "set-source") {
       openAddSource(request.el);
+    } else if (request.what === "new-set") {
+      newSetAsked.value = true;
     }
   },
 );

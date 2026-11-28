@@ -288,7 +288,8 @@
   display: none;
 }
 
-/* The footer band: the sidebar's one amber action, at the bar height. */
+/* The footer band (SidebarFooterBand.vue): the sidebar's one amber action and
+   its sibling create verbs, at the bar height. */
 .sidebar-footer-band {
   flex-shrink: 0;
   display: flex;

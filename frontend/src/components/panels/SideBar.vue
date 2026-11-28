@@ -25,6 +25,7 @@ import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import ReviewEndDialog from "../reviews/ReviewEndDialog.vue";
 import SidebarCaret from "./SidebarCaret.vue";
+import SidebarFooterBand from "./SidebarFooterBand.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingWizard from "../folders/FolderMappingWizard.vue";
 import { useFolderMappingStore } from "../../stores/useFolderMappingStore";
@@ -1743,12 +1744,17 @@ const sortModel = computed({
 });
 
 // --- Character Editor Dialog Functions ---
+// Set by a caller that makes a person somewhere else (the Studio's New cast
+// member), so the new person is handed back rather than opened in Media.
+let characterCreatedHandler = null;
+
 function openCharacterEditor(char = null) {
   characterEditorCharacter.value = char;
   characterEditorOpen.value = true;
 }
 
 function closeCharacterEditor() {
+  characterCreatedHandler = null;
   characterEditorOpen.value = false;
   characterEditorCharacter.value = null;
 }
@@ -2654,7 +2660,8 @@ async function shareResource(resourceType, resourceId, label) {
   shareDialogOpen.value = true;
 }
 
-function createCharacter(projectId = undefined) {
+function createCharacter(projectId = undefined, onCreated = null) {
+  characterCreatedHandler = onCreated;
   // Find the next available unique name in the format "Character 0001"
   const existingCharacters = Array.isArray(characters.value)
     ? characters.value
@@ -3640,6 +3647,32 @@ const importLabel = computed(() =>
   scopedProjectObj.value ? `Import to ${scopedProjectObj.value.name}` : "Import",
 );
 
+// The band's create verbs beside Import: the same three the section heads'
+// "+" make, always a new one, in the scope's project when there is one.
+const footerVerbs = [
+  {
+    id: "project",
+    label: "New project…",
+    icon: "mdi-folder-outline",
+    mark: [12, 13],
+    run: () => createProject(),
+  },
+  {
+    id: "person",
+    label: "New person…",
+    icon: "mdi-account-outline",
+    mark: true,
+    run: () => createCharacter(),
+  },
+  {
+    id: "set",
+    label: "New set…",
+    icon: "mdi-image-multiple-outline",
+    mark: true,
+    run: () => createSet(),
+  },
+];
+
 function isCountNew(id) {
   return Boolean(id && countNewTags.value[id]);
 }
@@ -4296,9 +4329,13 @@ async function characterSaved(saved) {
   await fetchCharacters(); // Refresh characters
   await fetchSortOptions(); // Ensure sort options include similarity when characters exist
   await fetchPictureSets(); // Refresh picture sets to include reference sets
+  const handOver = characterCreatedHandler;
   closeCharacterEditor();
   // A new person opens, as a new project does.
-  if (created && saved?.id) selectCharacter(saved.id, saved.name);
+  if (created && saved?.id) {
+    if (handOver) handOver(saved);
+    else selectCharacter(saved.id, saved.name);
+  }
 }
 
 onMounted(() => {
@@ -4715,6 +4752,7 @@ defineExpose({
   currentProjectId,
   openCurrentSelectionEditor,
   clearFind,
+  createCharacter,
 });
 </script>
 
@@ -6566,21 +6604,21 @@ defineExpose({
       v-if="!sidebarStore.effectiveDocked && whatsChanged.cardShown"
     />
     <!-- The footer band (#2159): one amber Import that names where the
-         pictures will land. Owner only, and not on the docked rail. -->
-    <div
+         pictures will land, then the other things made here. Owner only, and
+         not on the docked rail. -->
+    <SidebarFooterBand
       v-if="!sidebarStore.effectiveDocked && !isReadOnly"
-      class="sidebar-footer-band"
+      :verbs="footerVerbs"
     >
       <AppButton
         variant="primary"
-        block
         icon-left="plus"
         class="sidebar-import-btn"
         :tooltip="importTooltip"
         @click="emit('open-import')"
         >{{ importLabel }}</AppButton
       >
-    </div>
+    </SidebarFooterBand>
     <div v-if="isReadOnly" class="sidebar-readonly-notice">
       <v-icon size="12">mdi-lock-outline</v-icon>
       <span class="sidebar-readonly-notice-label">Read-only view</span>

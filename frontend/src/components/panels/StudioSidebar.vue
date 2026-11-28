@@ -15,6 +15,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
+import SidebarFooterBand from "./SidebarFooterBand.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import LocationAnglesDialog from "../io/LocationAnglesDialog.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
@@ -40,7 +41,7 @@ import {
   studioQuery,
 } from "../../utils/studioKinds";
 
-const emit = defineEmits(["item-sheets"]);
+const emit = defineEmits(["item-sheets", "new-person"]);
 
 const route = useRoute();
 const router = useRouter();
@@ -87,6 +88,37 @@ function openSection(name) {
 function openItem(kind, id) {
   go({ section: KIND_SECTION[kind], open: `${kind}:${id}`, via: "sidebar" });
 }
+
+// The band's adds beside Scene. A cast member is a person, made with Media's
+// editor (App hands it on) and opened here once saved; a location or a prop
+// is a set listed in the Studio, so those open the grid's Add a set….
+const footerVerbs = [
+  {
+    id: "cast",
+    label: "New cast member…",
+    icon: STUDIO_KINDS.cast.icon,
+    mark: true,
+    run: () =>
+      emit("new-person", projectId.value, async (person) => {
+        await store.refresh();
+        openItem("cast", person.id);
+      }),
+  },
+  {
+    id: "location",
+    label: "Add a location…",
+    icon: STUDIO_KINDS.location.icon,
+    mark: true,
+    run: () => go({ section: "locations", open: null, via: null, add: "1" }),
+  },
+  {
+    id: "prop",
+    label: "Add a prop…",
+    icon: STUDIO_KINDS.prop.icon,
+    mark: true,
+    run: () => go({ section: "props", open: null, via: null, add: "1" }),
+  },
+];
 
 const TOP = [
   { id: "scenes", kind: "scene", label: "All scenes", list: "scenes" },
@@ -655,17 +687,16 @@ function closeAngles() {
       </template>
     </nav>
 
-    <div class="sidebar-footer-band">
+    <SidebarFooterBand :verbs="footerVerbs">
       <AppButton
         class="studio-sidebar__new"
         variant="primary"
         icon-left="plus"
-        block
         data-testid="studio-new-scene"
         @click="go({ section: 'scenes', open: null, via: null, new: '1' })"
-        >New scene</AppButton
+        >Scene</AppButton
       >
-    </div>
+    </SidebarFooterBand>
 
     <LocationAnglesDialog
       :open="!!anglesOf"

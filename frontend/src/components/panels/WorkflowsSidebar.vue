@@ -19,6 +19,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import SidebarFooterBand from "./SidebarFooterBand.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowsComfyuiSlot from "./WorkflowsComfyuiSlot.vue";
@@ -181,6 +182,31 @@ function pickTemplates() {
   tpl.shown = true;
 }
 
+const comfyuiSlot = ref(null);
+
+// The other ways a workflow is made today, beside Add workflow's file. A
+// shared view has no ComfyUI to reach, so it gets the key alone.
+const footerVerbs = computed(() =>
+  isReadOnly.value
+    ? []
+    : [
+        {
+          id: "template",
+          label: "From a template",
+          icon: "mdi-shape-outline",
+          mark: true,
+          run: pickTemplates,
+        },
+        {
+          id: "connection",
+          label: "New ComfyUI connection…",
+          icon: "mdi-power-plug-outline",
+          mark: true,
+          run: () => comfyuiSlot.value?.newConnection(),
+        },
+      ],
+);
+
 /**
  * A click lights this facet alone: the place goes back to All and the other
  * facet clears. Clicking the one lit row turns it off. Ctrl/Cmd toggles it
@@ -219,6 +245,7 @@ function pickFacet(key, id, event) {
          always read as not set up. -->
     <WorkflowsComfyuiSlot
       v-if="!isReadOnly"
+      ref="comfyuiSlot"
       @open-settings="(section) => emit('open-settings', section)"
     />
     <nav
@@ -321,16 +348,15 @@ function pickFacet(key, id, event) {
       </button>
     </nav>
 
-    <div class="sidebar-footer-band">
+    <SidebarFooterBand :verbs="footerVerbs">
       <AppButton
         class="wfs-add"
         variant="primary"
         icon-left="plus"
-        block
         @click="store.requestAdd()"
         >Add workflow</AppButton
       >
-    </div>
+    </SidebarFooterBand>
   </div>
 </template>
 
@@ -376,9 +402,5 @@ function pickFacet(key, id, event) {
    at full strength the glyph outshone the labels beside it (owner's call). */
 .wfs-sort {
   color: rgba(var(--v-theme-sidebar-text), 0.9);
-}
-
-.wfs-add {
-  height: var(--control-h-bar);
 }
 </style>

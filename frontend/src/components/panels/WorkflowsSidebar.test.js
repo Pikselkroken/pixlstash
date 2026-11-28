@@ -569,6 +569,30 @@ describe("the N new pill", () => {
   });
 });
 
+describe("footer band", () => {
+  it("From a template opens the Templates place", async () => {
+    const { wrapper, templates } = await mountSidebar();
+    expect(templates.shown).toBe(false);
+    await wrapper.find('[data-verb="template"]').trigger("click");
+    expect(templates.shown).toBe(true);
+  });
+
+  it("New ComfyUI connection… opens the slot's dialog", async () => {
+    const newConnection = vi.fn();
+    const { wrapper } = await mountSidebar({
+      stubs: {
+        ...STUBS,
+        WorkflowsComfyuiSlot: {
+          template: "<div />",
+          setup: (_, { expose }) => expose({ newConnection }),
+        },
+      },
+    });
+    await wrapper.find('[data-verb="connection"]').trigger("click");
+    expect(newConnection).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("Add workflow", () => {
   it("bumps addRequest each press, for WorkflowsView to open its picker", async () => {
     const { wrapper, store } = await mountSidebar();

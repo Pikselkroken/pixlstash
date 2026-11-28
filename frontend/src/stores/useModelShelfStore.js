@@ -3809,7 +3809,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /**
    * A dialog the Models sidebar asks the shelf to open: `{what, el, at}`, with
-   * `what` one of `add-folder`, `add-file`, `manage-folders` or `set-source`,
+   * `what` one of `add-folder`, `add-file`, `manage-folders`, `set-source` or
+   * `new-set` (the Sets grid's template picker, which hands focus to the grid's
+   * New tile or the set it makes rather than to `el`: the view is Sets now),
    * and `el` the control focus returns to. The sidebar is not the shelf's
    * child, and the dialogs and their confirmations live in `ModelShelf`, so it
    * asks here the way the rail asks for a verb (`requestVerb`). `at` makes a
