@@ -49,7 +49,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field as dataclass_field
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -2101,7 +2101,9 @@ class LlmLoader(BaseModel):
     """A workflow's text-encoder loader node, whose encoder is a chat LLM."""
 
     class_type: str = Field(max_length=100)
-    inputs: dict[str, str] = Field(default_factory=dict)
+    # As the node holds them: only its own text inputs reach the graph
+    # (prompt_llm.generate_graph), so a number or a flag here is dropped there.
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class EmbellishRequest(BaseModel):

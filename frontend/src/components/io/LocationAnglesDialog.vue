@@ -38,7 +38,7 @@
             size="sm"
             :disabled="!description.trim() || embellishing"
             data-testid="la-write"
-            @click="writePrompt"
+            @click="writePromptHere"
             >Write it from the place</AppButton
           >
           <AppButton
@@ -765,7 +765,7 @@ watch(
     broughtBack = new Set();
     madeSet = null;
     stop();
-    phase.value = "place";
+    phase.value = isNew.value ? "place" : "describe";
     drawStore.report(null);
   },
 );
@@ -874,6 +874,17 @@ async function writePrompt() {
   });
   widePrompt.value = wide.prompt;
   return wide;
+}
+
+/** *Write it from the place*: the same, its failure said on the error line. */
+async function writePromptHere() {
+  error.value = "";
+  try {
+    await writePrompt();
+  } catch (e) {
+    console.warn("Writing the wide pictures' prompt failed", e);
+    error.value = `Couldn't write the prompt. ${errorMessage(e, "Please try again.")}`;
+  }
 }
 
 async function embellish() {
@@ -990,7 +1001,8 @@ async function finished(keys, onProgress = null) {
       }
       if (outcome.status === "completed") done.set(key, outcome.picture_ids || []);
     }
-    onProgress?.(runsFraction(keys, done));
+    // A stop while this poll was out must not hear one report more.
+    if (mine === drawing) onProgress?.(runsFraction(keys, done));
     if (done.size < keys.length) await sleep(POLL_MS);
   }
   if (!alive || mine !== drawing) throw new Error("Stopped.");

@@ -1679,7 +1679,13 @@ def test_a_workflow_llm_rewrites_a_prompt_through_generate_text(client, monkeypa
     )
     loader = {
         "class_type": "CLIPLoader",
-        "inputs": {"clip_name": "qwen3vl.safetensors", "type": "minimax", "evil": "x"},
+        # A number as the node holds it is taken, and dropped with the rest.
+        "inputs": {
+            "clip_name": "qwen3vl.safetensors",
+            "type": "minimax",
+            "evil": "x",
+            "strength": 1.0,
+        },
     }
     resp = client.post(
         f"{API_PREFIX}/item-sheets/prompt/embellish",

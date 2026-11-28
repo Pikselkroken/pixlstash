@@ -425,11 +425,15 @@ let menuTrigger = null;
 async function openPictureMenu(pid, event) {
   if (!selected.value.includes(pid)) selected.value = [pid];
   menuTrigger = event.currentTarget ?? null;
-  menu.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)),
-  };
+  menu.value = { x: event.clientX, y: event.clientY };
+  // Kept inside the window by its own drawn size, as the card menu is.
   await nextTick();
+  const w = menuEl.value?.offsetWidth ?? 0;
+  const h = menuEl.value?.offsetHeight ?? 0;
+  menu.value = {
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - w - 8)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - h - 8)),
+  };
   menuEl.value?.querySelector(".ctx-item")?.focus();
 }
 
@@ -538,6 +542,8 @@ function onKey(event) {
   if (locationDraw.dialogOpen || outfitPickerOpen.value) return;
   if (event.defaultPrevented || event.target?.closest?.("input, textarea, [role=dialog]")) return;
   // Esc closes the menu, then clears the selection, and only then the lightbox.
+  // With the menu open its keys are its own: no stepping or deleting under it.
+  if (menu.value && event.key !== "Escape") return;
   if (event.key === "Escape" && menu.value) closeMenu({ refocus: true });
   else if (event.key === "Escape" && selected.value.length) selected.value = [];
   else if (event.key === "Delete" && selected.value.length) deleteSelected();

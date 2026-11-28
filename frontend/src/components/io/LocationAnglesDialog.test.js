@@ -799,6 +799,35 @@ describe("More angles", () => {
     // Another library's ids: never sent anywhere from this one.
     expect(api.deletePictures).not.toHaveBeenCalled();
     expect(draws.job).toBeNull();
+    // Still More angles of this location, not the new-location form.
+    expect(wrapper.find('[data-testid="la-draw"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="la-wide"]').exists()).toBe(false);
+  });
+
+  it("hears no report from a poll still out when the draw was stopped", async () => {
+    const answers = [];
+    api.getRunOutcome.mockImplementation(
+      () => new Promise((resolve) => answers.push(() => resolve({ status: "running", picture_ids: [] }))),
+    );
+    const draws = useLocationDrawStore();
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(answers).toHaveLength(1); // the video's poll, out
+    await wrapper.find('[data-testid="la-stop"]').trigger("click");
+    answers[0]();
+    await flushPromises();
+    expect(draws.job).toBeNull();
+  });
+
+  it("says so when the prompt cannot be written from the place", async () => {
+    const wrapper = newLocation();
+    await flushPromises();
+    api.buildSheetPrompt.mockRejectedValueOnce(new Error("offline"));
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a pub");
+    await wrapper.find('[data-testid="la-write"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".la-error").text()).toContain("Couldn't write the prompt.");
   });
 
   it("leaves no draw behind a session change while wide pictures wait to be chosen", async () => {

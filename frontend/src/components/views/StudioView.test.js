@@ -646,6 +646,17 @@ describe("a location's pictures", () => {
     expect(api.deletePictures).toHaveBeenCalledWith([34]);
     expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
   });
+
+  it("keeps the lightbox's keys off while the picture menu is open", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("contextmenu");
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    await flushPromises();
+    expect(api.deletePictures).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.query.open).toBe("location:30");
+  });
 });
 
 describe("a scene", () => {
