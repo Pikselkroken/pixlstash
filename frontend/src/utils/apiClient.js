@@ -415,4 +415,5 @@ export {
   setRequestClientId,
   toBackendWebSocketUrl,
   apiBaseUrl as API_BASE_URL,
+  resolvedBaseUrl as BACKEND_URL,
 };

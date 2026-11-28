@@ -527,6 +527,7 @@ Script PixlStash from your own tools with a token and the REST API.
 - **Startup:** no · **New:** no
 - **Search terms:** API, REST, REST API, HTTP, endpoint, endpoints, token, API token, API key, key, bearer, access token, personal access token, automation, automate, script, scripting, Python, curl, integration, developer, programmatic, OpenAPI, Swagger, Scalar, API docs, API reference, permissions, scopes, read-only token, revoke token
 - **Illustration:** the API reference page at `/scalar` beside a `curl` call with a Bearer token.
+- **Reference:** the concept page's third view, *Reference*, frames the server's own `/scalar` page (the catalogue's `reference`), so the reference shown is always this server's.
 
 | Task | Entry point | File | Needs | Illustration |
 |---|---|---|---|---|

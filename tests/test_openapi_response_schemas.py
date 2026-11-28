@@ -13,8 +13,10 @@ import functools
 import gc
 import json
 import os
+import re
 import tempfile
 
+from pixlstash.openapi_custom import render_scalar_html
 from pixlstash.server import Server
 
 # Media types that legitimately carry no JSON schema (file/binary downloads).
@@ -111,3 +113,14 @@ def test_no_operation_has_duplicate_tags():
         "of the router-level one), so Scalar lists them twice in the sidebar:\n"
         + "\n".join(offenders)
     )
+
+
+def test_scalar_bundle_is_pinned_by_hash():
+    # The Guide frames /scalar same-origin, so the CDN script it loads must be
+    # one exact file checked by its hash, not a floating version range.
+    html = render_scalar_html("/openapi.json")
+    script = re.search(r'<script\s+src="(https://[^"]+)"([^>]*)>', html)
+    assert script, html
+    assert re.search(r"@\d+\.\d+\.\d+/", script.group(1)), script.group(1)
+    assert 'integrity="sha384-' in script.group(2)
+    assert 'crossorigin="anonymous"' in script.group(2)

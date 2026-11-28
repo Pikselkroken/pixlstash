@@ -1925,6 +1925,8 @@ export const CONCEPTS = [
       "revoke token",
     ],
     illustration: "the API reference page at `/scalar` beside a `curl` call with a Bearer token.",
+    // The server page the concept's Reference view embeds (GuideConcept.vue).
+    reference: "/scalar",
     tasks: [
       {
         id: "create-an-api-token",

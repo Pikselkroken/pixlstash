@@ -31,10 +31,7 @@
     <div class="gc-bar">
       <Segmented
         v-model="view"
-        :options="[
-          { id: 'tasks', label: 'Tasks', testid: 'guide-view-tasks' },
-          { id: 'read', label: 'Read', testid: 'guide-view-read' },
-        ]"
+        :options="viewOptions"
         aria-label="Show the concept as"
       />
       <span class="gc-count"
@@ -85,7 +82,7 @@
       </li>
     </ol>
 
-    <article v-else class="gc-read" data-testid="guide-read">
+    <article v-else-if="view === 'read'" class="gc-read" data-testid="guide-read">
       <section
         v-for="task in concept.tasks"
         :id="`guide-read-${task.id}`"
@@ -113,6 +110,15 @@
         </ol>
       </section>
     </article>
+
+    <!-- The server's own reference, live, not a copy that can drift. -->
+    <iframe
+      v-else
+      class="gc-ref"
+      :src="referenceUrl"
+      :title="`${concept.name} reference`"
+      data-testid="guide-reference"
+    />
   </div>
 </template>
 
@@ -124,6 +130,7 @@ import Segmented from "../widgets/Segmented.vue";
 import GuideIllustration from "./GuideIllustration.vue";
 import { GOALS, NEEDS, WORKSPACES } from "../../guide/catalogue";
 import { firstConceptFor, useGuideStore } from "../../stores/useGuideStore";
+import { BACKEND_URL } from "../../utils/apiClient";
 
 const props = defineProps({
   concept: { type: Object, required: true },
@@ -148,11 +155,24 @@ const focusTask = computed(() =>
   typeof route.query.task === "string" ? route.query.task : null,
 );
 
+/** A concept with a server page (API › /scalar) gets a third view of it. */
+const viewOptions = computed(() => [
+  { id: "tasks", label: "Tasks", testid: "guide-view-tasks" },
+  { id: "read", label: "Read", testid: "guide-view-read" },
+  ...(props.concept.reference
+    ? [{ id: "reference", label: "Reference", testid: "guide-view-reference" }]
+    : []),
+]);
+const referenceUrl = computed(() => `${BACKEND_URL}${props.concept.reference}`);
+
 const view = computed({
-  get: () => (route.query.view === "read" ? "read" : "tasks"),
+  get: () =>
+    viewOptions.value.some((o) => o.id === route.query.view)
+      ? route.query.view
+      : "tasks",
   set: (v) =>
     router.replace({
-      query: { ...route.query, view: v === "read" ? "read" : undefined },
+      query: { ...route.query, view: v === "tasks" ? undefined : v },
     }),
 });
 
@@ -409,6 +429,15 @@ onMounted(async () => {
   padding-left: var(--space-6);
   font-size: var(--text-sm);
   line-height: var(--leading-body);
+}
+
+.gc-ref {
+  display: block;
+  width: 100%;
+  height: max(480px, 75vh);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
 }
 
 @container (max-width: 720px) {

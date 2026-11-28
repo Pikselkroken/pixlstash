@@ -559,11 +559,15 @@ def render_scalar_html(
       data-url="{spec_url}"
       data-configuration='{config_attr}'
     ></script>
-    <!-- Pinned to a specific version so a future @scalar release cannot
-         change the bundle served to this self-hosted docs page without an
-         intentional bump. Revisit each release; consider vendoring under
-         data/scalar-assets/ for SRI/offline guarantees. -->
-    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.32"></script>
+    <!-- Pinned to an exact file and its hash: the app's Guide embeds this
+         page in a same-origin frame, so the bundle must be exactly the one
+         reviewed, never whatever the CDN serves next. A bump changes the
+         version and the integrity together. -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.32.10/dist/browser/standalone.min.js"
+      integrity="sha384-e2r1D9Z6RWETNi1ckYFTDXEFsz3XSLeN8WgAxcAdQZCjRzi9ubDrjGabqoLYHKDx"
+      crossorigin="anonymous"
+    ></script>
   </body>
 </html>
 """
