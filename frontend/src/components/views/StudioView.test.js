@@ -77,6 +77,7 @@ vi.mock("../../api/characters", () => ({
 
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import StudioView from "./StudioView.vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
@@ -468,6 +469,35 @@ describe("selecting Studio cards", () => {
     await flushPromises();
     expect(api.patchScene).toHaveBeenLastCalledWith(1, { project_id: null });
     expect(api.patchCharacter).toHaveBeenLastCalledWith(5, { project_ids: [] });
+  });
+});
+
+describe("a location draw in the background", () => {
+  it("shows its progress under the location's card, and opens it from there", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: 30, name: "Neon rain street", status: "Filming the place…", fraction: 0.4, ready: false });
+    const wrapper = await mountAt("/studio?section=locations");
+    const bar = wrapper.find('[data-testid="studio-draw-progress-30"]');
+    expect(bar.text()).toContain("Filming the place…");
+    expect(bar.find(".draw-progress__track span").attributes("style")).toContain("width: 40%");
+    await bar.trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    // The card itself still selects: the bar is its own control.
+    expect(wrapper.find('[data-key="location:30"]').attributes("aria-pressed")).toBe("false");
+  });
+
+  it("shows a new location being drawn as a card of its own until its set exists", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: null, name: "Hotel room", status: "Wide pictures to choose from", fraction: 1, ready: true });
+    const wrapper = await mountAt("/studio?section=locations");
+    const card = wrapper.find('[data-testid="studio-new-location-draw"]');
+    expect(card.text()).toContain("Hotel room");
+    expect(card.element.parentElement.textContent).toContain("Wide pictures to choose from");
+    await card.trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    draws.report(null);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="studio-new-location-draw"]').exists()).toBe(false);
   });
 });
 

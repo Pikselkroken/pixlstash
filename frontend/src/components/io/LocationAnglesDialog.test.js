@@ -67,6 +67,8 @@ vi.mock("../../api/workflows", () => ({
 
 import LocationAnglesDialog from "./LocationAnglesDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 
 const LOCATION = {
@@ -142,6 +144,7 @@ function mountDialog() {
 
 describe("More angles", () => {
   it("films, takes the frames, restores each from its frame, and keeps what passes", async () => {
+    const push = vi.spyOn(useNoticeStore(), "push");
     const wrapper = mountDialog();
     await wrapper.find('[data-testid="la-draw"]').trigger("click");
     await flushPromises();
@@ -168,6 +171,8 @@ describe("More angles", () => {
       { frame_id: 703, restored_id: 603 },
     ]);
     expect(wrapper.text()).toContain("turned back into the original");
+    // Seen as it ended: no notice besides.
+    expect(push).not.toHaveBeenCalled();
 
     await wrapper.find('[data-testid="la-use"]').trigger("click");
     await flushPromises();
@@ -676,18 +681,79 @@ describe("More angles", () => {
     expect(wrapper.text()).toContain("Restore a Frame (PixlStash) is not in Workflows");
   });
 
-  it("stops following its runs when closed mid-draw", async () => {
+  it("goes on in the background when closed mid-draw, and shows how far it has got", async () => {
+    let videoDone = false;
+    api.getRunOutcome.mockImplementation(async (key) =>
+      key === "run-video" && !videoDone
+        ? { status: "running", picture_ids: [] }
+        : { status: "completed", picture_ids: OUTPUTS[key] },
+    );
+    const draws = useLocationDrawStore();
+    const push = vi.spyOn(useNoticeStore(), "push");
+    // Only the polls' waits, not the clock: Vue drops an event stamped before
+    // its handler was attached, and a button drawn under an advanced fake
+    // clock would ignore every click once real time is back.
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(draws.job).toMatchObject({ locationId: 30, name: "The pub", status: "Filming the place…" });
+    await wrapper.find('[data-testid="la-background"]').trigger("click");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    await wrapper.setProps({ open: false });
+    // The video finishes with the dialog shut: the draw takes the frames on.
+    videoDone = true;
+    await vi.advanceTimersByTimeAsync(10000);
+    vi.useRealTimers();
+    await flushPromises();
+    expect(api.stopRun).not.toHaveBeenCalled();
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3);
+    expect(draws.job).toMatchObject({ locationId: 30, ready: true, fraction: 1 });
+    expect(push).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "The new views of The pub are ready to pick." }),
+    );
+    // Opened again, it is where the draw got to, not a fresh start.
+    await wrapper.setProps({ open: true });
+    expect(wrapper.find('[data-testid="la-use"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    expect(draws.job).toBeNull();
+  });
+
+  it("drops a draw when the session changes, stopping its runs and touching no picture", async () => {
     api.getRunOutcome.mockResolvedValue({ status: "running", picture_ids: [] });
+    const draws = useLocationDrawStore();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await vi.advanceTimersByTimeAsync(10);
+    draws.reset();
+    api.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [500] });
+    await vi.advanceTimersByTimeAsync(10000);
+    vi.useRealTimers();
+    expect(api.stopRun).toHaveBeenCalledWith("run-video");
+    expect(api.takeLocationShots).not.toHaveBeenCalled();
+    // Another library's ids: never sent anywhere from this one.
+    expect(api.deletePictures).not.toHaveBeenCalled();
+    expect(draws.job).toBeNull();
+  });
+
+  it("stops following its runs when stopped mid-draw", async () => {
+    api.getRunOutcome.mockResolvedValue({ status: "running", picture_ids: [] });
+    const draws = useLocationDrawStore();
     vi.useFakeTimers();
     const wrapper = mountDialog();
     await wrapper.find('[data-testid="la-draw"]').trigger("click");
     await vi.advanceTimersByTimeAsync(10);
-    await wrapper.findAll("button").find((b) => b.text() === "Cancel").trigger("click");
+    await wrapper.find('[data-testid="la-stop"]').trigger("click");
     // The video then finishes: a draw still following it would take frames.
     api.getRunOutcome.mockResolvedValue({ status: "completed", picture_ids: [500] });
     await vi.advanceTimersByTimeAsync(10000);
     vi.useRealTimers();
     expect(api.stopRun).toHaveBeenCalledWith("run-video");
     expect(api.takeLocationShots).not.toHaveBeenCalled();
+    expect(draws.job).toBeNull();
+    expect(wrapper.find('[data-testid="la-draw"]').exists()).toBe(true);
+    expect(wrapper.find(".la-error").exists()).toBe(false);
   });
 });

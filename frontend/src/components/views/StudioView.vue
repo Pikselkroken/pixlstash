@@ -100,7 +100,7 @@
         @pointerdown="onBackgroundPress"
         @click="onBackgroundClick"
       >
-        <div v-if="store.loaded && !cards.length" class="studio-empty">
+        <div v-if="store.loaded && !cards.length && !newLocationDraw" class="studio-empty">
           <v-icon size="32">{{ emptyIcon }}</v-icon>
           <span>{{ emptyText }}</span>
         </div>
@@ -111,6 +111,26 @@
           role="list"
           @keydown="onGridKey"
         >
+          <!-- A new location being drawn, not a set yet: its card is the draw. -->
+          <div v-if="newLocationDraw" role="listitem" class="studio-cell">
+            <button
+              type="button"
+              class="studio-card"
+              data-testid="studio-new-location-draw"
+              @click="locationDraw.reopen()"
+            >
+              <span class="studio-card__ph studio-tile-media studio-tile-media--one">
+                <span class="studio-card__empty"
+                  ><v-icon size="28">mdi-map-marker-plus-outline</v-icon></span
+                >
+              </span>
+              <span class="studio-card__name studio-card__line"
+                ><span class="studio-card__title">{{ newLocationDraw.name }}</span
+                ><span class="studio-card__meta">New location</span></span
+              >
+            </button>
+            <DrawProgress :job="newLocationDraw" @open="locationDraw.reopen()" />
+          </div>
           <div
             v-for="(card, index) in cards"
             :key="cardKey(card)"
@@ -195,6 +215,12 @@
                 >Draw a character sheet…</AppButton
               >
             </span>
+            <DrawProgress
+              v-if="card.kind === 'location' && locationDraw.jobFor(card.id)"
+              :job="locationDraw.jobFor(card.id)"
+              :data-testid="`studio-draw-progress-${card.id}`"
+              @open="locationDraw.reopen()"
+            />
             <span class="studio-fav">
               <FavouriteHeart
                 variant="cover"
@@ -354,6 +380,7 @@ import Tooltip from "../widgets/Tooltip.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
+import DrawProgress from "../widgets/DrawProgress.vue";
 import StudioScene from "./StudioScene.vue";
 import { characterThumbnailUrl } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -364,6 +391,7 @@ import {
   setStudioFavourite,
 } from "../../api/studio";
 import { useConfirm } from "../../composables/useConfirm";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -396,6 +424,13 @@ const router = useRouter();
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
 const { confirm } = useConfirm();
+const locationDraw = useLocationDrawStore();
+// A new location still being drawn shows in Locations before its set exists.
+const newLocationDraw = computed(() =>
+  section.value === "locations" && locationDraw.job && locationDraw.job.locationId == null
+    ? locationDraw.job
+    : null,
+);
 
 const section = computed(() => route.query.section || "scenes");
 const openKind = computed(() => String(route.query.open || "").split(":")[0] || "");

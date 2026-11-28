@@ -22,6 +22,7 @@ import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useWorkflowTemplatesStore } from "./stores/useWorkflowTemplatesStore";
 import { useStudioStore } from "./stores/useStudioStore";
+import { useLocationDrawStore } from "./stores/useLocationDrawStore";
 import { useTrainingStore } from "./stores/useTrainingStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
@@ -619,15 +620,24 @@ const sheetsKind = ref("character");
 const sheetsOpen = ref(false);
 const sheetsReturnFocus = ref(null);
 
-// A new location starts from a video of one wide picture (LocationAnglesDialog
-// without a location); its "Draw a 2×2 sheet instead" opens the sheet dialog.
-const newLocationOpen = ref(false);
+// The one location draw (LocationAnglesDialog): New location, from a video of
+// one wide picture, and More angles of a location. Mounted here, not where it
+// is opened, so a draw goes on when it closes and the Studio moves on; the
+// store opens it and shows how far it has got. Its "Draw a 2×2 sheet
+// instead" opens the sheet dialog.
+const locationDraw = useLocationDrawStore();
 // Opened from code, so focus goes back to what opened it by hand: Vuetify
 // restores only to an activator (#overlays-drop-focus).
 let newLocationTrigger = null;
+watch(
+  () => locationDraw.dialogOpen,
+  (open) => {
+    if (open && !newLocationTrigger) newLocationTrigger = document.activeElement;
+  },
+);
 
 function closeNewLocation() {
-  newLocationOpen.value = false;
+  locationDraw.closeDialog();
   const trigger = newLocationTrigger;
   newLocationTrigger = null;
   nextTick(() => trigger?.focus?.());
@@ -636,8 +646,13 @@ function closeNewLocation() {
 function newLocationToSheet() {
   const trigger = newLocationTrigger;
   newLocationTrigger = null;
-  newLocationOpen.value = false;
+  locationDraw.closeDialog();
   openSheets({ kind: "location", sheet: true, returnFocusTo: trigger });
+}
+
+function onLocationDrawn(n, set, ids) {
+  if (set) onSheetsCut({ kind: "location", pictureIds: ids, set });
+  else studioStore.refresh();
 }
 
 function openSheets({
@@ -648,7 +663,7 @@ function openSheets({
 }) {
   if (kind === "location" && !sheet) {
     newLocationTrigger = returnFocusTo ?? character?.returnFocusTo ?? document.activeElement;
-    newLocationOpen.value = true;
+    locationDraw.openFor(null);
     return;
   }
   sheetsKind.value = kind;
@@ -1444,10 +1459,11 @@ defineExpose({
     <ModelDropFolderDialog />
     <TrainLoraDialog />
     <LocationAnglesDialog
-      :open="newLocationOpen"
+      :open="locationDraw.dialogOpen"
+      :location="locationDraw.dialogLocation"
       @close="closeNewLocation"
       @sheet="newLocationToSheet"
-      @done="(n, set, ids) => set && onSheetsCut({ kind: 'location', pictureIds: ids, set })"
+      @done="onLocationDrawn"
     />
     <CharacterSheetsDialog
       :open="sheetsOpen"

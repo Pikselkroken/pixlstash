@@ -73,12 +73,25 @@ import { useUpscaleStore } from "./useUpscaleStore";
 import { useNewBatchStore } from "./useNewBatchStore";
 import { useTagClipboardStore } from "./useTagClipboardStore";
 import { useTagGroupsStore } from "./useTagGroupsStore";
+import { useLocationDrawStore } from "./useLocationDrawStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // The location draw under way (#2819): it names a location of the
+    // library, and its pictures and runs are that library's.
+    name: "useLocationDrawStore",
+    use: useLocationDrawStore,
+    seed: (s) => {
+      s.job = { locationId: 30, name: "The pub", status: "Filming", fraction: 0.5 };
+      s.dialogOpen = true;
+      s.dialogLocation = { id: 30 };
+    },
+    isEmpty: (s) => s.job === null && !s.dialogOpen && s.dialogLocation === null,
+  },
   {
     // What the library holds, read for the Guide's greying (#2825): another
     // library's answer would grey (or light) the wrong concepts.

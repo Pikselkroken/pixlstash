@@ -8,7 +8,7 @@
         : 'New views of exactly this place, from one of its pictures'
     "
     size="2xl"
-    :persistent="working || zoomedId != null"
+    :persistent="zoomedId != null || (working && phase === 'pick')"
     @close="close"
   >
     <div class="la" data-testid="location-angles">
@@ -208,9 +208,12 @@
           <span class="la-spin" aria-hidden="true"></span>
           <span>{{ status }}</span>
         </div>
+        <div class="la-progress" aria-hidden="true">
+          <span :style="{ width: `${Math.round(fraction * 100)}%` }"></span>
+        </div>
         <p class="la-hint">
-          About three minutes: a short video of the place first, then each new
-          view restored from it. Closing stops it.
+          Close this and it goes on in the background: the Studio shows how far
+          it has got under the location, and it is in Tasks. Stop ends it.
         </p>
       </template>
 
@@ -316,10 +319,23 @@
     </ZoomPopout>
 
     <template #footer>
-      <!-- Cancel stops a draw, but must not walk away from a half-done Use. -->
-      <AppButton variant="secondary" :disabled="working && phase === 'pick'" @click="close">{{
-        phase === "pick" ? "Discard" : "Cancel"
-      }}</AppButton>
+      <!-- A draw goes on when this closes: Stop ends it, Discard throws away
+           what it made. Neither walks away from a half-done Use. -->
+      <template v-if="phase === 'working'">
+        <AppButton variant="secondary" data-testid="la-stop" @click="stop">Stop</AppButton>
+        <AppButton variant="primary" data-testid="la-background" @click="close"
+          >Keep going in the background</AppButton
+        >
+      </template>
+      <AppButton
+        v-else-if="phase === 'pick' || held"
+        variant="secondary"
+        :disabled="working"
+        data-testid="la-discard"
+        @click="discard"
+        >Discard</AppButton
+      >
+      <AppButton v-else variant="secondary" @click="close">Cancel</AppButton>
       <AppButton
         v-if="phase === 'place'"
         tooltip="Draw the place as four views on one picture instead"
@@ -407,6 +423,9 @@ import {
   stopRun,
 } from "../../api/workflows";
 import { errorMessage } from "../../utils/apiError";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { runKey } from "../../utils/gpuMemory";
 
 const props = defineProps({
@@ -510,6 +529,36 @@ let alive = true;
 let drawing = 0;
 
 const ready = computed(() => shots.value.length > 0);
+const drawStore = useLocationDrawStore();
+const noticeStore = useNoticeStore();
+const tasks = useTasksStore();
+// How far the draw under way has got, 0-1.
+const fraction = ref(0);
+// Something drawn that closing must keep: a draw under way, views to pick,
+// or a new location's wide pictures to choose from.
+const held = computed(
+  () => working.value || phase.value === "pick" || (isNew.value && candidates.value.length > 0),
+);
+
+/** Say how far the draw has got, here and under its location in the Studio. */
+function report(text, at, extra = {}) {
+  status.value = text;
+  fraction.value = at;
+  drawStore.report({
+    locationId: props.location?.id ?? null,
+    name: placeName.value,
+    status: text,
+    fraction: at,
+    ready: false,
+    ...extra,
+  });
+}
+
+/** The draw is over: ready for the owner, or gone. Said when nobody saw it. */
+function settle(text, { level = "success" } = {}) {
+  if (props.open) return;
+  noticeStore.push({ level, text });
+}
 const videoSeconds = computed(() => SHOT_SECONDS * (shots.value.length + 1));
 
 /** As many view rows as *n*: kept rows keep their words; a new one takes the
@@ -617,7 +666,8 @@ function fullUrl(id) {
 watch(
   () => props.open,
   (open) => {
-    if (!open) return;
+    // A draw under way, or what it made, is what the dialog opens back on.
+    if (!open || held.value) return;
     phase.value = isNew.value ? "place" : "describe";
     source.value = props.location?.picture_ids?.[0] ?? null;
     name.value = "";
@@ -644,14 +694,54 @@ watch(
   { immediate: true },
 );
 
+/** Close the dialog. A draw under way goes on, and what it made waits. */
 function close() {
+  if (held.value) {
+    emit("close");
+    return;
+  }
+  discard();
+}
+
+/** Stop the draw under way: its runs end, and the dialog is back where it was. */
+function stop() {
   drawing += 1;
   for (const key of liveKeys) {
     stopRun(key).catch((e) => console.warn("Couldn't stop a More angles run", key, e));
   }
   liveKeys = [];
   working.value = false;
+  error.value = "";
+  phase.value = isNew.value && !candidates.value.length ? "place" : "describe";
+  drawStore.report(
+    isNew.value && candidates.value.length
+      ? { status: "Wide pictures to choose from", fraction: 1, ready: true }
+      : null,
+  );
+}
+
+// Another session: the draw's runs stop, and what it made is let go without
+// a word to this library, whose ids those pictures are not.
+watch(
+  () => drawStore.epoch,
+  () => {
+    stop();
+    candidates.value = [];
+    views.value = [];
+    kept.value = [];
+    broughtBack = new Set();
+    madeSet = null;
+    phase.value = "place";
+  },
+);
+
+/** Throw away what this draw made, stop what is still running, and close. */
+function discard() {
+  stop();
+  candidates.value = [];
+  views.value = [];
   sendBack([...broughtBack]);
+  drawStore.report(null);
   emit("close");
 }
 
@@ -776,7 +866,7 @@ async function drawWide() {
   error.value = "";
   phase.value = "working";
   try {
-    status.value = "Getting the workflow ready…";
+    report("Getting the workflow ready…", 0);
     const { cards } = await listWorkflowCards();
     const card = builtIn(cards, WIDE_WORKFLOW);
     const [{ card: full }, wide] = await Promise.all([
@@ -788,7 +878,8 @@ async function drawWide() {
     widePrompt.value = prompt;
     const sizes = (full?.defaults || []).filter((d) => ["width", "height"].includes(d.input_name));
     if (!sizes.length) throw new Error(`${WIDE_WORKFLOW} has no picture size to set.`);
-    status.value = `Drawing ${WIDE_COUNT} wide pictures…`;
+    const drawingWide = `Drawing ${WIDE_COUNT} wide pictures…`;
+    report(drawingWide, 0.02);
     const keys = await startAll({
       workflow_id: card.id,
       prompt,
@@ -803,29 +894,44 @@ async function drawWide() {
       hold: true,
       label: `New location · ${placeName.value}`,
     });
-    const drawn = (await finished(keys)).map((ids) => ids.at(-1)).filter((id) => id != null);
+    const drawn = (await finished(keys, (f) => report(drawingWide, 0.02 + 0.98 * f)))
+      .map((ids) => ids.at(-1))
+      .filter((id) => id != null);
     if (!drawn.length) throw new Error("The runs made no picture.");
     // The four shown before stay in the Scrapheap; one drawn from goes back.
     sendBack([...broughtBack]);
     candidates.value = drawn;
     source.value = candidates.value[0];
     phase.value = "describe";
+    report("Wide pictures to choose from", 1, { ready: true });
+    settle(`The wide pictures of ${placeName.value} are ready to choose from.`);
   } catch (e) {
     for (const key of liveKeys) {
       stopRun(key).catch((err) => console.warn("Couldn't stop a wide picture run", key, err));
     }
     liveKeys = [];
-    if (!alive || !props.open) return;
+    if (!alive || e?.message === "Stopped.") return;
     console.warn("Drawing a new location's wide pictures failed", e);
     error.value = `Couldn't draw the wide pictures. ${errorMessage(e, "Please try again.")}`;
     phase.value = again ? "describe" : "place";
+    drawStore.report(again ? { status: "Wide pictures to choose from", fraction: 1, ready: true } : null);
+    settle(`${error.value}`, { level: "error" });
   } finally {
     working.value = false;
   }
 }
 
-/** Wait for every run in *keys* to end; their pictures, in run order. */
-async function finished(keys) {
+/** How far *keys* have got together, 0-1: an ended run whole, a running one
+ * by the percent ComfyUI reports for it in Tasks. */
+function runsFraction(keys, done) {
+  const percent = new Map(tasks.comfyuiRuns.map((run) => [runKey(run), Number(run.percent) || 0]));
+  const sum = keys.reduce((n, key) => n + (done.has(key) ? 1 : (percent.get(key) ?? 0) / 100), 0);
+  return keys.length ? sum / keys.length : 1;
+}
+
+/** Wait for every run in *keys* to end; their pictures, in run order.
+ * *onProgress* hears how far they have got, 0-1, at every poll. */
+async function finished(keys, onProgress = null) {
   const mine = drawing;
   const done = new Map();
   // Lost answers in a row, per run: one blip costs each run one miss.
@@ -849,6 +955,7 @@ async function finished(keys) {
       }
       if (outcome.status === "completed") done.set(key, outcome.picture_ids || []);
     }
+    onProgress?.(runsFraction(keys, done));
     if (done.size < keys.length) await sleep(POLL_MS);
   }
   if (!alive || mine !== drawing) throw new Error("Stopped.");
@@ -862,7 +969,7 @@ async function draw() {
   error.value = "";
   phase.value = "working";
   try {
-    status.value = "Getting the workflows ready…";
+    report("Getting the workflows ready…", 0);
     const { cards } = await listWorkflowCards();
     const shotsCard = builtIn(cards, SHOTS_WORKFLOW);
     const restoreCard = builtIn(cards, RESTORE_WORKFLOW);
@@ -885,7 +992,7 @@ async function draw() {
       shots: shots.value,
     });
 
-    status.value = "Filming the place…";
+    report("Filming the place…", 0.02);
     const videoKey = await start({
       workflow_id: shotsCard.id,
       prompt,
@@ -895,14 +1002,17 @@ async function draw() {
       count: 1,
       label: `More angles · ${placeName.value}`,
     });
-    const [videoPictures] = await finished([videoKey]);
+    const [videoPictures] = await finished([videoKey], (f) =>
+      report("Filming the place…", 0.02 + 0.58 * f),
+    );
     videoId = videoPictures.at(-1);
     if (videoId == null) throw new Error("The video run made nothing.");
 
-    status.value = "Taking the new views out of the video…";
+    report("Taking the new views out of the video…", 0.6);
     ({ picture_ids: frameIds } = await takeLocationShots(videoId, shots.value.length));
 
-    status.value = `Restoring ${frameIds.length} views…`;
+    const restoring = `Restoring ${frameIds.length} views…`;
+    report(restoring, 0.62);
     // By the node's title: the slot label is an address, not a name.
     const frameSlot = restoreInputs.find((i) => /frame/i.test(i.title || "")) ?? restoreInputs[0];
     const originalSlot = restoreInputs.find((i) => i !== frameSlot);
@@ -921,10 +1031,12 @@ async function draw() {
         }),
       );
     }
-    const restored = (await finished(restoreKeys)).map((ids) => ids.at(-1));
+    const restored = (
+      await finished(restoreKeys, (f) => report(restoring, 0.62 + 0.36 * f))
+    ).map((ids) => ids.at(-1));
     if (restored.some((id) => id == null)) throw new Error("A restore run made nothing.");
 
-    status.value = "Checking each view…";
+    report("Checking each view…", 0.98);
     const { views: checked } = await checkLocationShots(
       source.value,
       frameIds.map((frameId, i) => ({ frame_id: frameId, restored_id: restored[i] })),
@@ -938,16 +1050,24 @@ async function draw() {
     }));
     kept.value = checked.filter((v) => v.ok).map((v) => v.restored_id);
     phase.value = "pick";
+    report(`${views.value.length} new views to pick`, 1, { ready: true });
+    settle(`The new views of ${placeName.value} are ready to pick.`);
   } catch (e) {
     // A run that failed leaves the others drawing: stop them too.
     for (const key of liveKeys) {
       stopRun(key).catch((err) => console.warn("Couldn't stop a More angles run", key, err));
     }
     liveKeys = [];
-    if (!alive || !props.open) return;
+    if (!alive || e?.message === "Stopped.") return;
     console.warn("More angles failed", props.location?.id, e);
     error.value = `Couldn't draw more angles. ${errorMessage(e, "Please try again.")}`;
     phase.value = "describe";
+    drawStore.report(
+      isNew.value && candidates.value.length
+        ? { status: "Wide pictures to choose from", fraction: 1, ready: true }
+        : null,
+    );
+    settle(error.value, { level: "error" });
   } finally {
     working.value = false;
   }
@@ -1006,6 +1126,10 @@ async function useNew() {
   }
   if (frameIds.length) await deletePictures(frameIds);
   sendBack([...broughtBack]);
+  candidates.value = [];
+  views.value = [];
+  phase.value = "place";
+  drawStore.report(null);
   emit("done", kept.value.length, set, ids);
   emit("close");
 }
@@ -1027,6 +1151,9 @@ async function use() {
     if (frameIds.length) await deletePictures(frameIds);
     // A view kept by a Use that failed, then dropped before this one.
     sendBack([...broughtBack]);
+    views.value = [];
+    phase.value = "describe";
+    drawStore.report(null);
     emit("done", kept.value.length);
     emit("close");
   } catch (e) {
@@ -1172,6 +1299,21 @@ async function use() {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+/* How far the draw has got: the sheet dialog's run bar. */
+.la-progress {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  overflow: hidden;
+}
+
+.la-progress > span {
+  display: block;
+  height: 100%;
+  background: rgb(var(--v-theme-primary));
+  transition: width var(--dur-3) var(--ease-standard);
 }
 
 .la-working {

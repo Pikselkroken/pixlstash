@@ -17,7 +17,6 @@ import { useRoute, useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
 import SidebarFooterBand from "./SidebarFooterBand.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import LocationAnglesDialog from "../io/LocationAnglesDialog.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import { listProjects } from "../../api/projects";
@@ -30,6 +29,8 @@ import {
 import { useConfirm } from "../../composables/useConfirm";
 import { useSidebarWidth } from "../../composables/useSidebarWidth";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import DrawProgress from "../widgets/DrawProgress.vue";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
@@ -46,6 +47,7 @@ const emit = defineEmits(["item-sheets", "new-person"]);
 const route = useRoute();
 const router = useRouter();
 const store = useStudioStore();
+const locationDraw = useLocationDrawStore();
 const noticeStore = useNoticeStore();
 const { confirm } = useConfirm();
 const { width, narrow } = useSidebarWidth();
@@ -312,10 +314,7 @@ function itemEntries(kind, id) {
         label: "More angles…",
         icon: "mdi-rotate-orbit",
         reason: item.picture_ids.length ? "" : "No pictures yet to start from.",
-        run: (trigger) => {
-          anglesTrigger = trigger;
-          anglesOf.value = item;
-        },
+        run: () => locationDraw.openFor(item),
       },
     );
   }
@@ -487,17 +486,6 @@ async function stopUsing(kind, item) {
   }
 }
 
-// More angles…, the location lightbox's dialog, opened from its row. Opened
-// from code, so focus goes back to the row by hand on close.
-const anglesOf = ref(null);
-let anglesTrigger = null;
-
-function closeAngles() {
-  anglesOf.value = null;
-  const trigger = anglesTrigger;
-  anglesTrigger = null;
-  nextTick(() => trigger?.focus?.());
-}
 </script>
 
 <template>
@@ -519,9 +507,8 @@ function closeAngles() {
       aria-label="Studio navigation"
     >
       <template v-if="!inProject">
+        <template v-for="row in topRows" :key="row.id">
         <button
-          v-for="row in topRows"
-          :key="row.id"
           type="button"
           class="sidebar-list-item"
           :class="{ active: row.lit }"
@@ -545,6 +532,16 @@ function closeAngles() {
             row.count
           }}</span>
         </button>
+        <!-- A location being drawn in the background, under Locations. -->
+        <DrawProgress
+          v-if="row.id === 'locations' && locationDraw.job"
+          class="studio-row-progress"
+          slim
+          :job="locationDraw.job"
+          data-testid="studio-row-draw-progress"
+          @open="locationDraw.reopen()"
+        />
+        </template>
         <p class="studio-sidebar__hint">
           Pick a project above to work inside it. With Any project, each row
           opens a grid of everything of that kind.
@@ -602,6 +599,13 @@ function closeAngles() {
             }}</span>
             <span class="sidebar-list-count">{{ sec.items.length }}</span>
           </button>
+          <DrawProgress
+            v-if="sec.kind === 'location' && locationDraw.job && locationDraw.job.locationId == null"
+            class="studio-row-progress"
+            slim
+            :job="locationDraw.job"
+            @open="locationDraw.reopen()"
+          />
           <template v-for="item in sec.items" :key="`${sec.kind}:${item.id}`">
             <button
               type="button"
@@ -628,6 +632,14 @@ function closeAngles() {
               }}</span>
               <span class="studio-meta">{{ item.meta }}</span>
             </button>
+            <DrawProgress
+              v-if="sec.kind === 'location' && locationDraw.jobFor(item.id)"
+              class="studio-row-progress"
+              slim
+              :job="locationDraw.jobFor(item.id)"
+              :data-testid="`studio-item-draw-progress-${item.id}`"
+              @open="locationDraw.reopen()"
+            />
             <!-- The open scene unfolds to its location and cast. -->
             <template
               v-if="sec.kind === 'scene' && openScene && openScene.id === item.id"
@@ -708,13 +720,6 @@ function closeAngles() {
         >Scene</AppButton
       >
     </SidebarFooterBand>
-
-    <LocationAnglesDialog
-      :open="!!anglesOf"
-      :location="anglesOf"
-      @close="closeAngles"
-      @done="store.refresh()"
-    />
 
     <Teleport to="body">
       <div
@@ -826,6 +831,11 @@ function closeAngles() {
 
 .studio-sidebar__new {
   height: var(--control-h-bar);
+}
+
+/* A draw's bar under its row, inset to the row's text. */
+.studio-row-progress {
+  padding: 0 var(--space-3) var(--space-1) calc(var(--space-3) + var(--space-5) + var(--space-2));
 }
 
 .studio-ctx-menu {

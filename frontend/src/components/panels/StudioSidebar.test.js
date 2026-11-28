@@ -34,6 +34,7 @@ vi.mock("../../api/pictures", () => ({
 
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import StudioSidebar from "./StudioSidebar.vue";
 
 const OVERVIEW = {
@@ -146,6 +147,30 @@ describe("the Studio sidebar's row menus", () => {
     await verb(wrapper, "add-set").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query).toMatchObject({ section: "locations", add: "1" });
+  });
+
+  it("shows a location draw's progress under Locations and under the location's row", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: 30, name: "Neon rain street", status: "Filming the place…", fraction: 0.4, ready: false });
+    const top = await mountAt("/studio", { inProject: false });
+    expect(top.find("[data-testid=studio-row-draw-progress]").exists()).toBe(true);
+    await top.find("[data-testid=studio-row-draw-progress]").trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    top.unmount();
+
+    const wrapper = await mountAt("/studio");
+    expect(wrapper.find("[data-testid=studio-item-draw-progress-30]").exists()).toBe(true);
+  });
+
+  it("opens More angles on the one draw of the whole app", async () => {
+    const draws = useLocationDrawStore();
+    const wrapper = await mountAt("/studio");
+    useStudioStore().overview.locations[0].picture_ids = [31];
+    await flushPromises();
+    await rightClick(wrapper, "studio-item-location-30");
+    await verb(wrapper, "more-angles").trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    expect(draws.dialogLocation?.id).toBe(30);
   });
 
   it("lists the Wardrobe as its own section, every outfit in it, a person's too", async () => {

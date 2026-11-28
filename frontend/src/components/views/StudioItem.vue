@@ -236,13 +236,6 @@
         </details>
       </div>
     </aside>
-    <LocationAnglesDialog
-      v-if="kind === 'location'"
-      :open="anglesOpen"
-      :location="item"
-      @close="closeAngles"
-      @done="emit('changed')"
-    />
 
     <Teleport to="body">
       <div
@@ -290,11 +283,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
-import LocationAnglesDialog from "../io/LocationAnglesDialog.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
@@ -315,18 +308,12 @@ const emit = defineEmits(["close", "go", "changed", "new-scene", "item-sheets"])
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
-const anglesOpen = ref(false);
-// Opened from code, so the dialog cannot know its trigger: focus goes back here.
-let anglesTrigger = null;
+// More angles… opens the one location draw (App.vue), which goes on when it
+// closes; focus goes back to what opened it there.
+const locationDraw = useLocationDrawStore();
 
-function openAngles(event) {
-  anglesTrigger = event?.currentTarget ?? null;
-  anglesOpen.value = true;
-}
-
-function closeAngles() {
-  anglesOpen.value = false;
-  nextTick(() => anglesTrigger?.focus?.());
+function openAngles() {
+  locationDraw.openFor(item.value);
 }
 
 const item = computed(() => store.byKey.get(`${props.kind}:${props.itemId}`) || null);
@@ -501,7 +488,7 @@ async function stopUsing() {
 }
 
 function onKey(event) {
-  if (anglesOpen.value) return;
+  if (locationDraw.dialogOpen) return;
   if (event.defaultPrevented || event.target?.closest?.("input, textarea, [role=dialog]")) return;
   // Esc closes the menu, then clears the selection, and only then the lightbox.
   if (event.key === "Escape" && menu.value) closeMenu({ refocus: true });

@@ -8871,6 +8871,17 @@ inside its lightboxes, so the rail is empty on `/studio`.
   hands the run keys to the scene; while any is drawing the scene is read
   every 3 s, which files finished runs as takes. A clip runs the chosen video
   workflow, from the scene or from a still take.
+- **A location draw goes on in the background.** `LocationAnglesDialog` is
+  mounted once, in `App.vue`, and opened through `useLocationDrawStore`
+  (`openFor(location | null)`); closing it while a draw runs (*Keep going in
+  the background*) or while what it made waits leaves the draw going, and
+  opening it again shows where it got to. *Stop* ends the runs; *Discard*
+  throws away what was made. The dialog reports `{locationId, name, status,
+  fraction, ready}` to the store, a run's share from its `percent` in Tasks;
+  `widgets/DrawProgress.vue` draws it under the location's card and sidebar
+  row, and a new location not made yet gets a card of its own in Locations.
+  A draw that ends with the dialog shut says so in a notice. One draw at a
+  time: opening for another location opens the one under way.
 - **More angles…** on a location's lightbox opens `io/LocationAnglesDialog`:
   a source picture from the location, a layout sentence, three views (a
   preset and words each) and the light. It runs the shots video, asks the
