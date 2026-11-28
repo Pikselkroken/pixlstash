@@ -6946,7 +6946,10 @@ of the file, and otherwise reads the file as before and stores what it learned.
 New pictures store their incoming hash with their insert. ctime is the
 load-bearing field: it catches an in-place edit whose mtime was put back. Windows
 reports creation time there, so on Windows the stored value is written but never
-trusted. Both columns are outside `metadata_fields()`, the metadata hash and the
+trusted; nor is it on a file whose mtime or ctime is a whole number of
+milliseconds (FAT/exFAT and other coarse clocks, where a same-size edit inside one
+clock step would leave the signature unchanged). Pictures created by other paths
+(watched folders, plugins) start with NULL and are read on their first confirm. Both columns are outside `metadata_fields()`, the metadata hash and the
 restore preview: they are a regenerable cache, not picture metadata.
 
 ### 22.2 Tier 2 — bucketed near, and what "bucket" reuses

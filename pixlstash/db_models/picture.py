@@ -219,9 +219,10 @@ class Picture(SQLModel, table=True):
     # ``GET /pictures/{id}/{field}`` reader still returns the raw columns, under
     # the same picture scope.
     OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
-    # The import confirm's private cache (``import_dedup_service``), never a
-    # fact anybody reads: left out of ``metadata_fields()`` so it rides no
-    # payload.
+    # The import confirm's private cache (``import_dedup_service``), not a
+    # fact about the picture: left out of ``metadata_fields()`` so it rides no
+    # listing or metadata payload. The raw by-name field reader still serves
+    # it, like every column (``utils/field_allowlist.py``).
     FULL_SHA_FIELDS: ClassVar[frozenset] = frozenset({"full_sha", "full_sha_stat"})
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None

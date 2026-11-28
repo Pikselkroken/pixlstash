@@ -118,6 +118,17 @@ def stat_signature(st: os.stat_result) -> str:
     return f"{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
 
 
+def _has_fine_timestamps(st) -> bool:
+    """Whether the file's clock is fine enough for :func:`stat_signature`.
+
+    FAT and exFAT keep times in 2 s or 10 ms steps and report ctime as mtime,
+    so a same-size edit inside one step leaves the signature unchanged. Their
+    times are whole milliseconds; a nanosecond clock (ext4, APFS, btrfs, xfs)
+    lands on one about once in a million, which only costs that file a read.
+    """
+    return bool(st.st_mtime_ns % 1_000_000 and st.st_ctime_ns % 1_000_000)
+
+
 def _trust_stored_full_sha() -> bool:
     """Whether a stored full hash may stand in for reading the file.
 
@@ -343,8 +354,9 @@ def _candidate_full_sha(
     if not resolved:
         return None
     try:
-        signature = stat_signature(os.stat(resolved))
-        if _trust_stored_full_sha():
+        st = os.stat(resolved)
+        signature = stat_signature(st)
+        if _trust_stored_full_sha() and _has_fine_timestamps(st):
             known = learned.get(match.id) if learned is not None else None
             if known is not None and known[1] == signature:
                 return known[0]

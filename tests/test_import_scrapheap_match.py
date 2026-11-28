@@ -22,6 +22,7 @@ import io
 import os
 import tempfile
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +40,7 @@ from pixlstash.db_models import (
 from pixlstash.server import Server
 from pixlstash.services import scrapheap_service
 from pixlstash.services.comfyui_service import _import_comfyui_outputs
+from pixlstash.services.import_dedup_service import _has_fine_timestamps
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
@@ -924,9 +926,40 @@ def test_library_file_edited_with_mtime_put_back_is_not_a_duplicate(owner_server
         before.st_mtime_ns,
         before.st_ino,
     )
+    # ctime is the only field left to notice the edit; without this the test
+    # could pass on a clock that never ticked.
+    assert after.st_ctime_ns != before.st_ctime_ns
 
     # The library no longer holds the original bytes, so they are new again.
     status = _one_shot_import(client, [("a-again.bmp", original)])
     assert status["imported_count"] == 1, status
     assert status["duplicate_count"] == 0, status
     assert _row_count(srv) == 2
+
+
+def test_missing_library_file_with_a_stored_hash_is_not_a_match(owner_server):
+    """A stored hash never stands in for a file that is gone."""
+    srv, client = owner_server
+    data = _png_bytes(color=(201, 13, 99))
+
+    assert _one_shot_import(client, [("a.png", data)])["imported_count"] == 1
+    (picture_id,) = _picture_ids(srv)
+    assert srv.vault.db.run_task(lambda s: s.get(Picture, picture_id).full_sha)
+    os.remove(_library_file(srv, picture_id))
+
+    status = _one_shot_import(client, [("a-again.png", data)])
+    assert status["imported_count"] == 1, status
+    assert status["duplicate_count"] == 0, status
+
+
+def test_coarse_timestamps_never_trust_a_stored_hash():
+    """FAT/exFAT-style whole-millisecond clocks fall back to reading the file."""
+    fine = 1_700_000_000_123_456_789
+    coarse = 1_700_000_000_120_000_000
+    assert _has_fine_timestamps(SimpleNamespace(st_mtime_ns=fine, st_ctime_ns=fine))
+    assert not _has_fine_timestamps(
+        SimpleNamespace(st_mtime_ns=coarse, st_ctime_ns=fine)
+    )
+    assert not _has_fine_timestamps(
+        SimpleNamespace(st_mtime_ns=fine, st_ctime_ns=coarse)
+    )
