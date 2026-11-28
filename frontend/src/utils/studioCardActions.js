@@ -14,6 +14,8 @@ import {
   patchPictureSet,
 } from "../api/pictureSets";
 import { createScene, deleteScene, getScene, listSetInStudio, patchScene } from "../api/studio";
+import { isPlaceholderName, nameFromDescription } from "./itemNames";
+import { ITEM_KINDS } from "./sheetKinds";
 
 /** A card's key in a selection: kinds share ids, so the kind is in it. */
 export const cardKey = (card) => `${card.kind}:${card.id}`;
@@ -142,8 +144,16 @@ export function deleteWords(cards) {
  * the person when another set already has it. Returns the outfit's id.
  */
 export async function addOutfitToWardrobe(outfit, person) {
+  // An outfit still called "New outfit" is named from the words its sheet
+  // was drawn from, kept as the set's description.
+  const named = isPlaceholderName(outfit.name, ITEM_KINDS.outfit.newName)
+    ? nameFromDescription(outfit.description) || outfit.name
+    : outfit.name;
   if (outfit.character_id == null) {
-    await patchPictureSet(outfit.id, { parent_character_id: person.id });
+    await patchPictureSet(outfit.id, {
+      parent_character_id: person.id,
+      ...(named !== outfit.name ? { name: named } : {}),
+    });
     return outfit.id;
   }
   const body = {
@@ -153,12 +163,12 @@ export async function addOutfitToWardrobe(outfit, person) {
   };
   let made;
   try {
-    ({ picture_set: made } = await createPictureSet({ ...body, name: outfit.name }));
+    ({ picture_set: made } = await createPictureSet({ ...body, name: named }));
   } catch (e) {
     if (e?.response?.status !== 409) throw e;
     ({ picture_set: made } = await createPictureSet({
       ...body,
-      name: `${outfit.name} (${person.name})`,
+      name: `${named} (${person.name})`,
     }));
   }
   try {

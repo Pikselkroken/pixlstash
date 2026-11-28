@@ -34,6 +34,7 @@ const api = vi.hoisted(() => ({
   patchCharacter: vi.fn(),
   removePictureFromSet: vi.fn(),
   deletePictures: vi.fn(),
+  getReferencePictures: vi.fn(),
 }));
 vi.mock("../../composables/useConfirm", () => ({
   useConfirm: () => ({ confirm: api.confirm }),
@@ -73,6 +74,7 @@ vi.mock("../../api/characters", () => ({
   characterThumbnailUrl: (id) => `/character/${id}.webp`,
   deleteCharacter: api.deleteCharacter,
   patchCharacter: api.patchCharacter,
+  getReferencePictures: api.getReferencePictures,
 }));
 
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -159,6 +161,7 @@ beforeEach(() => {
   // A copy: a test that unstars an item must not unstar it for the next.
   api.getStudioOverview.mockResolvedValue(structuredClone(OVERVIEW));
   api.getScene.mockResolvedValue(SCENE);
+  api.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
   api.writeShot.mockResolvedValue({
     prompt: "A medium shot in a neon street (picture 1).",
     negative: "blurry",
@@ -520,6 +523,7 @@ describe("adding existing outfits to a wardrobe", () => {
     api.patchPictureSet.mockResolvedValue({});
     api.createPictureSet.mockResolvedValue({ picture_set: { id: 90 } });
     await pickFor("cast:6", [25, 20]);
+    // A name of its own is kept.
     expect(api.patchPictureSet).toHaveBeenCalledWith(25, { parent_character_id: 6 });
     // Mira's raincoat is taken from nobody: Juno gets a set of the same pictures.
     expect(api.patchPictureSet).not.toHaveBeenCalledWith(20, expect.anything());
@@ -541,6 +545,26 @@ describe("adding existing outfits to a wardrobe", () => {
     expect(api.listSetInStudio).toHaveBeenCalledWith(91, "outfit");
   });
 
+  it("names an outfit still called New outfit from its sheet's words when it is given", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push({
+      id: 26, name: "New outfit", description: "a yellow raincoat, hood up",
+      character_id: null, picture_ids: [27], favourite: false, scene_count: 0,
+    });
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=cast&open=cast:6");
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="outfit-pick-26"]').trigger("click");
+    await wrapper.find('[data-testid="outfit-add"]').trigger("click");
+    await flushPromises();
+    expect(api.patchPictureSet).toHaveBeenCalledWith(26, {
+      parent_character_id: 6,
+      name: "Yellow raincoat",
+    });
+  });
+
   it("offers nothing the person already wears", async () => {
     const overview = structuredClone(OVERVIEW);
     api.getStudioOverview.mockResolvedValue(overview);
@@ -548,6 +572,26 @@ describe("adding existing outfits to a wardrobe", () => {
     await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="outfit-pick-20"]').exists()).toBe(false);
+  });
+});
+
+describe("a person's reference pictures", () => {
+  it("shows them beside the wardrobe, and opens one in the Lightbox", async () => {
+    api.getReferencePictures.mockImplementation(async (id) => ({
+      reference_picture_ids: id === 5 ? [70, 71] : [],
+    }));
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    expect(api.getReferencePictures).toHaveBeenCalledWith(5);
+    const refs = wrapper.findAll('[data-testid^="studio-ref-"]');
+    expect(refs.map((r) => r.find("img").attributes("src"))).toEqual(["/thumb/70.webp", "/thumb/71.webp"]);
+    await refs[1].trigger("dblclick");
+    await flushPromises();
+    expect(router.currentRoute.value.query.overlay).toBe("71");
+  });
+
+  it("says where they come from when there are none", async () => {
+    const wrapper = await mountAt("/studio?section=cast&open=cast:6");
+    expect(wrapper.find('[data-testid="studio-refs-none"]').text()).toContain("Juno's faces in Media");
   });
 });
 

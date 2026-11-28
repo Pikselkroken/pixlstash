@@ -8866,6 +8866,15 @@ inside its lightboxes, so the rail is empty on `/studio`.
   one shown). `composables/useOpenInLightbox` pushes All Pictures with
   `?overlay=<id>&from=<the Studio's full path>`, so Esc or Back lands on the
   item again, query and all (`utils/lightboxRoute.js`).
+- **A person's lightbox shows their reference pictures** (`GET
+  /characters/{id}/reference_pictures`) above the wardrobe, each opening in
+  the Lightbox on a double-click or Enter, or says where they are chosen.
+- **An item is named from what its sheets draw** when no name is typed
+  (`utils/itemNames.nameFromDescription`: the description's first clause,
+  without its article, capitalised, at most 40 characters on a word), the
+  name field showing it as its placeholder; outfits, locations and props
+  alike. An outfit still called *New outfit* takes that name, from its set's
+  description, when it is added to a wardrobe.
 - **Add existing outfit…** in a person's lightbox opens
   `widgets/OutfitPicker.vue`: every outfit not theirs, narrowed by whose it
   is (*Not anyone's*, each person) and by name, several at once, a

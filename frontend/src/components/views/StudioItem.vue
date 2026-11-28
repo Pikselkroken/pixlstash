@@ -83,6 +83,25 @@
               alt=""
             />
             <div class="studio-person__wardrobe">
+              <!-- The pictures their likeness is drawn from, chosen in Media. -->
+              <h3 class="studio-heading">Reference pictures</h3>
+              <div v-if="references.length" class="studio-refs" data-testid="studio-refs">
+                <button
+                  v-for="(pid, i) in references"
+                  :key="pid"
+                  type="button"
+                  class="studio-ref"
+                  :aria-label="`${item.name}, reference picture ${i + 1}. Open it.`"
+                  :data-testid="`studio-ref-${pid}`"
+                  @dblclick="openInLightbox(pid)"
+                  @keydown.enter.prevent="openInLightbox(pid)"
+                >
+                  <img :src="pictureThumbnailUrl(pid)" alt="" loading="lazy" />
+                </button>
+              </div>
+              <p v-else-if="referencesRead" class="studio-hint" data-testid="studio-refs-none">
+                No reference pictures yet. They are chosen from {{ item.name }}'s faces in Media.
+              </p>
               <h3 class="studio-heading">Wardrobe</h3>
               <div v-if="wardrobe.length || outfitDraws.length" class="studio-grid">
                 <!-- Outfit sheets drawing for them in the background. -->
@@ -321,6 +340,7 @@ import DrawPlaceholder from "../widgets/DrawPlaceholder.vue";
 import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
+import { getReferencePictures } from "../../api/characters";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
@@ -546,6 +566,28 @@ function drawSheets() {
   });
 }
 
+// ── A person's reference pictures ─────────────────────────────────────────
+const references = ref([]);
+const referencesRead = ref(false);
+watch(
+  () => (props.kind === "cast" ? props.itemId : null),
+  async (id) => {
+    references.value = [];
+    referencesRead.value = false;
+    if (id == null) return;
+    try {
+      const body = await getReferencePictures(id);
+      if (props.itemId !== id) return;
+      references.value = body?.reference_picture_ids ?? [];
+    } catch (e) {
+      console.warn("Couldn't read the person's reference pictures", id, e);
+    } finally {
+      if (props.itemId === id) referencesRead.value = true;
+    }
+  },
+  { immediate: true },
+);
+
 // ── Add existing outfit… ──────────────────────────────────────────────────
 const outfitPickerOpen = ref(false);
 
@@ -633,6 +675,36 @@ onBeforeUnmount(() => {
   width: 240px;
   border-radius: var(--radius-md);
   object-fit: cover;
+}
+
+/* A person's reference pictures: small, whole, side by side. */
+.studio-refs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.studio-ref {
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: rgb(var(--v-theme-surface));
+  cursor: zoom-in;
+}
+
+.studio-ref img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.studio-ref:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--space-1);
 }
 
 .studio-person__wardrobe {

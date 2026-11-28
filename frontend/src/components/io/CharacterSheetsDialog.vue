@@ -110,6 +110,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import { ITEM_KINDS } from "../../utils/sheetKinds";
+import { nameFromDescription } from "../../utils/itemNames";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
 import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import FaceClustersDialog from "./FaceClustersDialog.vue";
@@ -171,7 +172,9 @@ function close() {
       kind: props.kind,
       character: props.character ? { id: props.character.id, name: name.value } : null,
       label: item.value
-        ? snapshot.form?.name?.trim() || item.value.newName
+        ? snapshot.form?.name?.trim() ||
+          nameFromDescription(snapshot.form?.description) ||
+          item.value.newName
         : `${name.value}'s sheets`,
       snapshot,
     });
