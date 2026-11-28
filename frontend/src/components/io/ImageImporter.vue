@@ -365,8 +365,14 @@ async function startImport(files, options = {}) {
         let firstProgressLogged = false;
         let lastProgressAt = Date.now();
         let noProgressAbortFired = false;
+        // True once the browser has sent the batch's last byte. From then on
+        // the server is working (unpacking a 12 GB zip takes minutes) and no
+        // progress events come, so silence is not a stall. Nor is a failure
+        // worth a retry: the server may already have staged the files, and
+        // sending them again stages every one twice.
+        let bodySent = false;
         const noProgressTimer = setInterval(() => {
-          if (cancelImport.value) return;
+          if (cancelImport.value || bodySent) return;
           const elapsed = Date.now() - lastProgressAt;
           if (elapsed < NO_PROGRESS_ABORT_MS) return;
           noProgressAbortFired = true;
@@ -379,12 +385,13 @@ async function startImport(files, options = {}) {
             controller.abort();
           }
         }, 1000);
-        const timeout = setTimeout(() => {
+        const abortOnTimeout = () => {
           console.warn(
-            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}).`,
+            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}, bodySent=${bodySent}).`,
           );
           controller.abort();
-        }, batchTimeoutMs);
+        };
+        let timeout = setTimeout(abortOnTimeout, batchTimeoutMs);
         try {
           const stagedBatch = await stageFiles({
             backendUrl: props.backendUrl,
@@ -392,11 +399,22 @@ async function startImport(files, options = {}) {
             files: batch,
             keys: batchKeys,
             signal: controller.signal,
-            timeoutMs: batchTimeoutMs,
+            // 0 = no axios timeout: the timer above is the only deadline, so
+            // it can restart for the server's share of the work.
+            timeoutMs: 0,
             onUploadProgress: (progressEvent) => {
               const loaded = progressEvent.loaded ?? 0;
               lastProgressAt = Date.now();
               if (!firstProgressLogged) firstProgressLogged = true;
+              // Without a total, the files' own bytes stand in for it (the
+              // multipart framing past them is a few hundred bytes).
+              const total =
+                progressEvent.total > 0 ? progressEvent.total : batchBytes;
+              if (!bodySent && loaded >= total) {
+                bodySent = true;
+                clearTimeout(timeout);
+                timeout = setTimeout(abortOnTimeout, batchTimeoutMs);
+              }
               uploadBytesUploaded.value = Math.min(
                 uploadBytesTotal.value,
                 uploadedBytesAccum + loaded,
@@ -435,7 +453,9 @@ async function startImport(files, options = {}) {
             lastError = new Error(
               noProgressAbortFired
                 ? "Upload stalled (no progress)"
-                : "Upload timed out",
+                : bodySent
+                  ? "The server received the upload but did not finish saving it in time"
+                  : "Upload timed out",
             );
             console.warn(
               `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). reason=${
@@ -453,6 +473,7 @@ async function startImport(files, options = {}) {
               err,
             );
           }
+          if (bodySent) break;
           if (attempt < MAX_RETRIES) {
             await sleep(1000);
           }
@@ -460,6 +481,13 @@ async function startImport(files, options = {}) {
       }
 
       if (!ok) {
+        // Discard the session, or a server still unpacking this batch would
+        // go on filling it for nobody.
+        const stagingId = currentStagingId;
+        currentStagingId = null;
+        cancelStaging({ backendUrl: props.backendUrl, stagingId }).catch((e) =>
+          console.warn("Failed to cancel staging after upload error", e),
+        );
         finalizeError(lastError ? lastError.message : "Upload failed.");
         return;
       }
@@ -535,13 +563,15 @@ async function startImport(files, options = {}) {
     });
 
     // ── Phase B: poll the staging session by id until the import is done. ──
-    const maxAttempts = 600;
+    // No attempt cap: the server never reaps a session whose import is still
+    // running, so "importing" is the truth however long it takes (a 3,000-file
+    // zip runs well past ten minutes). A server that went away answers 404 or
+    // not at all, and the poll throws.
     const intervalMs = 1000;
-    let attempts = 0;
     let finalStatus = null;
     let outcomesSeen = 0;
 
-    while (attempts < maxAttempts) {
+    for (;;) {
       const st = await fetchStagingStatus({
         backendUrl: props.backendUrl,
         stagingId,
@@ -586,11 +616,6 @@ async function startImport(files, options = {}) {
       }
 
       await sleep(intervalMs);
-      attempts++;
-    }
-
-    if (!finalStatus) {
-      throw new Error("Import timed out");
     }
 
     // Summarise from the terminal status. There is no per-file results[] - the
