@@ -57,12 +57,27 @@ DEFAULT_WORDS = {
 SHOT_SECONDS = 2
 # Frames right after a cut still carry the cut's blend and the settle.
 SETTLE_FRAMES = 6
+# Stability is judged over this many frames each side: one frame's difference
+# is noisy (0.02 beside 0.24 in a still shot), and a pan has single-frame dips.
+STEADY_RADIUS = 3
+# Up to this much sharpness is traded for a frame nearer the shot's middle,
+# away from the cuts and the clip's last frames; a still shot's sharpness
+# wanders about this much from frame to frame.
+CENTRE_WEIGHT = 0.1
 # A cut is a frame difference far above the static shots' (~0.3 against 20+
 # while a camera turns, on 0-255 grey).
 CUT_FLOOR = 8.0
 CUT_OVER_MEDIAN = 6.0
 # A restored view must still be its frame: grey correlation at 128 px.
 RESTORE_KEEPS = 0.98
+# The things offered as what a view shows: at most this many, and none that
+# fills most of the picture (that box is the place itself, not a thing in it).
+THINGS_MAX = 8
+THINGS_MAX_AREA = 0.6
+# Florence-2's region captions run long ("wooden bar stools with green seats
+# in dimly lit room"): the "in ..." tail is the room again, and a phrase still
+# longer than this is a description, not a thing to point a camera at.
+THINGS_MAX_WORDS = 5
 
 
 class ShotsNotFound(ValueError):
@@ -74,14 +89,18 @@ def location_shots_prompt(
     layout: str,
     shots: list[dict],
     light: str = "plain daylight",
+    last_picture: bool = False,
 ) -> str:
-    """The shots video's prompt: shot 1 is the picture, then one per row.
+    """The shots video's prompt: shot 1 is the picture, then one per row, and
+    with *last_picture* a last shot that is a second picture of the place
+    (``last_frame``), so the new views are filmed between two known ones.
 
     *layout* is where each unique feature is as seen from the picture, said
     once (the model keeps it; "exactly one" for each keeps it from repeating
     one). Each shot is ``{preset, words}``.
     """
-    place = description.strip().rstrip(".") or "the place in <Picture 1>"
+    pictures = "<Picture 1> and <Picture 2>" if last_picture else "<Picture 1>"
+    place = description.strip().rstrip(".") or f"the place in {pictures}"
     lines = [
         f"Gimbal footage inside {place}, {light.strip() or 'plain daylight'}, no people."
     ]
@@ -89,7 +108,7 @@ def location_shots_prompt(
         lines.append(layout.strip().rstrip(".") + ".")
     lines.append("The place and everything in it stay exactly the same throughout.")
     lines.append(
-        f"A sequence of {len(shots) + 1} static shots of the same place, each held "
+        f"A sequence of {len(shots) + 1 + last_picture} static shots of the same place, each held "
         "perfectly still on a tripod, joined by hard cuts."
     )
     lines.append("SHOT 1: exactly <Picture 1>, held still.")
@@ -97,21 +116,24 @@ def location_shots_prompt(
         preset = shot.get("preset") if shot.get("preset") in SHOT_PRESETS else "closer"
         words = (shot.get("words") or "").strip() or DEFAULT_WORDS[preset]
         lines.append(f"SHOT {number}: {SHOT_PRESETS[preset].format(words=words)}.")
+    if last_picture:
+        lines.append(f"SHOT {len(shots) + 2}: exactly <Picture 2>, held still.")
     return " ".join(lines)
 
 
-def shots_seconds(shot_count: int) -> int:
-    """The video's length: two seconds a shot, the picture's included."""
-    return SHOT_SECONDS * (shot_count + 1)
+def shots_seconds(shot_count: int, last_picture: bool = False) -> int:
+    """The video's length: two seconds a shot, the pictures' own included."""
+    return SHOT_SECONDS * (shot_count + 1 + last_picture)
 
 
-def find_cuts(diffs: list[float], cuts: int) -> list[int]:
-    """The frame index each of *cuts* hard cuts starts at.
+def find_cuts(diffs: list[float]) -> list[int]:
+    """The frame index each hard cut in the video starts at.
 
     *diffs[i]* is the mean grey difference between frames *i* and *i+1*. A
-    run of high differences is one cut. Raises :class:`ShotsNotFound` when
-    the video holds another number of cuts: a guess would hand back frames of
-    the wrong shot.
+    run of high differences is one cut. The video model does not always film
+    the shots it is asked for (it merges two into one, or pans through
+    them), so every cut it did make is kept. Raises :class:`ShotsNotFound`
+    only when there is none: then the video holds no new view at all.
     """
     values = np.asarray(diffs, dtype=float)
     if values.size == 0:
@@ -124,20 +146,62 @@ def find_cuts(diffs: list[float], cuts: int) -> list[int]:
         if high and not previous:
             found.append(index + 1)
         previous = high
-    if len(found) != cuts:
+    if not found:
         raise ShotsNotFound(
-            f"The video has {len(found)} hard cuts where {cuts} were asked for, "
-            "so its shots can't be told apart. Draw it again."
+            "The video is one shot with no cut, so it holds no new view. Draw it again."
         )
     return found
 
 
-def sharpest_frames(path: str, shot_count: int) -> list[int]:
-    """The sharpest frame index of each new shot (the picture's shot left out).
+def pick_frame(
+    start: int, end: int, sharpness: list[float], motion: list[float]
+) -> int:
+    """The steadiest, sharpest frame of the shot spanning frames *start* to *end*.
 
-    Sharpness is the Laplacian variance, with motion weighted against, past
-    the first frames after each cut.
+    *motion[i]* is the grey difference into frame *i*. The settle after the
+    cut is always left out (in a short shot, up to its last frame), and the
+    frames before the next cut when there is room; each frame scores its sharpness over (1 + the mean motion around
+    it), less up to :data:`CENTRE_WEIGHT` for its distance from the middle.
     """
+    first = min(start + SETTLE_FRAMES, end - 1)
+    last = max(end - SETTLE_FRAMES, first + 1)
+    middle = (start + end - 1) / 2
+    half = max((end - start) / 2, 1.0)
+
+    def score(i: int) -> float:
+        around = motion[
+            max(i - STEADY_RADIUS, start + 1) : min(i + STEADY_RADIUS + 1, end)
+        ]
+        steadiness = 1.0 + (float(np.mean(around)) if around else 0.0)
+        centred = 1.0 - CENTRE_WEIGHT * abs(i - middle) / half
+        return sharpness[i] / steadiness * centred
+
+    return max(range(first, last), key=score)
+
+
+def shot_spans(starts: list[int], total: int) -> list[tuple[int, int]]:
+    """Each new shot's ``(start, end)`` frames, from the cuts' *starts* in a
+    video of *total* frames. One no longer than the settle after its cut is a
+    flash, not a shot: it holds no steady frame, so it is left out (a cut on
+    the last frames would otherwise give back its own blur). Raises
+    :class:`ShotsNotFound` when no shot is left."""
+    bounds = [*starts, total]
+    spans = [
+        (start, end)
+        for start, end in zip(bounds, bounds[1:])
+        if end - start > SETTLE_FRAMES
+    ]
+    if not spans:
+        raise ShotsNotFound(
+            "The video's cuts leave no shot long enough to hold still. Draw it again."
+        )
+    return spans
+
+
+def sharpest_frames(path: str, ends_on_picture: bool = False) -> list[int]:
+    """The steadiest, sharpest frame index of each new shot (the picture's
+    shot left out, and with *ends_on_picture* the last shot too, which is the
+    second picture), one per shot the video holds: see :func:`pick_frame`."""
     capture = cv2.VideoCapture(path)
     diffs: list[float] = []
     sharpness: list[float] = []
@@ -159,22 +223,34 @@ def sharpest_frames(path: str, shot_count: int) -> list[int]:
         capture.release()
     if len(sharpness) < 2:
         raise ShotsNotFound("The video could not be read frame by frame.")
-    starts = find_cuts(diffs, shot_count)
-    bounds = [*starts, len(sharpness)]
-    picked: list[int] = []
-    for start, end in zip(bounds, bounds[1:]):
-        first = min(start + SETTLE_FRAMES, end - 1)
-        motion = [
-            diffs[i - 1] if 0 < i <= len(diffs) else 0.0 for i in range(first, end)
-        ]
-        scores = [sharpness[i] / (1.0 + motion[i - first]) for i in range(first, end)]
-        picked.append(first + int(np.argmax(scores)))
-    return picked
+    motion = [0.0, *diffs]
+    spans = shot_spans(find_cuts(diffs), len(sharpness))
+    if ends_on_picture:
+        spans = new_spans_before_the_last_picture(spans)
+    return [pick_frame(start, end, sharpness, motion) for start, end in spans]
 
 
-def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
+def new_spans_before_the_last_picture(
+    spans: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """*spans* without the last, which is the second picture held still.
+    Raises :class:`ShotsNotFound` when that leaves no new shot: the video
+    cut straight from one picture to the other."""
+    if len(spans) < 2:
+        raise ShotsNotFound(
+            "The video went straight from one picture to the other, so it holds no "
+            "new view. Draw it again."
+        )
+    return spans[:-1]
+
+
+def frames_of_video(
+    server, video_id: int, shot_count: int, ends_on_picture: bool = False
+) -> list[int]:
     """Import the sharpest frame of each new shot as a picture made from the
-    video, in shot order. Raises :class:`SheetNotFound`,
+    video, in shot order: as many as the video holds, which may be more or
+    fewer than the *shot_count* asked for. *ends_on_picture*: the last shot
+    is a second picture, not a new view. Raises :class:`SheetNotFound`,
     :class:`SheetUnreadable` or :class:`ShotsNotFound`."""
     found = server.vault.db.run_immediate_read_task(pictures_in_session, [video_id])
     if found is None:
@@ -185,7 +261,16 @@ def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
         raise SheetUnreadable(
             f"Picture {video_id} is not a video this server can read."
         )
-    indices = sharpest_frames(path, shot_count)
+    indices = sharpest_frames(path, ends_on_picture)
+    if len(indices) != shot_count:
+        logger.info(
+            "Location shots video %s holds %d new shots where %d were asked for; "
+            "keeping the %d it has",
+            video_id,
+            len(indices),
+            shot_count,
+            len(indices),
+        )
     frames = VideoUtils.extract_video_frames(path, indices)
     if len(frames) != len(indices):
         raise SheetUnreadable(f"Couldn't read frames {indices} of video {video_id}.")
@@ -274,3 +359,63 @@ def check_restored(
             }
         )
     return results
+
+
+def thing_phrases(regions: list, width: int, height: int) -> list[str]:
+    """What a view can show, from Florence-2's ``(label, [x1, y1, x2, y2], _)``
+    regions: "the brick fireplace on the left", biggest first, each label
+    once, the side from the box's centre, short phrases only."""
+    picture_area = max(width * height, 1)
+    seen, phrases = set(), []
+    for label, (x1, y1, x2, y2), *_ in sorted(
+        regions, key=lambda r: -(r[1][2] - r[1][0]) * (r[1][3] - r[1][1])
+    ):
+        name = " ".join(str(label).lower().split()).split(" in ")[0]
+        area = (x2 - x1) * (y2 - y1) / picture_area
+        too_long = len(name.split()) > THINGS_MAX_WORDS
+        if not name or too_long or name in seen or area > THINGS_MAX_AREA:
+            continue
+        seen.add(name)
+        centre = (x1 + x2) / 2 / max(width, 1)
+        side = (
+            "on the left"
+            if centre < 1 / 3
+            else "on the right"
+            if centre > 2 / 3
+            else "in the middle"
+        )
+        phrases.append(f"the {name} {side}")
+        if len(phrases) == THINGS_MAX:
+            break
+    return phrases
+
+
+def things_in_picture(server, picture_id: int) -> list[str]:
+    """:func:`thing_phrases` for a picture, a Scrapheap one too. Raises
+    :class:`SheetNotFound` or :class:`SheetUnreadable`.
+
+    ponytail: runs Florence-2 in the request beside the background tasks that
+    share the model; queue it as a task if the two ever contend.
+    """
+    found = server.vault.db.run_immediate_read_task(pictures_in_session, [picture_id])
+    if found is None:
+        raise SheetNotFound(f"No picture {picture_id}.")
+    path = ImageUtils.resolve_picture_path(server.vault.image_root, found[0].file_path)
+    engine = getattr(server.vault, "_engine", None)
+    if engine is None:
+        raise SheetUnreadable("The picture describer is not running.")
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, TypeError) as exc:
+        logger.warning(
+            "Couldn't read picture %s at %s to describe it: %s", picture_id, path, exc
+        )
+        raise SheetUnreadable(f"Picture {picture_id} can't be read.") from exc
+    try:
+        regions = engine.describe_regions([path]).get(path, [])
+    except Exception as exc:
+        # A model that will not load is a 409 the dialog words, not a 500.
+        logger.warning("Couldn't describe picture %s at %s: %s", picture_id, path, exc)
+        raise SheetUnreadable(f"Picture {picture_id} can't be described.") from exc
+    return thing_phrases(regions, width, height)

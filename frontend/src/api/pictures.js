@@ -1054,12 +1054,14 @@ export async function clearGuestScoreSession() {
  * @param {Object} [options]
  * @param {string} [options.fields] - projection, e.g. `"grid"`; omitted for
  *   the full record.
+ * @param {boolean} [options.onlyDeleted] - read them from the Scrapheap.
  * @returns {Promise<Array<Object>>} the pictures (the response body).
  */
-export async function listPicturesByIds(ids, { fields } = {}) {
+export async function listPicturesByIds(ids, { fields, onlyDeleted } = {}) {
   const params = new URLSearchParams();
   ids.forEach((id) => params.append("id", String(id)));
   if (fields) params.append("fields", fields);
+  if (onlyDeleted) params.append("only_deleted", "true");
   return unwrap(apiClient.get(`/pictures?${params.toString()}`));
 }
 

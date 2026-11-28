@@ -713,6 +713,27 @@ def item_sheet_prompt(*, kind: ItemKind, description: str) -> str:
     return f"{' '.join(text.split())} {ITEM_PHOTO_LOOK}"
 
 
+# A location's single wide picture: 16:9, the size *MiniMax H3 Restore a
+# Frame* restores the views filmed from it at.
+LOCATION_VIEW_SIZE = (2560, 1440)
+
+
+def location_view_prompt(description: str) -> str:
+    """One wide establishing photograph of a place, empty and in plain
+    daylight as on its sheet: the picture More angles films the place's other
+    views from, so it shows as much of the place as one view can."""
+    described = _phrase(description) or "an everyday place"
+    text = (
+        f"A wide establishing photograph of one place, {described}, taken "
+        "from eye level at one end, so as much of the place as possible is "
+        "in view. Plain daylight at midday, clear weather. The place is "
+        "empty: no people and no animals. The photo looks like a plain "
+        "unedited camera photo: natural colour, true-to-life materials, "
+        "nothing retouched or sharpened."
+    )
+    return " ".join(text.split())
+
+
 class SheetConversionRefused(ValueError):
     """The graph is not one :func:`convert_to_sheet` can rewrite; ``reason`` says why."""
 

@@ -26,6 +26,7 @@
         </template>
         <input
           v-if="draft"
+          ref="nameEl"
           v-model="draft.name"
           class="scene-name"
           aria-label="Scene name"
@@ -79,6 +80,8 @@
               class="scene-take-media"
               :src="pictureThumbnailUrl(shownTake.picture_id)"
               alt="A take of this scene"
+              data-testid="scene-take-shown"
+              @dblclick="openInLightbox(shownTake.picture_id)"
             />
             <AppButton class="scene-take-back" variant="secondary" size="sm" @click="selection = null"
               >Back to the stage</AppButton
@@ -209,6 +212,7 @@
             :aria-label="take.kind === 'clip' ? 'A clip' : 'A still'"
             :data-testid="`scene-take-${take.picture_id}`"
             @click="selection = { type: 'take', pictureId: take.picture_id }"
+            @dblclick="openInLightbox(take.picture_id)"
           >
             <img :src="pictureThumbnailUrl(take.picture_id)" alt="" loading="lazy" />
             <span v-if="take.kind === 'clip'" class="scene-take__clip"
@@ -348,6 +352,7 @@
                 variant="secondary"
                 icon-left="movie-open-play-outline"
                 :disabled="!clipWorkflow || shooting"
+                :tooltip="clipWorkflow ? '' : 'No video workflow here starts from a picture'"
                 data-testid="scene-clip-from-take"
                 @click="shoot('clip', shownTake.picture_id)"
                 >Make a clip from this take</AppButton
@@ -493,6 +498,12 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
+import {
+  isSceneClipCandidate,
+  isSceneStillWorkflow,
+  isSceneWorkflow,
+} from "../../utils/studioWorkflows";
+import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -509,12 +520,29 @@ const props = defineProps({
   sceneId: { type: Number, required: true },
   scenes: { type: Array, default: () => [] },
   backLabel: { type: String, default: "Back" },
+  /** Open with the name ready to rename (a sidebar row's Rename…). */
+  rename: { type: Boolean, default: false },
 });
-const emit = defineEmits(["close", "go", "changed", "item-sheets"]);
+const emit = defineEmits(["close", "go", "changed", "item-sheets", "renaming"]);
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+
+// The name is a field already: Rename… focuses it with the name selected.
+const nameEl = ref(null);
+watch(
+  () => props.rename && !!nameEl.value,
+  (ready) => {
+    if (!ready) return;
+    nameEl.value.focus();
+    nameEl.value.select();
+    emit("renaming");
+  },
+  { immediate: true },
+);
 const { confirm } = useConfirm();
+// A double-click on a take opens it in the Lightbox; Esc or Back comes here.
+const openInLightbox = useOpenInLightbox();
 
 const SHOTS = [
   { id: "wide", label: "Wide" },
@@ -918,33 +946,65 @@ function keepChoice(kind, id) {
 watch(stillWorkflow, (id) => keepChoice("still", id));
 watch(clipWorkflow, (id) => keepChoice("clip", id));
 
-const isVideo = (card) => card.type === "video";
-const stillOptions = computed(() =>
+// Only the workflows that can shoot a scene (utils/studioWorkflows.js).
+const stillCards = computed(() =>
   cards.value
-    .filter((c) => !isVideo(c))
-    .sort((a, b) => (b.reference_inputs || 0) - (a.reference_inputs || 0))
-    .map((c) => ({
-      label: c.reference_inputs ? `${c.name} · ${c.reference_inputs} pictures in` : c.name,
-      value: c.id,
-    })),
+    .filter(isSceneStillWorkflow)
+    .sort(
+      (a, b) =>
+        isSceneWorkflow(b) - isSceneWorkflow(a) ||
+        (b.reference_inputs || 0) - (a.reference_inputs || 0),
+    ),
 );
-const clipOptions = computed(() => {
-  const videos = cards.value.filter(isVideo).map((c) => ({ label: c.name, value: c.id }));
-  return videos.length
-    ? videos
-    : [{ label: "No video workflow in Workflows", value: "", disabled: true }];
-});
+const stillOptions = computed(() =>
+  stillCards.value.length
+    ? stillCards.value.map((c) => ({
+        label: isSceneWorkflow(c)
+          ? `${c.name} · takes every picture`
+          : `${c.name} · ${c.reference_inputs} ${c.reference_inputs === 1 ? "picture" : "pictures"} in`,
+        value: c.id,
+      }))
+    : [{ label: "No workflow here takes reference pictures in", value: "", disabled: true }],
+);
+// A clip starts from a still: a video workflow that takes a picture, as its
+// pre-flight says (a card cannot). Each is asked once.
+const takesPicture = ref({});
+const clipCards = computed(() =>
+  cards.value.filter((c) => isSceneClipCandidate(c) && takesPicture.value[c.id] === true),
+);
+const clipOptions = computed(() =>
+  clipCards.value.length
+    ? clipCards.value.map((c) => ({ label: c.name, value: c.id }))
+    : [{ label: "No video workflow here starts from a picture", value: "", disabled: true }],
+);
+
+async function weighClipWorkflows(list) {
+  await Promise.all(
+    list.filter(isSceneClipCandidate).map(async (card) => {
+      try {
+        const inputs = await pictureInputs(card.id);
+        if (alive) takesPicture.value = { ...takesPicture.value, [card.id]: inputs.length > 0 };
+      } catch (e) {
+        console.warn("Couldn't ask whether a video workflow takes a picture", card.id, e);
+      }
+    }),
+  );
+}
 
 async function loadCards() {
   try {
     const { cards: list } = await listWorkflowCards();
     if (!alive) return;
     cards.value = list;
-    const ids = new Set(list.map((c) => c.id));
-    if (!ids.has(stillWorkflow.value)) stillWorkflow.value = stillOptions.value[0]?.value ?? null;
-    if (!ids.has(clipWorkflow.value)) {
-      const i2v = list.find((c) => isVideo(c) && /image to video/i.test(c.name));
-      clipWorkflow.value = i2v?.id ?? list.find(isVideo)?.id ?? null;
+    // A choice kept from before that is no longer offered gives way.
+    const stills = new Set(stillCards.value.map((c) => c.id));
+    if (!stills.has(stillWorkflow.value)) stillWorkflow.value = stillCards.value[0]?.id ?? null;
+    await weighClipWorkflows(list);
+    if (!alive) return;
+    const clips = clipCards.value;
+    if (!clips.some((c) => c.id === clipWorkflow.value)) {
+      const i2v = clips.find((c) => /image to video/i.test(c.name));
+      clipWorkflow.value = i2v?.id ?? clips[0]?.id ?? null;
     }
   } catch (e) {
     console.warn("Couldn't list the workflows for the Studio", e);
@@ -973,6 +1033,24 @@ async function pictureInputs(workflowId) {
     .filter((input) => input.mode !== "fixed");
 }
 
+/** The run's picture inputs for *references*, in order: one each, then the
+ * rest fanned out over the inputs that take more (picture N is the N-th).
+ * ponytail: numbering holds for one fanning input, which every scene workflow
+ * has; several would need the pre-flight to say how their slots interleave. */
+function fillInputs(inputs, references) {
+  const fills = inputs.slice(0, references.length).map((input, i) => ({
+    slot_label: input.slot_label,
+    input_name: input.input_name,
+    picture_id: references[i],
+  }));
+  const rest = references.slice(fills.length);
+  for (const [i, fill] of fills.entries()) {
+    const more = rest.splice(0, inputs[i].more_pictures || 0);
+    if (more.length) fill.more_picture_ids = more;
+  }
+  return fills;
+}
+
 async function shoot(kind, fromPictureId = null) {
   const workflowId = kind === "clip" ? clipWorkflow.value : stillWorkflow.value;
   if (!workflowId || shooting.value) return;
@@ -985,20 +1063,18 @@ async function shoot(kind, fromPictureId = null) {
     if (fromPictureId != null && !inputs.length) {
       throw new Error("That video workflow takes no picture, so it can't start from a still. Pick an image-to-video workflow.");
     }
+    // An input that fans out takes more pictures than its one slot.
     const written = await writeShot(props.sceneId, {
       kind,
       ...(fromPictureId != null ? { from_picture_id: fromPictureId } : {}),
-      max_references: inputs.length,
+      max_references: inputs.reduce((n, input) => n + 1 + (input.more_pictures || 0), 0),
+      picture_tag: inputs[0]?.picture_tag || "picture {n}",
     });
     const answer = await runWorkflowCard({
       workflow_id: workflowId,
       prompt: written.prompt,
       negative: written.negative,
-      inputs: written.references.slice(0, inputs.length).map((pictureId, i) => ({
-        slot_label: inputs[i].slot_label,
-        input_name: inputs[i].input_name,
-        picture_id: pictureId,
-      })),
+      inputs: fillInputs(inputs, written.references),
       add_loras: written.loras.map((sha256) => ({ sha256, strength_model: 1, strength_clip: 1 })),
       count: kind === "clip" ? 1 : count.value,
       label: `${kind === "clip" ? "Clip" : "Take"} · ${scene.value.name}`,

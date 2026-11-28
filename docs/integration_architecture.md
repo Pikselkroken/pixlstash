@@ -834,6 +834,20 @@ kept, or whose file is gone, is a 404. At most one entry may take the selection
 refusal is decided**, once per distinct picture per request; the pre-flight
 uploads nothing.
 
+**`inputs[].more_picture_ids` fans one input out over more pictures** (a
+Studio scene's references, one per person or prop). Each is a further picture
+for the same input as its `picture_id`, which it needs: a selection (`picture_id:
+null`) is a 422. The server wires one clone of the input's loader (and of any
+IMAGE-to-IMAGE node on its path to the slot, such as a resize) per extra
+picture into the next image slot each node the input feeds accepts, by
+ComfyUI's `object_info` (`services/workflow_fan_out.py`; backend architecture, "Fanning one picture input out over several pictures"). More than
+the input can take is a 400 naming the capacity, before anything is uploaded;
+nothing is truncated. Each `RunGroup.picture_inputs` entry gains `more_pictures`
+(the capacity, 0 when it cannot fan out) and `picture_tag` (a template with
+`{n}`: `<Picture {n}>` for a MiniMax image conditioner, else `picture {n}`), so
+a client can say how many it may send and how a prompt names them. The extra
+pictures are not listed in `picture_inputs`; they show in the submitted graph.
+
 **`replay: true` says the one picture named is the workflow's own output**
 ("Run recipe"), not a picture to run it over. A picture input then takes what
 that picture's run loaded, where the library still holds it (`fill:
@@ -4326,7 +4340,7 @@ never composes a prompt: it asks the scene for one.
 
 | Step | Call | Notes |
 |---|---|---|
-| List | `GET /studio/overview?project_id=` | id, `none`, or absent for any project; a person carries `headshot_ids` (≤4), `body_ids` (≤2) and `picture_count` for their card (`studio.sheet_tile`: thumbnail first, a drawn sheet's panels next, then framing from the face box) |
+| List | `GET /studio/overview?project_id=` | id, `none`, or absent for any project; a person carries `headshot_ids` (≤4), `body_ids` (≤2) and `picture_count` for their card (`studio.sheet_tile`: thumbnail first, a drawn sheet's panels next, then framing from the face box); every item carries `project_ids`, every project it is in (a scene's one or none) |
 | Make, change | `POST /studio/scenes`, `PATCH /studio/scenes/{id}` | `cast` and `props` are replaced whole; a prop's `held_by` must be in the cast (422) |
 | Shot | `POST /studio/scenes/{id}/shot` | `{kind, from_picture_id?, max_references}` → `{prompt, negative, references, loras}` |
 | Run | `POST /workflows/run` | `inputs` filled in order from `references`, one per non-fixed picture input the pre-flight names |
@@ -4334,4 +4348,6 @@ never composes a prompt: it asks the scene for one.
 | Read | `GET /studio/scenes/{id}` | files ended runs as `takes`; `ended` says `completed`, `failed` or `lost` |
 | Items | `PUT`/`DELETE /studio/items/{set_id}` | a set as an outfit, location or prop; the sheet dialog calls `PUT` for each set it makes |
 | Favourites | `PUT /studio/favourites` | `{kind, item_id, favourite}` |
-| More angles | `POST /item-sheets/shots/prompt`, run *MiniMax H3 Location Shots*, `POST /item-sheets/shots`, run *MiniMax H3 Restore a Frame* per frame (`hold`), `POST /item-sheets/shots/check` | the client orders the runs; the server writes the prompt, finds the frames and checks the views |
+| New location | `POST /character-sheets/prompt` (`kind: location`, `single: true`), run *MiniMax H3 Image T2I* (`hold`, four), then More angles from the chosen one; *Use* creates the set | the client orders the runs and makes the set; the server writes the wide prompt, which the owner sees and may change before a draw or a redraw of the four |
+| Embellish | `GET /workflows/{id}/export` of *MiniMax H3 Image T2I* for its text encoder loader, then `POST /item-sheets/prompt/embellish` `{loader, prompt}` → `{prompt}` | offered only when the loader's `type` names a chat-LLM encoder; the server runs it through ComfyUI's Generate Text (`services/prompt_llm.py`), 409 when it cannot |
+| More angles | `POST /item-sheets/shots/prompt` (1-4 shots; `last_picture` for two pictures, run on *…First and Last* with `ends_on_picture` on the frames call), run *MiniMax H3 Location Shots* with its duration (the `value` of the node titled *duration*, from `GET /workflows/{id}/form-inputs`) set to the prompt's `seconds`, `POST /item-sheets/shots`, run *MiniMax H3 Restore a Frame* per frame (`hold`), `POST /item-sheets/shots/check` | the client orders the runs; the server writes the prompt, finds the frames and checks the views |

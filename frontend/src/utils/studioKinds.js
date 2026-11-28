@@ -20,7 +20,7 @@ export const STUDIO_KINDS = {
   outfit: {
     label: "Outfit",
     plural: "Outfits",
-    all: "All outfits",
+    all: "Wardrobe",
     icon: "mdi-hanger",
     color: "--kind-cast",
   },
@@ -41,12 +41,13 @@ export const STUDIO_KINDS = {
 };
 
 /** The sidebar's sections, in order: each opens a grid of its kind. */
-export const STUDIO_SECTIONS = ["scenes", "favourites", "cast", "locations", "props"];
+export const STUDIO_SECTIONS = ["scenes", "favourites", "cast", "wardrobe", "locations", "props"];
 
 /** A section's kind, and back. */
 export const SECTION_KIND = {
   scenes: "scene",
   cast: "cast",
+  wardrobe: "outfit",
   locations: "location",
   props: "prop",
 };
@@ -64,7 +65,7 @@ export const KIND_LIST = {
 export const KIND_SECTION = {
   scene: "scenes",
   cast: "cast",
-  outfit: "cast",
+  outfit: "wardrobe",
   location: "locations",
   prop: "props",
 };

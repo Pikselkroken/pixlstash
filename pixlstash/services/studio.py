@@ -152,6 +152,11 @@ def _angle(pose: str, view: int) -> int:
     return 0
 
 
+# How a prompt names its n-th reference picture: plainly, or as MiniMax H3
+# Image's conditioning reads it.
+PICTURE_TAGS = ("picture {n}", "<Picture {n}>")
+
+
 def _pick(ids: list[int], index: int) -> int | None:
     if not ids:
         return None
@@ -168,14 +173,18 @@ def compose_shot(
     kind: str = "still",
     from_picture_id: int | None = None,
     max_references: int = 8,
+    picture_tag: str = PICTURE_TAGS[0],
 ) -> dict:
     """The prompt and the reference pictures for one shot of *scene*.
 
-    Each reference is named in the prompt by its number ("picture 2"), so only
-    as many as the workflow takes (*max_references*) are named; past that the
-    words alone carry the item. A clip from a still has the still as its one
-    reference: it already holds everyone where they stand.
+    Each reference is named in the prompt by its number, written as the
+    workflow's model reads it (*picture_tag*, "picture {n}" or MiniMax's
+    "<Picture {n}>"), so only as many as the workflow takes (*max_references*)
+    are named; past that the words alone carry the item. A clip from a still
+    has the still as its one reference: it already holds everyone where they
+    stand.
     """
+    tag = picture_tag if picture_tag in PICTURE_TAGS else PICTURE_TAGS[0]
     camera = scene.camera or {}
     view = int(camera.get("view") or 0)
     if view not in range(len(LOCATION_VIEWS)):
@@ -188,11 +197,11 @@ def compose_shot(
         if picture_id is None or from_picture_id is not None:
             return ""
         if picture_id in references:
-            return f" (picture {references.index(picture_id) + 1})"
+            return f" ({tag.format(n=references.index(picture_id) + 1)})"
         if len(references) >= max_references:
             return ""
         references.append(picture_id)
-        return f" (picture {len(references)})"
+        return f" ({tag.format(n=len(references))})"
 
     if from_picture_id is not None:
         references.append(from_picture_id)
@@ -200,7 +209,7 @@ def compose_shot(
     opening = SHOTS.get(camera.get("shot") or "medium", SHOTS["medium"])
     if kind == "clip":
         opening = (
-            "Bring picture 1 to life as a short video clip"
+            f"Bring {tag.format(n=1)} to life as a short video clip"
             if from_picture_id is not None
             else f"A short video clip, {opening[0].lower()}{opening[1:]}"
         )
@@ -244,7 +253,9 @@ def compose_shot(
             parts.append(who.description)
         if brings == "refs":
             for ref in who.reference_ids[:1]:
-                parts[-1] += cite(ref).replace("(picture", "(the person in picture")
+                cited = cite(ref)
+                if cited:
+                    parts[-1] += cited.replace(" (", " (the person in ", 1)
         elif brings == "lora":
             loras.extend(sha for sha in who.loras if sha not in loras)
         outfit = outfits.get(member.get("outfit_set_id"))
@@ -297,6 +308,7 @@ def shot_for(
     kind: str = "still",
     from_picture_id: int | None = None,
     max_references: int = 8,
+    picture_tag: str = PICTURE_TAGS[0],
 ) -> dict:
     """``compose_shot`` with the scene's location, cast, outfits and props read."""
     people: dict[int, Person] = {}
@@ -327,6 +339,7 @@ def shot_for(
         kind=kind,
         from_picture_id=from_picture_id,
         max_references=max_references,
+        picture_tag=picture_tag,
     )
 
 

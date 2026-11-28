@@ -34,6 +34,7 @@ vi.mock("../../api/pictures", () => ({
 
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import StudioSidebar from "./StudioSidebar.vue";
 
 const OVERVIEW = {
@@ -109,12 +110,13 @@ describe("the Studio sidebar's row menus", () => {
   it("offers each kind's verbs on its item rows", async () => {
     const wrapper = await mountAt("/studio?project=7");
     await rightClick(wrapper, "studio-item-scene-1");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "delete"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "delete"]);
     await rightClick(wrapper, "studio-item-cast-5");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-outfit"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-outfit"]);
     await rightClick(wrapper, "studio-item-location-30");
     expect(verbs(wrapper)).toEqual([
       "open",
+      "rename",
       "favourite",
       "new-scene-here",
       "more-angles",
@@ -124,7 +126,7 @@ describe("the Studio sidebar's row menus", () => {
     // A location with no pictures has nothing to draw more angles from.
     expect(verb(wrapper, "more-angles").attributes("disabled")).toBeDefined();
     await rightClick(wrapper, "studio-item-prop-40");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-sheets", "stop-using"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-sheets", "stop-using"]);
   });
 
   it("offers each section's toolbar on its row, with Any project too", async () => {
@@ -146,6 +148,53 @@ describe("the Studio sidebar's row menus", () => {
     await verb(wrapper, "add-set").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query).toMatchObject({ section: "locations", add: "1" });
+  });
+
+  it("shows a location draw's progress under Locations and under the location's row", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: 30, name: "Neon rain street", status: "Filming the place…", fraction: 0.4, ready: false });
+    const top = await mountAt("/studio", { inProject: false });
+    expect(top.find("[data-testid=studio-row-draw-progress]").exists()).toBe(true);
+    await top.find("[data-testid=studio-row-draw-progress]").trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    top.unmount();
+
+    const wrapper = await mountAt("/studio");
+    expect(wrapper.find("[data-testid=studio-item-draw-progress-30]").exists()).toBe(true);
+  });
+
+  it("offers Rename on an item's row, opening it with its name ready", async () => {
+    const wrapper = await mountAt("/studio");
+    await rightClick(wrapper, "studio-item-location-30");
+    await verb(wrapper, "rename").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({ open: "location:30", rename: "1" });
+  });
+
+  it("opens More angles on the one draw of the whole app", async () => {
+    const draws = useLocationDrawStore();
+    const wrapper = await mountAt("/studio");
+    useStudioStore().overview.locations[0].picture_ids = [31];
+    await flushPromises();
+    await rightClick(wrapper, "studio-item-location-30");
+    await verb(wrapper, "more-angles").trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    expect(draws.dialogLocation?.id).toBe(30);
+  });
+
+  it("lists the Wardrobe as its own section, every outfit in it, a person's too", async () => {
+    const top = await mountAt("/studio", { inProject: false });
+    expect(top.find("[data-testid=studio-row-wardrobe]").text()).toContain("Wardrobe");
+    await rightClick(top, "studio-row-wardrobe");
+    expect(verbs(top)).toEqual(["show", "add-set", "draw-sheets"]);
+    await verb(top, "draw-sheets").trigger("click");
+    expect(top.emitted("item-sheets")).toEqual([[{ kind: "outfit" }]]);
+    top.unmount();
+
+    const wrapper = await mountAt("/studio");
+    // Under the Wardrobe, and still under its wearer once they are open.
+    expect(wrapper.find("[data-testid=studio-item-outfit-20]").exists()).toBe(true);
+    expect(wrapper.find("[data-testid=studio-all-wardrobe]").exists()).toBe(true);
   });
 
   it("asks for a new scene at the location it was opened on", async () => {
@@ -200,7 +249,7 @@ describe("the Studio sidebar's row menus", () => {
       shiftKey: true,
     });
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-sheets", "stop-using"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-sheets", "stop-using"]);
     // A lightbox listens for Esc on the window; the menu's Esc must not reach it.
     const lightboxEsc = vi.fn();
     window.addEventListener("keydown", lightboxEsc);

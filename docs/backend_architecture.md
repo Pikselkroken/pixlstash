@@ -685,10 +685,12 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                        |
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
+| POST   | /api/v1/item-sheets/prompt/embellish                                          | workflows       | Rewrite a prompt richer with a workflow's own LLM             |
 | POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
 | POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
 | POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
 | POST   | /api/v1/item-sheets/shots/prompt                                              | characters      | Write a location's shots prompt                               |
+| POST   | /api/v1/item-sheets/shots/things                                              | characters      | The things in a location's picture, for its new views         |
 | POST   | /api/v1/item-sheets/use                                                       | characters      | Use outfit, location or prop sheets                           |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                     |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                                 |
@@ -10466,6 +10468,66 @@ route since #1410. The pieces, all called from `_plan` / `_submit_every` in
   kept is a 400. A graph that will not reduce has no addressable inputs: it runs
   as before, and is a 400 only when the body named an input.
 
+#### Fanning one picture input out over several pictures
+
+A Studio scene sends more reference pictures than a workflow has picture inputs.
+`RunInput.more_picture_ids` (each `ge=1`, `le=MAX_PICTURE_ID`, at most
+`MAX_MORE_PICTURES` = 100) puts further pictures on the same input as its
+`picture_id`. It is in `routes/workflows.py`; the graph logic is pure, in
+[`services/workflow_fan_out.py`](../pixlstash/services/workflow_fan_out.py), with no
+server or I/O.
+
+- **The slot rule.** For each edge from the input's loader (its IMAGE output)
+  to a consumer input `<prefix><n>` (a dotted API key `<autogrow>.<name>` names
+  the autogrow input and the name inside it), the k-th extra picture's clone
+  connects to `<prefix><n+k>` on that consumer **only if ComfyUI's `object_info`
+  accepts that name there**: a declared input, or a `COMFY_AUTOGROW_V3` input
+  whose template yields it (`prefix` + `str(i)` for `i` in `range(max)`, or a
+  `names` list). A name not accepted gets no edge for that clone, so a
+  fixed-slot consumer stops at its last slot while an autogrow one goes on.
+  The Krea shape (`TextEncodeQwenImageEditPlus` `image1..3` beside
+  `ReferenceMultiLatent` `images.image1`) reaches the autogrow alone from
+  picture 4 on, and that is intended.
+- **Never written over.** A slot already wired, or claimed by an earlier clone,
+  is skipped; the claimed set is shared across every loader of the input, so two
+  clones never write one key. A clone with no edge at all ends the input's
+  capacity.
+- **Capacity** is `fan_out_capacity`, the number of clones the rule yields, and
+  it is reported as `RunPictureInput.more_pictures` (0 when the input cannot fan
+  out, or when `object_info` is unavailable). It is read off the card as it
+  stands, before any input's clones are wired in. `RunPictureInput.picture_tag`
+  is a template with `{n}`: `<Picture {n}>` when a node the loader feeds is a
+  `MiniMaxH3ImageConditioning`, else `picture {n}`.
+- **The path is cloned with its picture.** A node between the loader and a
+  numbered slot is cloned with it, one clone per extra picture, when it has
+  exactly one linked input (its upstream), outputs IMAGE, and a numbered slot lies
+  downstream of it: an `ImageScaleToTotalPixels` ahead of an encoder, whose VAE
+  reference latents use the picture at full size. A node with a second link is
+  shared and never cloned, and so is every path through it. A branch that reaches
+  no numbered slot (a save) stays on the original. A numbered consumer ends a
+  path and is not walked through. One clone of a shared resize feeds every
+  numbered slot below it.
+- **Clone and feed.** `_fill_inputs` calls `fan_out_picture_input` right after
+  the input's own feed, on the graph that will be submitted. Each clone is a copy
+  of its loader (and of each path node) under the id `<loader>_pic<k>` (a `.<n>` suffix if that is taken,
+  since ids such as `30:62` are strings), and becomes an ordinary `Feed` for its
+  picture. So `unfed_picture_loaders` sees each clone as fed, `_upload_files` and
+  `_picture_files` check each extra picture as the first one (kept, file on disk,
+  404 otherwise), `by_id` follows the original, and the upload is once per
+  distinct picture. A `PixlStashPictureLoader` clone is fed by id like its
+  original.
+- **Refusals, before anything is uploaded.** More pictures than the capacity is
+  a 400 naming it (`"… takes at most N more pictures; M were sent"`), and nothing
+  is truncated. `more_picture_ids` without a `picture_id` is a 422, since a
+  selection has no one picture to clone. An input not filled by a picture request
+  (a `fixed` pin, a stored file) with extra pictures is a 400.
+- **Authorization.** `POST /workflows/run` and its pre-flight are owner-only in
+  the registry (`_OWNER`), with no per-picture body check, so there is no
+  token-scope gate to mirror for the extra ids; they take the same kept-library
+  check the first picture does, through `_upload_files`. No registry entry changed.
+- **Not shown in `picture_inputs`.** The group's `picture_inputs` describes the
+  input's own picture; its extra pictures appear only in the submitted graph.
+
 #### Resolving a model reference at submit
 
 `detect_model_targets`/`apply_model_swap`
@@ -13899,15 +13961,41 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   joined by hard cuts, shot 1 being the picture, from the prompt `POST
   /item-sheets/shots/prompt` writes (the place, a layout sentence said once,
   then a preset and words per shot). `POST /item-sheets/shots` finds the cuts
-  by frame difference (a run of high differences is one cut; another count
-  than asked is a 409, never a guess) and imports the sharpest frame of each
-  new shot (Laplacian variance over motion, past the first frames after the
-  cut). *MiniMax H3 Restore a Frame* restores each frame from the frame
+  by frame difference (a run of high differences is one cut) and imports the
+  sharpest frame of each new shot the video holds. The video model is not
+  deterministic: it often runs two asked-for shots together, so every shot it
+  made is kept, fewer or more than asked, and only a video with no cut is a
+  409. Which shot went missing is unknown, so the dialog then numbers the
+  views instead of naming them by preset. The frame is picked clear of both
+  cuts (`pick_frame`): Laplacian variance over the mean motion of the frames
+  either side, leaning towards the shot's middle. *MiniMax H3 Restore a Frame* restores each frame from the frame
   itself (VAE-encoded, denoise 0.75, 2560x1440) with the picture as `<Picture
   2>`; restoring from noise flips back to the picture, so `POST
   /item-sheets/shots/check` refuses a view that matches the picture better
   than its frame or drifts below `RESTORE_KEEPS` (grey correlation at 128 px).
-  The kept views and the video join the location's set.
+  The kept views and the video join the location's set. With two
+  pictures the run is *MiniMax H3 Location Shots, First and Last*, the second
+  picture the video's `last_frame`: the prompt's last shot is exactly
+  `<Picture 2>` (`last_picture`), the video is a shot longer, and
+  `POST /item-sheets/shots` with `ends_on_picture` leaves that last shot out
+  (`new_spans_before_the_last_picture`). A new location
+  starts here too: `POST /character-sheets/prompt` with `kind: location,
+  single: true` writes one wide establishing photograph
+  (`location_view_prompt`, `LOCATION_VIEW_SIZE` 2560x1440) to film the
+  views from; `single` on any other kind is a 422. `POST
+  /item-sheets/shots/things` offers what each view could show: Florence-2's
+  `<DENSE_REGION_CAPTION>` over the chosen picture (`thing_phrases`: biggest
+  box first, each label once, with its side, none filling most of the
+  picture), run in the request. `POST /item-sheets/prompt/embellish`
+  rewrites a prompt richer with the LLM a workflow already loads as its text
+  encoder (`services/prompt_llm.py`): the client sends that workflow's
+  CLIPLoader node, and the server submits it with ComfyUI's Generate Text
+  (`TextGenerateV2`, the rewrite instruction as its system prompt) and
+  *Preview as Text*, waits on the history and answers with the preview's
+  text. Only `CLIPLoader`/`CLIPLoaderGGUF` and their own string inputs
+  reach the graph, and a file the ComfyUI does not list is loaded off the
+  shelf by `_swap_in_shelf_loaders` as a run's is (the route lives in
+  `routes/workflows.py` for that helper).
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
   design proposes): a shot is one run of one workflow.
 

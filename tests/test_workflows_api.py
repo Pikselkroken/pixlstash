@@ -13264,6 +13264,354 @@ def test_a_binned_picture_cannot_fill_an_input(i2i):
     assert i2i.uploads == [] and i2i.submitted == []
 
 
+# --- fan-out: more pictures for one input (workflow_fan_out) ---------------
+
+
+def _fan_out_object_info(monkeypatch, *, limit: int = 100) -> None:
+    """The fake ComfyUI's object_info with an autogrow ReferenceMultiLatent.
+
+    ``limit`` is the autogrow template's ``max``: names ``image0..image<limit-1>``.
+    """
+    info = json.loads(json.dumps(I2I_OBJECT_INFO))
+    for node_class, prefix in (
+        ("ReferenceMultiLatent", "image"),
+        ("MiniMaxH3ImageConditioning", "image_"),
+    ):
+        info[node_class] = {
+            "input": {
+                "optional": {
+                    "images": [
+                        "COMFY_AUTOGROW_V3",
+                        {
+                            "template": {
+                                "input": {"optional": {"image": ["IMAGE", {}]}},
+                                "prefix": prefix,
+                                "min": 0,
+                                "max": limit,
+                            }
+                        },
+                    ]
+                }
+            }
+        }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(info)), None),
+    )
+
+
+def _fan_out_graph(consumer: str = "ReferenceMultiLatent", key: str = "images.image1"):
+    """The i2i graph with the subject also fed into a numbered autogrow input."""
+    graph = _i2i_graph()
+    graph["7"] = {"class_type": consumer, "inputs": {key: ["5", 0]}}
+    return graph
+
+
+def _uploaded_ids(state) -> list[str]:
+    return [_uploaded_id(upload["name"]) for upload in state.uploads]
+
+
+def test_more_pictures_fan_out_into_the_submitted_graph(i2i, monkeypatch):
+    """Each extra picture is a clone of the loader, wired to the next slot.
+
+    Wrong if a picture is uploaded but not wired, if a clone takes the name of
+    the original's slot (overwriting it), or if the ordinary subject is changed.
+    """
+    _fan_out_object_info(monkeypatch)
+    i2i.graph = _fan_out_graph()
+    subject = _add_picture(i2i.server, i2i.tmp_path, "f-subject.png")
+    second = _add_picture(i2i.server, i2i.tmp_path, "f-second.png")
+    third = _add_picture(i2i.server, i2i.tmp_path, "f-third.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": subject,
+                    "more_picture_ids": [second, third],
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = i2i.submitted[0]["graph"]
+
+    assert sorted(_uploaded_ids(i2i)) == sorted(
+        str(p) for p in (subject, second, third)
+    )
+    assert graph["5"]["inputs"]["image"] == _upload_name(
+        i2i.server, subject, _h("pixels-f-subject.png")
+    ), graph["5"]
+    [clone_second] = [
+        node_id
+        for node_id, node in graph.items()
+        if node_id not in i2i.graph
+        and node.get("class_type") == "LoadImage"
+        and _uploaded_id(node["inputs"]["image"]) == str(second)
+    ]
+    [clone_third] = [
+        node_id
+        for node_id, node in graph.items()
+        if node_id not in i2i.graph
+        and node.get("class_type") == "LoadImage"
+        and _uploaded_id(node["inputs"]["image"]) == str(third)
+    ]
+    assert graph["7"]["inputs"] == {
+        "images.image1": ["5", 0],
+        "images.image2": [clone_second, 0],
+        "images.image3": [clone_third, 0],
+    }, graph["7"]
+
+
+def test_a_run_without_more_pictures_submits_no_clone(i2i, monkeypatch):
+    """The ordinary run is unchanged: no extra node, no extra input name."""
+    _fan_out_object_info(monkeypatch)
+    i2i.graph = _fan_out_graph()
+    subject = _add_picture(i2i.server, i2i.tmp_path, "f-alone.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": subject,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = i2i.submitted[0]["graph"]
+    assert set(graph) == set(_fan_out_graph()), sorted(graph)
+    assert graph["7"]["inputs"] == {"images.image1": ["5", 0]}
+    assert len(i2i.uploads) == 1
+
+
+def test_more_pictures_past_the_capacity_are_refused_before_anything_uploads(
+    i2i, monkeypatch
+):
+    """Capacity 0 here (names stop at image1): two more is a 400, not a truncation."""
+    _fan_out_object_info(monkeypatch, limit=2)
+    i2i.graph = _fan_out_graph()
+    subject = _add_picture(i2i.server, i2i.tmp_path, "f-over.png")
+    second = _add_picture(i2i.server, i2i.tmp_path, "f-over-2.png")
+    third = _add_picture(i2i.server, i2i.tmp_path, "f-over-3.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": subject,
+                    "more_picture_ids": [second, third],
+                }
+            ],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "at most 0 more pictures; 2 were sent" in r.json()["detail"]
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_an_extra_picture_binned_since_is_a_404_before_anything_uploads(
+    i2i, monkeypatch
+):
+    """The extra pictures go through the path the first one does, and it refuses."""
+    _fan_out_object_info(monkeypatch)
+    i2i.graph = _fan_out_graph()
+    subject = _add_picture(i2i.server, i2i.tmp_path, "f-bin-subject.png")
+    binned = _add_picture(i2i.server, i2i.tmp_path, "f-bin.png")
+    _bin_picture(i2i.server, binned)
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": subject,
+                    "more_picture_ids": [binned],
+                }
+            ],
+        },
+    )
+    assert r.status_code == 404, r.text
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_more_pictures_need_a_picture_to_fan_out_from(i2i):
+    """A selection (`picture_id: null`) has no one picture to clone: a 422."""
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": None,
+                    "more_picture_ids": [1],
+                }
+            ],
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_the_pre_flight_reports_capacity_and_the_prompt_tag(i2i, monkeypatch):
+    """A MiniMax input names its pictures ``<Picture n>``; capacity is its slots.
+
+    ``images.image_1`` is the built-in shape: names image_0..image_99, so
+    image_2..image_99 are 98 more.
+    """
+    _fan_out_object_info(monkeypatch)
+    minimax = _i2i_graph()
+    minimax["7"] = {
+        "class_type": "MiniMaxH3ImageConditioning",
+        "inputs": {"images.image_1": ["5", 0]},
+    }
+    i2i.graph = minimax
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF)
+    loader = _inputs_of(payload)[_label_of(i2i.graph, "5")]
+    assert loader["more_pictures"] == 98, loader
+    assert loader["picture_tag"] == "<Picture {n}>", loader
+
+
+def test_the_pre_flight_reports_the_autogrow_capacity(i2i, monkeypatch):
+    """ReferenceMultiLatent names image0..image99; image1 takes image2..image99."""
+    _fan_out_object_info(monkeypatch)
+    i2i.graph = _fan_out_graph()
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF)
+    loader = _inputs_of(payload)[_label_of(i2i.graph, "5")]
+    assert loader["more_pictures"] == 98, loader
+    assert loader["picture_tag"] == "picture {n}", loader
+
+
+BUILT_IN_SCENES = Path(__file__).resolve().parent.parent / (
+    "pixlstash/data/comfyui-workflows/built-in"
+)
+
+
+def _scene_object_info(monkeypatch, graph: dict) -> None:
+    """object_info for a built-in scene: the real autogrow and fixed-slot shapes,
+    and an empty declaration for every other class the file names."""
+    info = json.loads(json.dumps(I2I_OBJECT_INFO))
+    for node in graph.values():
+        cls = node.get("class_type")
+        if cls and cls not in info:
+            info[cls] = {"input": {"required": {}}, "output": []}
+    # MOSS scales each picture to 1 MP on its way in: a picture's own chain.
+    info["ImageScaleToTotalPixels"] = {"input": {"required": {}}, "output": ["IMAGE"]}
+    info["TextEncodeQwenImageEditPlus"] = {
+        "input": {
+            "optional": {
+                "image1": ["IMAGE", {}],
+                "image2": ["IMAGE", {}],
+                "image3": ["IMAGE", {}],
+            }
+        }
+    }
+    info["ReferenceMultiLatent"] = {
+        "input": {
+            "optional": {
+                "images": [
+                    "COMFY_AUTOGROW_V3",
+                    {
+                        "template": {
+                            "input": {},
+                            "prefix": "image",
+                            "min": 1,
+                            "max": 100,
+                        }
+                    },
+                ]
+            }
+        }
+    }
+    info["TextEncodeMOSSImageEdit"] = {
+        "input": {
+            "required": {
+                "images": [
+                    "COMFY_AUTOGROW_V3",
+                    {
+                        "template": {
+                            "input": {},
+                            "prefix": "image_",
+                            "min": 1,
+                            "max": 10,
+                        }
+                    },
+                ]
+            }
+        }
+    }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(info)), None),
+    )
+
+
+def test_a_built_in_krea_scene_wires_a_second_reference_into_both_slots(
+    i2i, monkeypatch
+):
+    """Krea's loader feeds ``image1`` on the encoder and ``images.image0`` on the
+    autogrow: a second picture goes to ``image2`` and ``images.image1``."""
+    graph = json.loads((BUILT_IN_SCENES / "Krea 2 Scene (PixlStash).json").read_text())
+    _scene_object_info(monkeypatch, graph)
+    i2i.graph = graph
+    subject = _add_picture(i2i.server, i2i.tmp_path, "scene-krea-subject.png")
+    second = _add_picture(i2i.server, i2i.tmp_path, "scene-krea-second.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "inputs": [
+                {
+                    "slot_label": _label_of(graph, "1"),
+                    "input_name": "image",
+                    "picture_id": subject,
+                    "more_picture_ids": [second],
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    submitted = i2i.submitted[0]["graph"]
+    [clone] = [k for k in submitted if k not in graph]
+    assert _uploaded_id(submitted[clone]["inputs"]["image"]) == str(second)
+    images = lambda node: {  # noqa: E731
+        k: v for k, v in submitted[node]["inputs"].items() if k.startswith("image")
+    }
+    assert images("6") == {"image1": ["1", 0], "image2": [clone, 0]}
+    assert images("7") == {"images.image0": ["1", 0], "images.image1": [clone, 0]}
+
+
+def test_the_built_in_moss_scene_reports_its_capacity_in_the_pre_flight(
+    i2i, monkeypatch
+):
+    """MOSS's loader feeds both encoders on ``images.image_0``: nine more."""
+    graph = json.loads(
+        (BUILT_IN_SCENES / "MOSS-Image Scene (PixlStash).json").read_text()
+    )
+    _scene_object_info(monkeypatch, graph)
+    i2i.graph = graph
+    loader = _inputs_of(_preflight(i2i.owner, workflow_id=RUN_WF))[
+        _label_of(graph, "1")
+    ]
+    assert loader["more_pictures"] == 9, loader
+    assert loader["picture_tag"] == "picture {n}", loader
+
+
 def test_the_selection_can_be_sent_to_one_input_by_name(i2i):
     """`picture_id: null` is "my selection goes here", for two open inputs."""
     i2i.graph = _i2i_graph(references=1)

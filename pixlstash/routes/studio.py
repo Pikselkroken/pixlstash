@@ -17,9 +17,11 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     character_in_no_project,
     character_in_project,
@@ -114,7 +116,10 @@ class SceneUpdate(BaseModel):
 class ShotRequest(BaseModel):
     kind: Literal["still", "clip"] = "still"
     from_picture_id: Optional[int] = None
-    max_references: int = Field(default=8, ge=0, le=16)
+    # A workflow input that fans out takes up to 100 (MiniMax H3 Image's).
+    max_references: int = Field(default=8, ge=0, le=100)
+    # How the workflow's model names a reference: the pre-flight's `picture_tag`.
+    picture_tag: Literal["picture {n}", "<Picture {n}>"] = "picture {n}"
 
 
 class Shot(BaseModel):
@@ -208,7 +213,6 @@ def _parse_scope(project: Optional[str]) -> Union[None, str, int]:
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
-    db = server.vault.db
 
     def _favourites(session: Session) -> set[tuple[str, int]]:
         return {
@@ -258,9 +262,11 @@ def create_router(server) -> APIRouter:
                 )
 
     def _scene_body(session: Session, scene: Scene, ended=()) -> dict:
+        # A take whose picture went to the Scrapheap is no take to show.
         takes = session.exec(
             select(SceneTake)
-            .where(SceneTake.scene_id == scene.id)
+            .join(Picture, Picture.id == SceneTake.picture_id)
+            .where(SceneTake.scene_id == scene.id, Picture.deleted.is_(False))
             .order_by(SceneTake.created_at.desc(), SceneTake.id.desc())
         ).all()
         formats = (
@@ -387,18 +393,22 @@ def create_router(server) -> APIRouter:
             elif scope is not None:
                 scene_query = scene_query.where(Scene.project_id == scope)
             scenes = session.exec(scene_query.order_by(Scene.updated_at.desc())).all()
+            # Only pictures still in the library count: one sent to the
+            # Scrapheap from a lightbox or a grid leaves the Studio with it.
             take_counts = dict(
                 session.exec(
-                    select(SceneTake.scene_id, func.count(SceneTake.id)).group_by(
-                        SceneTake.scene_id
-                    )
+                    select(SceneTake.scene_id, func.count(SceneTake.id))
+                    .join(Picture, Picture.id == SceneTake.picture_id)
+                    .where(Picture.deleted.is_(False))
+                    .group_by(SceneTake.scene_id)
                 ).all()
             )
             covers = dict(
                 session.exec(
-                    select(SceneTake.scene_id, func.max(SceneTake.picture_id)).group_by(
-                        SceneTake.scene_id
-                    )
+                    select(SceneTake.scene_id, func.max(SceneTake.picture_id))
+                    .join(Picture, Picture.id == SceneTake.picture_id)
+                    .where(Picture.deleted.is_(False))
+                    .group_by(SceneTake.scene_id)
                 ).all()
             )
             all_scenes = session.exec(select(Scene)).all()
@@ -448,10 +458,55 @@ def create_router(server) -> APIRouter:
             if set_ids:
                 for set_id, picture_id in session.exec(
                     select(PictureSetMember.set_id, PictureSetMember.picture_id)
-                    .where(PictureSetMember.set_id.in_(set_ids))
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id.in_(set_ids),
+                        Picture.deleted.is_(False),
+                    )
                     .order_by(PictureSetMember.picture_id)
                 ).all():
                     members[set_id].append(picture_id)
+
+            # Every project each person and set is in: a card's Project menu
+            # ticks them. A scene is in one project or none.
+            set_projects: dict[int, list[int]] = {}
+            for set_id, pid in session.exec(
+                select(
+                    PictureSetProjectMember.set_id, PictureSetProjectMember.project_id
+                )
+                .where(PictureSetProjectMember.set_id.in_(set_ids))
+                .order_by(PictureSetProjectMember.project_id)
+            ).all():
+                set_projects.setdefault(set_id, []).append(pid)
+            people_projects: dict[int, list[int]] = {}
+            for char_id, pid in session.exec(
+                select(
+                    CharacterProjectMember.character_id,
+                    CharacterProjectMember.project_id,
+                )
+                .where(CharacterProjectMember.character_id.in_(people_ids))
+                .order_by(CharacterProjectMember.project_id)
+            ).all():
+                people_projects.setdefault(char_id, []).append(pid)
+
+            # Each card takes the shape of its pictures: width over height of
+            # a set's first picture and a scene's cover, None when unknown.
+            shown = [ids[0] for ids in members.values() if ids] + [
+                pid for pid in covers.values() if pid
+            ]
+            aspects = {
+                pid: round(width / height, 4)
+                for pid, width, height in (
+                    session.exec(
+                        select(Picture.id, Picture.width, Picture.height).where(
+                            Picture.id.in_(shown)
+                        )
+                    ).all()
+                    if shown
+                    else []
+                )
+                if width and height
+            }
 
             lists: dict[str, list] = {kind: [] for kind in ITEM_KINDS}
             for row, pset in item_rows:
@@ -472,6 +527,8 @@ def create_router(server) -> APIRouter:
                         "description": pset.description or "",
                         "character_id": pset.parent_character_id,
                         "picture_ids": members.get(pset.id, []),
+                        "aspect": aspects.get((members.get(pset.id) or [None])[0]),
+                        "project_ids": set_projects.get(pset.id, []),
                         "scene_count": used.get((row.kind, pset.id), 0),
                         "favourite": (row.kind, pset.id) in favourites,
                     }
@@ -489,6 +546,7 @@ def create_router(server) -> APIRouter:
                         "kind": "scene",
                         "name": s.name,
                         "project_id": s.project_id,
+                        "project_ids": [s.project_id] if s.project_id else [],
                         "location_set_id": s.location_set_id,
                         "cast_ids": [m.get("character_id") for m in (s.cast or [])],
                         "outfit_ids": [
@@ -500,6 +558,7 @@ def create_router(server) -> APIRouter:
                         "take_count": take_counts.get(s.id, 0),
                         "running": len(s.runs or []),
                         "cover_picture_id": covers.get(s.id),
+                        "cover_aspect": aspects.get(covers.get(s.id)),
                         "updated_at": s.updated_at,
                         "favourite": ("scene", s.id) in favourites,
                     }
@@ -516,6 +575,7 @@ def create_router(server) -> APIRouter:
                         "body_ids": tiles[c.id][1],
                         "picture_count": tiles[c.id][2],
                         "outfit_ids": outfit_ids.get(c.id, []),
+                        "project_ids": people_projects.get(c.id, []),
                         "scene_count": used.get(("cast", c.id), 0),
                         "favourite": ("cast", c.id) in favourites,
                     }
@@ -526,7 +586,7 @@ def create_router(server) -> APIRouter:
                 "props": lists["prop"],
             }
 
-        return db.run_immediate_read_task(fetch)
+        return server.vault.db.run_immediate_read_task(fetch)
 
     @router.post(
         "/studio/scenes",
@@ -549,7 +609,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(insert, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
 
     @router.get(
         "/studio/scenes/{scene_id}",
@@ -571,7 +631,7 @@ def create_router(server) -> APIRouter:
             ended = _file_ended_runs(session, scene, library_uuid)
             return _scene_body(session, scene, ended)
 
-        return db.run_task(read, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(read, priority=DBPriority.IMMEDIATE)
 
     @router.patch(
         "/studio/scenes/{scene_id}",
@@ -627,7 +687,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/scenes/{scene_id}",
@@ -651,7 +711,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return {"status": "deleted", "id": scene_id}
 
-        return db.run_task(remove, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(remove, priority=DBPriority.IMMEDIATE)
 
     @router.post(
         "/studio/scenes/{scene_id}/shot",
@@ -662,7 +722,8 @@ def create_router(server) -> APIRouter:
             "camera takes, each cast member in their outfit doing what the "
             "scene says, the props, and what the location is doing. Each "
             "reference is named in the prompt by its number, so only "
-            "`max_references` (the workflow's picture inputs) are named. A "
+            "`max_references` (the workflow's picture inputs) are named, "
+            "written as `picture_tag` says the workflow's model reads them. A "
             "clip `from_picture_id` (a still take) has that still as its one "
             "reference. Stores nothing."
         ),
@@ -689,9 +750,10 @@ def create_router(server) -> APIRouter:
                 kind=payload.kind,
                 from_picture_id=payload.from_picture_id,
                 max_references=payload.max_references,
+                picture_tag=payload.picture_tag,
             )
 
-        return db.run_immediate_read_task(read)
+        return server.vault.db.run_immediate_read_task(read)
 
     @router.post(
         "/studio/scenes/{scene_id}/runs",
@@ -720,7 +782,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/scenes/{scene_id}/takes/{picture_id}",
@@ -743,7 +805,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.put(
         "/studio/items/{set_id}",
@@ -769,7 +831,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return {"set_id": set_id, "kind": payload.kind}
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/items/{set_id}",
@@ -785,7 +847,7 @@ def create_router(server) -> APIRouter:
                 session.commit()
             return {"set_id": set_id, "removed": row is not None}
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.put(
         "/studio/favourites",
@@ -816,6 +878,6 @@ def create_router(server) -> APIRouter:
                 "favourite": payload.favourite,
             }
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     return router

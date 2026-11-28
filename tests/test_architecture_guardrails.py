@@ -106,6 +106,10 @@ _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/projects.py",
     "pixlstash/routes/reference_folders.py",
     "pixlstash/routes/stacks.py",
+    # Called vault.db from #2819 on through a `db` captured at start-up,
+    # which this pattern could not see and a library switch closed under it.
+    # Read per call now, so it shows; to move into a studio service.
+    "pixlstash/routes/studio.py",
     "pixlstash/routes/tags.py",
     "pixlstash/routes/training.py",
 }

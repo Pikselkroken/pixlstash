@@ -6,6 +6,8 @@
       :scene-id="openId"
       :scenes="store.overview.scenes"
       :back-label="backLabel"
+      :rename="route.query.rename === '1'"
+      @renaming="go({ rename: null }, { replace: true })"
       @close="closeLightbox"
       @go="openItem"
       @changed="store.refresh()"
@@ -16,6 +18,8 @@
       :key="`${openKind}-${openId}`"
       :kind="openKind"
       :item-id="openId"
+      :rename="route.query.rename === '1'"
+      @renaming="go({ rename: null }, { replace: true })"
       :back-label="backLabel"
       @close="closeLightbox"
       @go="openItem"
@@ -49,6 +53,17 @@
             @update:model-value="atLocation = fromOption($event)"
           />
         </template>
+        <AppSelect
+          v-if="section === 'wardrobe'"
+          :model-value="optionValue(wornBy)"
+          class="studio-filter"
+          compact
+          hide-label
+          label="Worn by"
+          :options="wearerOptions"
+          data-testid="studio-filter-wearer"
+          @update:model-value="wornBy = $event === 'nobody' ? 'nobody' : fromOption($event)"
+        />
         <Segmented
           v-if="section === 'favourites'"
           v-model="favouriteKind"
@@ -57,7 +72,7 @@
         />
         <span class="studio-spacer"></span>
         <AppButton
-          v-if="section === 'locations' || section === 'props'"
+          v-if="SET_SECTIONS[section]"
           variant="ghost"
           icon-left="playlist-plus"
           data-testid="studio-add-set"
@@ -65,18 +80,12 @@
           >Add a set…</AppButton
         >
         <AppButton
-          v-if="section === 'locations' || section === 'props'"
+          v-if="SET_SECTIONS[section]"
           variant="secondary"
           icon-left="draw"
           data-testid="studio-draw-sheets"
-          @click="
-            emit('item-sheets', {
-              kind: section === 'locations' ? 'location' : 'prop',
-            })
-          "
-          >{{
-            section === "locations" ? "Draw location sheets…" : "Draw prop sheets…"
-          }}</AppButton
+          @click="emit('item-sheets', { kind: SET_SECTIONS[section].kind })"
+          >{{ SET_SECTIONS[section].draw }}</AppButton
         >
         <AppButton
           v-if="section === 'scenes'"
@@ -89,27 +98,89 @@
       <p v-if="store.error" class="studio-error" role="alert">
         {{ store.error }}
       </p>
-      <div class="studio-scroll studio-scroll--tiles">
-        <div v-if="store.loaded && !cards.length" class="studio-empty">
+      <div
+        ref="scrollEl"
+        class="studio-scroll studio-scroll--tiles"
+        @pointerdown="onBackgroundPress"
+        @click="onBackgroundClick"
+      >
+        <div
+          v-if="store.loaded && !cards.length && !newLocationDraw && !sectionDraws.length"
+          class="studio-empty"
+        >
           <v-icon size="32">{{ emptyIcon }}</v-icon>
           <span>{{ emptyText }}</span>
         </div>
-        <div v-else class="studio-grid studio-grid--tiles" role="list">
-          <div
-            v-for="card in cards"
-            :key="`${card.kind}:${card.id}`"
-            role="listitem"
-            class="studio-cell"
-          >
+        <div
+          v-else
+          ref="gridEl"
+          class="studio-grid studio-grid--tiles"
+          role="list"
+          @keydown="onGridKey"
+        >
+          <!-- A new location being drawn, not a set yet: its card is the draw. -->
+          <div v-if="newLocationDraw" role="listitem" class="studio-cell">
             <button
               type="button"
               class="studio-card"
+              data-testid="studio-new-location-draw"
+              @click="locationDraw.reopen()"
+            >
+              <span class="studio-card__ph studio-tile-media studio-tile-media--one">
+                <span class="studio-card__empty"
+                  ><v-icon size="28">mdi-map-marker-plus-outline</v-icon></span
+                >
+              </span>
+              <span class="studio-card__name studio-card__line"
+                ><span class="studio-card__title">{{ newLocationDraw.name }}</span
+                ><span class="studio-card__meta">New location</span></span
+              >
+            </button>
+            <DrawProgress :job="newLocationDraw" @open="locationDraw.reopen()" />
+          </div>
+          <!-- Sheets drawing in the background for an item of this section:
+               where it will land, with the draw's bar. -->
+          <div v-for="draw in sectionDraws" :key="draw.key" role="listitem" class="studio-cell">
+            <DrawPlaceholder
+              :job="draw"
+              :label="draw.name"
+              :icon="STUDIO_KINDS[draw.kind].icon"
+              :aspect="draw.kind === 'outfit' ? 4 / 5 : 5 / 3"
+              :testid="`studio-sheet-placeholder-${draw.kind}`"
+              @open="reopenSheets(draw)"
+            />
+            <span class="studio-card__name studio-card__line"
+              ><span class="studio-card__title">{{ draw.name }}</span
+              ><span class="studio-card__meta">{{
+                draw.character ? `${draw.character.name}'s, drawing` : "Drawing"
+              }}</span></span
+            >
+          </div>
+          <div
+            v-for="(card, index) in cards"
+            :key="cardKey(card)"
+            role="listitem"
+            class="studio-cell"
+            :class="{ 'studio-cell--selected': isSelected(card) }"
+          >
+            <!-- Click selects (Ctrl adds, Shift ranges), double-click or
+                 Enter opens, right-click is the menu: the picture grid's
+                 gestures. -->
+            <button
+              type="button"
+              class="studio-card"
+              :aria-pressed="isSelected(card) ? 'true' : 'false'"
+              :data-key="cardKey(card)"
               :data-testid="`studio-card-${card.kind}-${card.id}`"
-              @click="openItem(card.kind, card.id)"
+              @click="onCardClick(card, index, $event)"
+              @dblclick="openItem(card.kind, card.id)"
+              @keydown.enter.prevent="openItem(card.kind, card.id)"
+              @contextmenu.prevent="openCardMenu(card, $event)"
             >
               <span
                 class="studio-card__ph studio-tile-media"
                 :class="`studio-tile-media--${card.tile.shape}`"
+                :style="card.tile.aspect ? { '--tile-aspect': card.tile.aspect } : undefined"
               >
                 <span
                   v-for="panel in card.tile.panels"
@@ -150,10 +221,28 @@
                 </span>
               </span>
               <span class="studio-card__name studio-card__line"
-                ><span class="studio-card__title">{{ card.name }}</span
+                ><span
+                  class="studio-card__title"
+                  :data-testid="`studio-title-${card.kind}-${card.id}`"
+                  @dblclick.stop="startRename(card)"
+                  >{{ card.name }}</span
                 ><span class="studio-card__meta">{{ card.meta }}</span></span
               >
             </button>
+            <!-- Rename in place, over the card's name line: a field cannot sit
+                 inside the card's button. -->
+            <input
+              v-if="renaming === cardKey(card)"
+              ref="renameEl"
+              v-model="renameText"
+              class="studio-rename tbm-input"
+              :aria-label="`New name for ${card.name}`"
+              maxlength="200"
+              data-testid="studio-rename"
+              @keydown.enter.prevent="commitRename(card)"
+              @keydown.esc.prevent.stop="renaming = null"
+              @blur="commitRename(card)"
+            />
             <span
               v-if="card.tile.prompt"
               class="studio-tile-prompt"
@@ -169,6 +258,19 @@
                 >Draw a character sheet…</AppButton
               >
             </span>
+            <!-- A person's sheets drawing in the background. -->
+            <DrawProgress
+              v-if="card.kind === 'cast' && sheetDraws.of('character', card.id).length"
+              :job="sheetDraws.of('character', card.id)[0]"
+              :data-testid="`studio-sheets-progress-${card.id}`"
+              @open="reopenSheets(sheetDraws.of('character', card.id)[0])"
+            />
+            <DrawProgress
+              v-if="card.kind === 'location' && locationDraw.jobFor(card.id)"
+              :job="locationDraw.jobFor(card.id)"
+              :data-testid="`studio-draw-progress-${card.id}`"
+              @open="locationDraw.reopen()"
+            />
             <span class="studio-fav">
               <FavouriteHeart
                 variant="cover"
@@ -182,6 +284,64 @@
         </div>
       </div>
     </template>
+
+    <!-- The selection pill, floated over the end of the grid as the photo
+         grid's is; the right-click menu holds the same verbs in words. -->
+    <div v-if="!openKind && selectedKeys.length" class="selbar-float">
+      <StudioSelectionBar
+        :count="selectedKeys.length"
+        noun="item"
+        plural="items"
+        :verbs="pillVerbs"
+        :project="{ subjectIds: selectedKeys, membership: projectMembership }"
+        @verb="runPillVerb"
+        @clear="selectedKeys = []"
+        @select-all="selectedKeys = cards.map(cardKey)"
+        @project="onProjectPicked"
+      />
+    </div>
+
+    <Teleport to="body">
+      <div
+        v-if="cardMenu"
+        ref="menuEl"
+        class="ctx-menu studio-ctx-menu"
+        role="menu"
+        tabindex="-1"
+        :style="menuStyle"
+        data-testid="studio-card-menu"
+        @contextmenu.prevent
+        @mousedown.stop
+        @keydown="onMenuKey"
+      >
+        <template v-for="(entry, i) in menuEntries" :key="i">
+          <div v-if="entry === SEP" class="ctx-sep" role="separator"></div>
+          <AddToEntityControl
+            v-else-if="entry.key === 'project'"
+            type="project"
+            placement="right"
+            :subject-ids="selectedKeys"
+            :membership="projectMembership"
+            data-verb="project"
+            @selected="onProjectPicked"
+          />
+          <button
+            v-else
+            type="button"
+            role="menuitem"
+            class="ctx-item"
+            :class="{ 'ctx-item--danger': entry.danger }"
+            :disabled="!!entry.reason"
+            :data-verb="entry.key"
+            @click="runEntry(entry)"
+          >
+            <v-icon class="ctx-icon" aria-hidden="true">{{ entry.icon }}</v-icon>
+            <span class="ctx-label-text">{{ entry.label }}</span>
+            <Tooltip v-if="entry.reason" :text="entry.reason" activator="parent" />
+          </button>
+        </template>
+      </div>
+    </Teleport>
 
     <AppDialog
       :open="newOpen"
@@ -233,7 +393,7 @@
 
     <AppDialog
       :open="addSetOpen"
-      :title="section === 'locations' ? 'Add a location' : 'Add a prop'"
+      :title="`Add ${{ wardrobe: 'an outfit', locations: 'a location' }[section] ?? 'a prop'}`"
       subtitle="From a picture set you already have"
       size="sm"
       @close="addSetOpen = false"
@@ -274,16 +434,21 @@
  * a reload and Back land where they were; `project` in it is the scope Media
  * shares.
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
+import DrawProgress from "../widgets/DrawProgress.vue";
+import DrawPlaceholder from "../widgets/DrawPlaceholder.vue";
+import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import StudioScene from "./StudioScene.vue";
 import { characterThumbnailUrl } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -293,14 +458,29 @@ import {
   listSetInStudio,
   setStudioFavourite,
 } from "../../api/studio";
+import { useConfirm } from "../../composables/useConfirm";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard";
+import {
+  cardKey,
+  deleteCard,
+  deleteWords,
+  duplicateCard,
+  duplicateReason,
+  renameCard,
+  setCardProject,
+} from "../../utils/studioCardActions";
+import { nameFromDescription } from "../../utils/itemNames";
 import {
   ITEM_ANGLES,
   KIND_LIST,
   KIND_SECTION,
   LOCATION_VIEWS,
+  SECTION_KIND,
   STUDIO_KINDS,
   fromOption,
   kindStyle,
@@ -314,6 +494,27 @@ const route = useRoute();
 const router = useRouter();
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+const { confirm } = useConfirm();
+const locationDraw = useLocationDrawStore();
+// Sheets drawing in the background: a placeholder card in the section their
+// item will land in, a bar under the person whose sheets they are.
+const sheetDraws = useSheetDrawsStore();
+const SECTION_DRAW_KIND = { wardrobe: "outfit", locations: "location", props: "prop" };
+const sectionDraws = computed(() =>
+  SECTION_DRAW_KIND[section.value] ? sheetDraws.of(SECTION_DRAW_KIND[section.value]) : [],
+);
+
+/** Open the sheet dialog on a draw kept while it runs. */
+function reopenSheets(draw) {
+  emit("item-sheets", { kind: draw.kind, character: draw.character, sheet: true });
+}
+
+// A new location still being drawn shows in Locations before its set exists.
+const newLocationDraw = computed(() =>
+  section.value === "locations" && locationDraw.job && locationDraw.job.locationId == null
+    ? locationDraw.job
+    : null,
+);
 
 const section = computed(() => route.query.section || "scenes");
 const openKind = computed(() => String(route.query.open || "").split(":")[0] || "");
@@ -348,9 +549,16 @@ onMounted(() => store.refresh());
 const sectionTitle = computed(() =>
   section.value === "favourites"
     ? "Favourites"
-    : (STUDIO_KINDS[{ scenes: "scene", cast: "cast", locations: "location", props: "prop" }[section.value]]?.all ??
-      "All scenes"),
+    : (STUDIO_KINDS[SECTION_KIND[section.value]]?.all ?? "All scenes"),
 );
+
+// The sections a picture set is listed in, as what it is: Add a set… and
+// Draw … sheets… in their toolbars.
+const SET_SECTIONS = {
+  wardrobe: { kind: "outfit", draw: "Draw outfit sheets…" },
+  locations: { kind: "location", draw: "Draw location sheets…" },
+  props: { kind: "prop", draw: "Draw prop sheets…" },
+};
 
 const backLabel = computed(() => {
   const name = section.value === "favourites" ? "Favourites" : sectionTitle.value;
@@ -378,11 +586,19 @@ function openItem(kind, id, { fromSidebar = false } = {}) {
 const withPerson = ref(null);
 const atLocation = ref(null);
 const favouriteKind = ref("all");
+// The Wardrobe's filter: a person's id, "nobody" for clothes of their own,
+// or null for every outfit.
+const wornBy = ref(null);
 
 const people = computed(() => store.overview.cast);
 const personOptions = computed(() => [
   { label: "With anyone", value: "" },
   ...people.value.map((p) => ({ label: `With ${p.name}`, value: String(p.id) })),
+]);
+const wearerOptions = computed(() => [
+  { label: "Worn by anyone", value: "" },
+  { label: "Not anyone's", value: "nobody" },
+  ...people.value.map((p) => ({ label: `Worn by ${p.name}`, value: String(p.id) })),
 ]);
 const locationOptions = computed(() => [
   { label: "At any location", value: "" },
@@ -411,15 +627,17 @@ function metaOf(kind, item) {
   }
   if (kind === "outfit") {
     const who = store.byKey.get(`cast:${item.character_id}`)?.name;
-    return who ? `${who}'s outfit` : "Outfit";
+    return who ? `${who}'s outfit` : "Not anyone's";
   }
   return `In ${item.scene_count} ${item.scene_count === 1 ? "scene" : "scenes"}`;
 }
 
-// Each card is a small copy of the sheet its kind is drawn on (5:3): a
-// person's four headshots two by two and two body shots, an item's four views
-// or angles two by two. A scene has no sheet: its latest take, 3:2, with the
-// cast's faces on it. Fewer pictures than slots never leaves a hole.
+// Each card is a small copy of the sheet its kind is drawn on: a person's four
+// headshots two by two and two body shots (5:3), an item's four views or
+// angles two by two. A scene has no sheet: its latest take with the cast's
+// faces on it. Fewer pictures than slots never leaves a hole. An item's and a
+// scene's card take the shape of their pictures (`aspect`, width over height),
+// so nothing is cropped: four equal panels two by two have the panel's shape.
 const HEAD_AREAS = ["1 / 1", "1 / 2", "2 / 1", "2 / 2"];
 
 function castTile(item) {
@@ -466,6 +684,7 @@ function tileOf(kind, item) {
     const thumb = thumbOf(kind, item);
     return {
       shape: "scene",
+      aspect: item.cover_aspect ?? null,
       panels: thumb ? [{ key: "cover", area: "1 / 1", src: thumb }] : [],
       chips: item.cast_ids.map((id) => characterThumbnailUrl(id)),
       prompt: null,
@@ -475,6 +694,7 @@ function tileOf(kind, item) {
   if (ids.length < 4) {
     return {
       shape: "one",
+      aspect: item.aspect ?? null,
       panels: ids.length ? [{ key: ids[0], area: "1 / 1", src: pictureThumbnailUrl(ids[0]) }] : [],
       chips: [],
       prompt: null,
@@ -483,6 +703,7 @@ function tileOf(kind, item) {
   const labels = kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES;
   return {
     shape: "quad",
+    aspect: item.aspect ?? null,
     panels: ids.slice(0, 4).map((id, i) => ({
       key: id,
       area: HEAD_AREAS[i],
@@ -545,6 +766,16 @@ const cards = computed(() => {
         : favourites.value.filter((c) => c.kind === favouriteKind.value);
     case "cast":
       return store.overview.cast.map(asCard("cast"));
+    case "wardrobe":
+      return store.overview.outfits
+        .filter((o) =>
+          wornBy.value == null
+            ? true
+            : wornBy.value === "nobody"
+              ? o.character_id == null
+              : o.character_id === wornBy.value,
+        )
+        .map(asCard("outfit"));
     case "locations":
       return store.overview.locations.map(asCard("location"));
     case "props":
@@ -565,6 +796,7 @@ const emptyIcon = computed(
     ({
       favourites: "mdi-heart-outline",
       cast: STUDIO_KINDS.cast.icon,
+      wardrobe: STUDIO_KINDS.outfit.icon,
       locations: STUDIO_KINDS.location.icon,
       props: STUDIO_KINDS.prop.icon,
     })[section.value] ?? STUDIO_KINDS.scene.icon,
@@ -575,6 +807,10 @@ const emptyText = computed(
     ({
       favourites: "Nothing starred yet. The heart on any card adds it here.",
       cast: "No people here yet. People are made in Media; their outfits are drawn from their lightbox here.",
+      wardrobe:
+        wornBy.value != null
+          ? "No outfit matches this filter."
+          : "No outfits yet. Draw outfit sheets, or add a set of pictures of one; a person's own are drawn from their lightbox.",
       locations: "No locations yet. Draw location sheets, or add a set of pictures of one place.",
       props: "No props yet. Draw prop sheets, or add a set of pictures of one.",
     })[section.value] ??
@@ -592,6 +828,324 @@ async function toggleFavourite(card) {
       key: "studio-favourite",
     });
   }
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────
+// The picture grid's gestures: click selects one, Ctrl/Cmd+click adds or
+// takes away, Shift+click takes the run from the first selected; Esc or a
+// click on the empty grid clears. Kinds share ids, so a key names both.
+const selectedKeys = ref([]);
+const scrollEl = ref(null);
+const gridEl = ref(null);
+
+const isSelected = (card) => selectedKeys.value.includes(cardKey(card));
+const selectedCards = computed(() =>
+  cards.value.filter((card) => selectedKeys.value.includes(cardKey(card))),
+);
+
+function onCardClick(card, index, event) {
+  const key = cardKey(card);
+  if (event?.shiftKey) {
+    const anchor = cards.value.findIndex((c) => selectedKeys.value.includes(cardKey(c)));
+    const from = anchor < 0 ? index : anchor;
+    const [start, end] = from <= index ? [from, index] : [index, from];
+    selectedKeys.value = cards.value.slice(start, end + 1).map(cardKey);
+  } else if (event?.ctrlKey || event?.metaKey) {
+    selectedKeys.value = selectedKeys.value.includes(key)
+      ? selectedKeys.value.filter((k) => k !== key)
+      : [...selectedKeys.value, key];
+  } else {
+    selectedKeys.value = [key];
+  }
+}
+
+// What is not on show cannot stay selected: a new section, filter or refresh.
+watch(cards, (shown) => {
+  const keys = new Set(shown.map(cardKey));
+  if (selectedKeys.value.some((k) => !keys.has(k))) {
+    selectedKeys.value = selectedKeys.value.filter((k) => keys.has(k));
+  }
+});
+
+// Decided by where the press started, as on Workflows: a press that slips off
+// a card onto the gap is a fumbled pick, not a click on nothing.
+let pressedBackground = false;
+const isBackground = (target) => target === scrollEl.value || target === gridEl.value;
+
+function onBackgroundPress(event) {
+  pressedBackground = isBackground(event.target);
+}
+
+function onBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) selectedKeys.value = [];
+  pressedBackground = false;
+}
+
+function onGridKey(event) {
+  // Typing a name: Delete, Ctrl+A and Esc are the field's, not the grid's.
+  if (event.target?.closest?.("input, textarea")) return;
+  if (event.key === "Escape" && selectedKeys.value.length && !cardMenu.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedKeys.value = [];
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectedKeys.value = cards.value.map(cardKey);
+  } else if (event.key === "F2" && selectedCards.value.length === 1) {
+    event.preventDefault();
+    startRename(selectedCards.value[0]);
+  } else if (event.key === "Delete" && selectedCards.value.length) {
+    event.preventDefault();
+    removeCards(selectedCards.value);
+  } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    const key = event.target?.closest?.("[data-key]")?.dataset.key;
+    const card = cards.value.find((c) => cardKey(c) === key);
+    if (!card) return;
+    event.preventDefault();
+    const at = event.target.getBoundingClientRect();
+    openCardMenu(card, { clientX: at.left, clientY: at.bottom, currentTarget: event.target }, true);
+  }
+}
+
+// ── The card menu ─────────────────────────────────────────────────────────
+// The sidebar row menu's teleported `.ctx-menu`, for the selection: a
+// right-click on a card outside it selects that card alone first.
+const SEP = "sep";
+const cardMenu = ref(null); // { x, y }
+const menuEl = ref(null);
+const menuSize = ref({ w: 0, h: 0 });
+let menuTrigger = null;
+
+async function openCardMenu(card, event, focusFirst = false) {
+  if (!isSelected(card)) selectedKeys.value = [cardKey(card)];
+  menuTrigger = event.currentTarget ?? null;
+  cardMenu.value = { x: event.clientX, y: event.clientY };
+  await nextTick();
+  menuSize.value = { w: menuEl.value?.offsetWidth ?? 0, h: menuEl.value?.offsetHeight ?? 0 };
+  if (focusFirst) menuEl.value?.querySelector(".ctx-item:not(:disabled)")?.focus();
+}
+
+function closeMenu({ refocus = false } = {}) {
+  if (!cardMenu.value) return;
+  cardMenu.value = null;
+  const trigger = menuTrigger;
+  menuTrigger = null;
+  if (refocus) trigger?.focus?.();
+}
+
+const menuStyle = computed(() => {
+  if (!cardMenu.value) return {};
+  const { x, y } = cardMenu.value;
+  const left = `${Math.max(8, Math.min(x, window.innerWidth - menuSize.value.w - 8))}px`;
+  return y + menuSize.value.h > window.innerHeight - 8
+    ? { left, bottom: `${window.innerHeight - y}px` }
+    : { left, top: `${y}px` };
+});
+
+const menuEntries = computed(() => {
+  const picked = selectedCards.value;
+  if (!picked.length) return [];
+  const one = picked.length === 1 ? picked[0] : null;
+  const noCopy = picked.map(duplicateReason).find(Boolean) ?? "";
+  const allFavourite = picked.every((c) => c.favourite);
+  const entries = [];
+  if (one) {
+    entries.push(
+      { key: "open", label: "Open", icon: "mdi-open-in-app", run: () => openItem(one.kind, one.id) },
+      { key: "rename", label: "Rename…", icon: "mdi-rename-outline", run: () => startRename(one) },
+    );
+  }
+  // Named for want of a name ("New prop"): the words its sheets were drawn
+  // from name it, every one selected at once.
+  const nameable = picked.filter((c) => c.kind !== "scene" && c.kind !== "cast" && namedFromWords(c));
+  if (nameable.length) {
+    entries.push({
+      key: "name-from-description",
+      label: nameable.length === 1 ? "Name from description" : `Name ${nameable.length} from their descriptions`,
+      icon: "mdi-text-recognition",
+      run: () => nameFromWords(nameable),
+    });
+  }
+  entries.push(
+    {
+      key: "favourite",
+      label: allFavourite ? "Remove from favourites" : "Add to favourites",
+      icon: allFavourite ? "mdi-heart-off-outline" : "mdi-heart-outline",
+      run: () => setFavourites(picked, !allFavourite),
+    },
+    {
+      key: "duplicate",
+      label: one ? "Duplicate" : `Duplicate ${picked.length}`,
+      icon: "mdi-content-copy",
+      reason: noCopy,
+      run: () => duplicateCards(picked),
+    },
+    { key: "project" },
+    SEP,
+    {
+      key: "delete",
+      label: one ? "Delete…" : `Delete ${picked.length}…`,
+      icon: "mdi-delete-outline",
+      danger: true,
+      run: () => removeCards(picked),
+    },
+  );
+  return entries;
+});
+
+// The pill's verbs: the menu's, but Project (its own popover) and the rows.
+const pillVerbs = computed(() =>
+  menuEntries.value
+    .filter((entry) => entry !== SEP && entry.key !== "project")
+    .map((entry) => ({
+      key: entry.key,
+      icon: entry.icon.replace(/^mdi-/, ""),
+      label: entry.label.replace(/…$/, ""),
+      danger: !!entry.danger,
+      reason: entry.reason ?? "",
+    })),
+);
+
+function runPillVerb(key) {
+  menuEntries.value.find((entry) => entry !== SEP && entry.key === key)?.run();
+}
+
+// Each selected card in each project it is in, for the Project flyout's ticks.
+const projectMembership = computed(() => {
+  const members = {};
+  for (const card of selectedCards.value) {
+    for (const pid of card.project_ids ?? []) {
+      (members[`project-${pid}`] ??= new Set()).add(cardKey(card));
+    }
+  }
+  return members;
+});
+
+function runEntry(entry) {
+  if (entry.reason) return;
+  closeMenu({ refocus: true });
+  entry.run();
+}
+
+function onMenuKey(event) {
+  if (event.key === "Tab") {
+    event.preventDefault();
+    closeMenu({ refocus: true });
+    return;
+  }
+  onMenuKeydown(event);
+}
+
+function onOutside() {
+  closeMenu();
+}
+
+function onEscape(event) {
+  if (!cardMenu.value || event.key !== "Escape") return;
+  event.stopImmediatePropagation();
+  event.preventDefault();
+  closeMenu({ refocus: true });
+}
+
+watch(() => route.fullPath, () => closeMenu());
+document.addEventListener("mousedown", onOutside);
+document.addEventListener("keydown", onEscape, true);
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onOutside);
+  document.removeEventListener("keydown", onEscape, true);
+});
+
+// ── Rename ────────────────────────────────────────────────────────────────
+const renaming = ref(null); // the key of the card being renamed
+const renameText = ref("");
+const renameEl = ref(null);
+
+async function startRename(card) {
+  closeMenu();
+  renaming.value = cardKey(card);
+  renameText.value = card.name;
+  await nextTick();
+  const el = Array.isArray(renameEl.value) ? renameEl.value[0] : renameEl.value;
+  el?.focus();
+  el?.select();
+}
+
+async function commitRename(card) {
+  if (renaming.value !== cardKey(card)) return;
+  renaming.value = null;
+  const name = renameText.value.trim();
+  if (!name || name === card.name) return;
+  await eachCard([card], (c) => renameCard(c, name), "rename.");
+}
+
+/** The name the words its sheets were drawn from give *card*, when that is
+ * another than it has. */
+function namedFromWords(card) {
+  const name = nameFromDescription(card.description);
+  return name && name !== card.name ? name : "";
+}
+
+function nameFromWords(picked) {
+  return eachCard(picked, (card) => renameCard(card, namedFromWords(card)), "rename.");
+}
+
+// ── What the menu does ────────────────────────────────────────────────────
+/** Run `act` on each card, then refresh; one notice names what failed. */
+async function eachCard(picked, act, failure) {
+  const failed = [];
+  for (const card of picked) {
+    try {
+      await act(card);
+    } catch (e) {
+      console.warn(`Studio ${failure}`, cardKey(card), e);
+      failed.push(`${card.name}: ${errorMessage(e, "Please try again.")}`);
+    }
+  }
+  await store.refresh();
+  if (failed.length) {
+    noticeStore.error(`Couldn't ${failure} ${failed.join("; ")}`, { key: `studio-${failure}` });
+  }
+}
+
+function setFavourites(picked, on) {
+  return eachCard(
+    picked.filter((card) => !!card.favourite !== on),
+    (card) => setStudioFavourite(card.kind, card.id, on),
+    "change the favourite.",
+  );
+}
+
+async function duplicateCards(picked) {
+  const taken = new Set(cards.value.map((c) => c.name));
+  const made = [];
+  await eachCard(
+    picked,
+    async (card) => {
+      const { id, name } = await duplicateCard(card, taken);
+      taken.add(name);
+      made.push(`${card.kind}:${id}`);
+    },
+    "duplicate.",
+  );
+  // The copies are the selection, so the next gesture is on them.
+  if (made.length) selectedKeys.value = made;
+}
+
+async function removeCards(picked) {
+  if (!picked.length || !(await confirm(deleteWords(picked)))) return;
+  const gone = new Set(picked.map(cardKey));
+  await eachCard(picked, deleteCard, "delete.");
+  selectedKeys.value = selectedKeys.value.filter((k) => !gone.has(k));
+}
+
+function onProjectPicked({ projectId, action }) {
+  if (projectId == null) return;
+  const picked = selectedCards.value;
+  return eachCard(
+    picked,
+    (card) => setCardProject(card, projectId, action === "added"),
+    "change the project.",
+  );
 }
 
 // ── New scene ─────────────────────────────────────────────────────────────
@@ -689,7 +1243,7 @@ const setOptions = computed(() => {
 });
 
 async function addSet() {
-  const kind = section.value === "locations" ? "location" : "prop";
+  const kind = SET_SECTIONS[section.value]?.kind ?? "prop";
   try {
     await listSetInStudio(addSetId.value, kind);
     addSetOpen.value = false;
@@ -717,6 +1271,36 @@ async function addSet() {
   min-width: 0;
 }
 
+/* The rename field over the card's name line. */
+.studio-rename {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-raised);
+}
+
+/* Selected: the workflow card's wash and ring, on the picture. */
+.studio-cell--selected .studio-card__ph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
+}
+
+/* The sidebar row menu's frame (StudioSidebar.vue). */
+.studio-ctx-menu {
+  position: fixed;
+  z-index: var(--z-overlay);
+  min-width: 160px;
+  max-width: 280px;
+  user-select: none;
+}
+
 .studio-scroll--tiles {
   padding: var(--space-4);
 }
@@ -739,10 +1323,11 @@ async function addSet() {
   gap: var(--space-4) var(--space-3);
 }
 
+/* `--tile-aspect` is the pictures' own shape where it is known. */
 .studio-tile-media {
   display: grid;
   gap: var(--space-1);
-  aspect-ratio: 5 / 3;
+  aspect-ratio: var(--tile-aspect, 5 / 3);
   background: rgb(var(--v-theme-background));
 }
 
@@ -763,7 +1348,7 @@ async function addSet() {
 
 .studio-tile-media--scene {
   grid-template-columns: 1fr;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: var(--tile-aspect, 3 / 2);
   background: rgb(var(--v-theme-surface));
 }
 

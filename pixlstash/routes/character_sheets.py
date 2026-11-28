@@ -90,6 +90,13 @@ class SheetPromptRequest(BaseModel):
         "left out and no look is appended, whatever `photo_look` says. The "
         "`moss` and `regions` layouts ignore it.",
     )
+    single: bool = Field(
+        False,
+        description="`location` only: one wide photograph of the place at "
+        f"{character_sheet.LOCATION_VIEW_SIZE[0]}x"
+        f"{character_sheet.LOCATION_VIEW_SIZE[1]} instead of a four-view "
+        "sheet, the picture More angles films the other views from.",
+    )
 
 
 class SheetPrompt(BaseModel):
@@ -273,6 +280,9 @@ class LocationShotsPromptRequest(BaseModel):
     layout: str = Field("", max_length=2000)
     light: str = Field("plain daylight", max_length=200)
     shots: list[LocationShot] = Field(min_length=1, max_length=4)
+    last_picture: bool = Field(
+        False, description="A second picture is the video's last frame and shot."
+    )
 
 
 class LocationShotsPrompt(BaseModel):
@@ -283,6 +293,17 @@ class LocationShotsPrompt(BaseModel):
 class LocationShotsRequest(BaseModel):
     video_picture_id: int
     shots: int = Field(ge=1, le=4, description="New shots, the picture's own left out.")
+    ends_on_picture: bool = Field(
+        False, description="The last shot is a second picture, not a new view."
+    )
+
+
+class PictureThingsRequest(BaseModel):
+    picture_id: int
+
+
+class PictureThings(BaseModel):
+    things: list[str]
 
 
 class LocationRestorePair(BaseModel):
@@ -324,8 +345,22 @@ def create_router(server) -> APIRouter:
         response_model=SheetPrompt,
     )
     def sheet_prompt(payload: SheetPromptRequest):
+        if payload.single:
+            if payload.kind != "location":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Only a location is drawn as a single wide picture.",
+                )
+            width, height = character_sheet.LOCATION_VIEW_SIZE
+            return SheetPrompt(
+                prompt=character_sheet.location_view_prompt(payload.description),
+                negative=character_sheet.NEGATIVE_PROMPT,
+                width=width,
+                height=height,
+            )
         width, height = character_sheet.item_canvas(payload.kind, payload.size)
         fields = payload.model_dump()
+        fields.pop("single")
         kind = fields.pop("kind")
         if kind == "character":
             prompt = character_sheet.sheet_prompt(**fields)
@@ -473,9 +508,13 @@ def create_router(server) -> APIRouter:
         shots = [shot.model_dump() for shot in payload.shots]
         return LocationShotsPrompt(
             prompt=location_angles.location_shots_prompt(
-                payload.description, payload.layout, shots, payload.light
+                payload.description,
+                payload.layout,
+                shots,
+                payload.light,
+                last_picture=payload.last_picture,
             ),
-            seconds=location_angles.shots_seconds(len(shots)),
+            seconds=location_angles.shots_seconds(len(shots), payload.last_picture),
         )
 
     @router.post(
@@ -483,16 +522,20 @@ def create_router(server) -> APIRouter:
         summary="Take a location's new views out of its shots video",
         description=(
             "Finds the hard cuts in the video and imports the sharpest frame "
-            "of each new shot as a picture made from it, in shot order. 409 "
-            "when the video holds another number of cuts than `shots`, or "
-            "cannot be read; 404 for a picture that is not there."
+            "of each new shot as a picture made from it, in shot order. The "
+            "video model may film fewer or more shots than `shots`; every one "
+            "it made is returned. 409 when the video has no cut (no new view) "
+            "or cannot be read; 404 for a picture that is not there."
         ),
         response_model=UsedSheets,
     )
     def location_shots(request: Request, payload: LocationShotsRequest):
         try:
             frame_ids = location_angles.frames_of_video(
-                server, payload.video_picture_id, payload.shots
+                server,
+                payload.video_picture_id,
+                payload.shots,
+                ends_on_picture=payload.ends_on_picture,
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -508,6 +551,27 @@ def create_router(server) -> APIRouter:
             },
         )
         return UsedSheets(picture_ids=frame_ids)
+
+    @router.post(
+        "/item-sheets/shots/things",
+        summary="The things in a location's picture, for its new views",
+        description=(
+            "Florence-2's region captions of the picture, as phrases a new "
+            'view can show ("the brick fireplace on the left"), biggest '
+            f"first, at most {location_angles.THINGS_MAX}. A picture in the "
+            "Scrapheap counts. 404 for a picture that is not there; 409 when "
+            "it cannot be read or the describer is not running."
+        ),
+        response_model=PictureThings,
+    )
+    def location_picture_things(payload: PictureThingsRequest):
+        try:
+            things = location_angles.things_in_picture(server, payload.picture_id)
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except character_sheet.SheetUnreadable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return PictureThings(things=things)
 
     @router.post(
         "/item-sheets/shots/check",

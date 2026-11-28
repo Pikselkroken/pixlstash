@@ -110,7 +110,9 @@ import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import { ITEM_KINDS } from "../../utils/sheetKinds";
+import { nameFromDescription } from "../../utils/itemNames";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import FaceClustersDialog from "./FaceClustersDialog.vue";
 
 const props = defineProps({
@@ -124,6 +126,9 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "done"]);
+// The draws closed mid-way, by person or item, kept for the next open and
+// for the Studio's placeholders.
+const sheetDraws = useSheetDrawsStore();
 
 const step = ref(null);
 const facesOpen = ref(false);
@@ -153,7 +158,7 @@ const held = computed(
 /** The draw kept for this person, if it is theirs: a deleted person's id can
  * come back on a new one, so the name has to match too. */
 function savedFor() {
-  const entry = saved.get(savedKey.value);
+  const entry = sheetDraws.get(savedKey.value);
   return entry?.name === name.value ? entry.snapshot : null;
 }
 
@@ -161,7 +166,18 @@ function close() {
   if (held.value) return;
   const snapshot = step.value?.snapshot;
   if ((props.character || item.value) && snapshot) {
-    saved.set(savedKey.value, { name: name.value, snapshot });
+    // Kept where the Studio reads it, for a placeholder while it draws.
+    sheetDraws.keep(savedKey.value, {
+      name: name.value,
+      kind: props.kind,
+      character: props.character ? { id: props.character.id, name: name.value } : null,
+      label: item.value
+        ? snapshot.form?.name?.trim() ||
+          nameFromDescription(snapshot.form?.description) ||
+          item.value.newName
+        : `${name.value}'s sheets`,
+      snapshot,
+    });
   }
   leave();
 }
@@ -171,7 +187,7 @@ function close() {
 function cancel() {
   if (held.value) return;
   step.value?.stopAll?.();
-  saved.delete(savedKey.value);
+  sheetDraws.forget(savedKey.value);
   leave();
 }
 
@@ -187,7 +203,7 @@ function leave() {
  * The build screen then waits for their faces for its picker; nothing here
  * reads them, so the dialog closes at once. */
 function onCut(ids) {
-  saved.delete(savedKey.value);
+  sheetDraws.forget(savedKey.value);
   // An item's step goes on to make its set and says so with `done`.
   if (item.value) return;
   emit("done", { character: props.character, pictureIds: ids });
@@ -216,15 +232,6 @@ function onFacesClosed() {
 }
 </script>
 
-<script>
-/** person id (or `kind:person id` for an item) -> `{name, snapshot}`: the
- * sheet step's last `snapshot`,
- * shared by every mount.
- * ponytail: held for the app session only; a reload forgets an unfinished
- * draw (its sheets stay in the Scrapheap). Store it on the character if that
- * turns out to matter. */
-const saved = new Map();
-</script>
 
 <style scoped>
 .csd-lead {

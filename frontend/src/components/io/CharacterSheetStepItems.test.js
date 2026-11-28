@@ -256,6 +256,41 @@ describe("CharacterSheetStep: an outfit", () => {
     wrapper.unmount();
   });
 
+  it("names a prop from its description when none is typed", async () => {
+    const wrapper = mount(CharacterSheetStep, {
+      props: { kind: "prop", character: null },
+      global: { stubs: { teleport: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("a red umbrella, open");
+    await flushPromises();
+    expect(wrapper.findComponent('[data-testid="cs-item-name"]').props("placeholder")).toBe(
+      "Red umbrella",
+    );
+    wrapper.unmount();
+  });
+
+  it("offers one sheet, and then draws just one", async () => {
+    const wrapper = mountOutfit();
+    await flushPromises();
+    const counts = wrapper.findComponent('[aria-label="Sheets to draw"]');
+    expect(counts.props("options").map((o) => o.id)).toEqual([1, 2, 3, 4]);
+    counts.vm.$emit("update:modelValue", 1);
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("a mustard raincoat");
+    await flushPromises();
+    // No name typed: the outfit is named from what its sheet draws, and the
+    // field says so before.
+    expect(wrapper.findComponent('[data-testid="cs-item-name"]').props("placeholder")).toBe(
+      "Mustard raincoat",
+    );
+    await wrapper.vm.footer.primary.run();
+    await flushPromises();
+    expect(api.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 1, label: "Outfit sheet · Mustard raincoat" }),
+    );
+  });
+
   it("can draw once the chosen workflow passes, before the rest answer", async () => {
     // A large library pre-flights a hundred workflows; one still out must not
     // hold Draw back.
@@ -282,8 +317,9 @@ describe("CharacterSheetStep: an outfit", () => {
     expect(wrapper.vm.phase).toBe("pick");
     await wrapper.vm.footer.primary.run();
     await flushPromises();
+    // No name typed: the one taken from the description.
     expect(api.createPictureSet).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "New outfit" }),
+      expect.objectContaining({ name: "Mustard raincoat" }),
     );
     // Nothing is cut: back on the form, where the name is, and the sheets one
     // step away.
@@ -291,7 +327,7 @@ describe("CharacterSheetStep: an outfit", () => {
     expect(wrapper.vm.phase).toBe("describe");
     expect(wrapper.find('[data-testid="cs-item-name"]').exists()).toBe(true);
     expect(wrapper.vm.footer.back.label).toBe("Back to the sheets");
-    expect(wrapper.vm.error).toContain("Couldn't make the set New outfit");
+    expect(wrapper.vm.error).toContain("Couldn't make the set Mustard raincoat");
     expect(wrapper.emitted("cut")).toBeUndefined();
     wrapper.unmount();
   });

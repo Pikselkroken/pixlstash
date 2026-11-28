@@ -86,7 +86,7 @@
 
 .studio-card__ph {
   position: relative;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: var(--tile-aspect, 1 / 1);
   border-radius: var(--radius-md);
   overflow: hidden;
   background: rgb(var(--v-theme-surface));
@@ -201,6 +201,8 @@
 }
 
 .studio-lightbox__main {
+  /* The selection pill floats over the end of the pictures. */
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -322,6 +324,46 @@
   object-fit: contain;
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-surface));
+}
+
+/* A picture of an item is a button that selects it: the workflow card's
+   wash and ring when it is selected. */
+.studio-angle__pick {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  cursor: pointer;
+}
+
+.studio-angle__pick img {
+  display: block;
+}
+
+.studio-angle__pick:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--space-1);
+}
+
+.studio-angle--on .studio-angle__pick::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
+}
+
+.studio-ctx-menu {
+  position: fixed;
+  z-index: var(--z-overlay);
+  min-width: 160px;
+  max-width: 280px;
+  user-select: none;
 }
 
 .studio-list-link {

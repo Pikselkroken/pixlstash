@@ -3,7 +3,8 @@
 // a cut closes the dialog, Cancel stops the runs and drops the draw, and a cut
 // in flight cannot be closed out of.
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 
@@ -17,6 +18,7 @@ const stepState = vi.hoisted(() => ({
   zooming: false,
   savedSeen: [],
   stopAll: null,
+  snapshot: null,
 }));
 vi.mock("./CharacterSheetStep.vue", () => ({
   default: defineComponent({
@@ -27,7 +29,7 @@ vi.mock("./CharacterSheetStep.vue", () => ({
       expose({
         working: ref(stepState.working),
         zooming: ref(stepState.zooming),
-        snapshot: ref({ phase: "pick", order: [41, 42] }),
+        snapshot: ref(stepState.snapshot ?? { phase: "pick", order: [41, 42] }),
         footer: ref({ lead: "", primary: { label: "Keep", enabled: true, run() {} } }),
         error: ref(""),
         workflowOptions: ref([]),
@@ -43,6 +45,7 @@ vi.mock("./FaceClustersDialog.vue", () => ({
 
 import CharacterSheetsDialog from "./CharacterSheetsDialog.vue";
 import CharacterSheetStep from "./CharacterSheetStep.vue";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 
 function mountDialog(character, kind = "character") {
   return mount(CharacterSheetsDialog, {
@@ -56,6 +59,9 @@ const cancelButton = (wrapper) => wrapper.find('[data-testid="csd-cancel"]');
 
 const closeButton = (wrapper) =>
   wrapper.find('[aria-label="Close"], .app-dialog__actions button');
+
+// The closed draws are kept in a store: one per test, so none carries over.
+beforeEach(() => setActivePinia(createPinia()));
 
 describe("CharacterSheetsDialog", () => {
   it("keeps a draw that is closed, and hands it back on reopening", async () => {
@@ -78,6 +84,30 @@ describe("CharacterSheetsDialog", () => {
     await flushPromises();
     expect(stepState.savedSeen.at(-1)).toBeNull();
     stranger.unmount();
+  });
+
+  it("keeps a closed item draw where the Studio shows a placeholder for it", async () => {
+    stepState.working = false;
+    const wrapper = mountDialog({ id: 3, name: "Wren" }, "outfit");
+    await flushPromises();
+    await closeButton(wrapper).trigger("click");
+    const kept = useSheetDrawsStore().get("outfit:3");
+    // No name typed: the kind's own, as the set would be called.
+    expect(kept).toMatchObject({
+      kind: "outfit",
+      character: { id: 3, name: "Wren" },
+      label: "New outfit",
+    });
+    await mountDialog({ id: 3, name: "Wren" }, "outfit").find('[data-testid="csd-cancel"]').trigger("click");
+    expect(useSheetDrawsStore().get("outfit:3")).toBeNull();
+
+    // A name typed for it is the placeholder's.
+    stepState.snapshot = { phase: "drawing", form: { name: "  Raincoat " }, runs: [] };
+    const named = mountDialog({ id: 4, name: "Ash" }, "outfit");
+    await flushPromises();
+    await closeButton(named).trigger("click");
+    stepState.snapshot = null;
+    expect(useSheetDrawsStore().get("outfit:4").label).toBe("Raincoat");
   });
 
   it("closes once the sheets are cut, and forgets the draw", async () => {

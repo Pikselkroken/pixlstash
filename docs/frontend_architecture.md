@@ -8833,8 +8833,10 @@ inside its lightboxes, so the rail is empty on `/studio`.
 - **`useStudioStore`** holds one `GET /studio/overview` for the scope:
   scenes, cast, outfits, locations, props. Every list, grid and lightbox reads
   it; a change calls `refresh()`.
-- **Any project** lists the kinds (All scenes, Favourites, Cast, Locations,
-  Props), each a grid with filters in its toolbar. **In a project** the
+- **Any project** lists the kinds (All scenes, Favourites, Cast, Wardrobe,
+  Locations, Props), each a grid with filters in its toolbar. The Wardrobe
+  holds every outfit, a person's and those that are no one's (filter *Worn
+  by*); a person's outfits are under that person too. **In a project** the
   sidebar lists the items under an All … row per section; the open scene
   unfolds to its location and cast, the open person to their wardrobe.
 - **Every sidebar row has a menu** (right-click, the Menu key, Shift+F10): a
@@ -8846,6 +8848,71 @@ inside its lightboxes, so the rail is empty on `/studio`.
   its workflow picks. New
   scene and Add a set reach the grid's own dialogs through one-shot route
   keys, `?new=1` or `?new=location:<id>` and `?add=1`.
+- **Shoot offers only the workflows that can shoot a scene**
+  (`utils/studioWorkflows.js`): a still on an image workflow with at least
+  one reference input, a clip on a video workflow whose pre-flight names a
+  picture input (asked once per card). Hidden ones, drafts, sheet workflows
+  and the Studio's own pipeline built-ins (Location Shots, Restore a Frame,
+  the sheet and wide-picture ones) are never offered; with none left the
+  picker says so and the clip button says why it is off. The built-in
+  *… Scene (PixlStash)* workflows come first: their one picture input fans
+  out, so Shoot asks the shot for as many references as the pre-flight's
+  `more_pictures` allow, numbered in its `picture_tag`, and sends the extras
+  as that input's `more_picture_ids`.
+- **The grids select as the picture grid does**: click selects one,
+  Ctrl/Cmd+click adds or takes away, Shift+click takes the run from the first
+  selected, Ctrl+A takes all, Esc or a click on the empty grid clears;
+  double-click or Enter opens. A key is `kind:id`, since kinds share ids.
+  A selection wears the app's pill (`panels/StudioSelectionBar.vue` on
+  `.selbar`, floated by `.selbar-float`): the count with Select all and
+  Clear, the verbs as round buttons, Project in a popover, Delete last, then
+  Clear; an item's pictures wear the same pill.
+  Right-click (Menu key, Shift+F10) opens the sidebar's `.ctx-menu` for the
+  selection, selecting a card outside it alone first: Open, the favourite,
+  Duplicate, Project (`AddToEntityControl` fed `project_ids` from the
+  overview), Delete… (also the Delete key). `utils/studioCardActions.js` sends
+  each verb to the API that owns the kind: a scene's own routes; a person's
+  character routes; a set's picture-set routes. A scene is in one project,
+  so adding one moves it; a person or a set gains it. A copy of a scene keeps
+  its cast, props, setting and camera but not its takes; a copy of a set
+  keeps its pictures and kind; a person is not duplicated.
+- **A double-click on a picture in the Studio opens it in the Lightbox**: an
+  item's pictures, a person's picture, a scene's takes (the strip and the
+  one shown). `composables/useOpenInLightbox` pushes All Pictures with
+  `?overlay=<id>&from=<the Studio's full path>`, so Esc or Back lands on the
+  item again, query and all (`utils/lightboxRoute.js`).
+- **Every Studio item renames in place**: *Rename…* in the grid's and the
+  sidebar's menus, F2 on one selected card or in an item's lightbox, a
+  double-click on a card's name or the lightbox title (`renameCard`: a
+  scene's, a person's or the set's own route). The sidebar's opens the item
+  with `?rename=1`, a one-shot the lightbox (or a scene's name field) takes.
+  The grid ignores its keys while a field has them. *Name from description*
+  names the selected outfits, locations and props from their sets'
+  descriptions, every one whose name differs.
+- **A person's lightbox shows their reference pictures** (`GET
+  /characters/{id}/reference_pictures`) above the wardrobe, each opening in
+  the Lightbox on a double-click or Enter, or says where they are chosen.
+- **An item is named from what its sheets draw** when no name is typed
+  (`utils/itemNames.nameFromDescription`: the description's first clause,
+  without its article, capitalised, at most 40 characters on a word), the
+  name field showing it as its placeholder; outfits, locations and props
+  alike. An outfit still called *New outfit* takes that name, from its set's
+  description, when it is added to a wardrobe.
+- **Add existing outfit…** in a person's lightbox opens
+  `widgets/OutfitPicker.vue`: every outfit not theirs, narrowed by whose it
+  is (*Not anyone's*, each person) and by name, several at once, a
+  double-click adding one. It wears the picture picker's frame
+  (`PicturePicker.css`, shared by both). `addOutfitToWardrobe`
+  (`utils/studioCardActions.js`) makes a no-one's outfit theirs
+  (`parent_character_id`) and copies another person's, the same pictures in
+  a set of their own, named for them when the name is taken: an outfit is
+  taken from nobody.
+- **An item's lightbox shows every picture** of an outfit, location or prop,
+  the first four named as the sheet cuts them, and selects them with the
+  grid's gestures (click, Ctrl, Shift, Esc clears before it closes). A bar
+  and a right-click menu offer *Remove from this …* (`DELETE
+  /picture_sets/{id}/members/{picture}`, the picture stays) and *Delete*
+  (`deletePictures`, to the Scrapheap; also the Delete key).
 - **`StudioScene`** is blocking on the picture: the location's view (the
   camera's `view`) is the stage, each person and prop a box dragged into
   place and sized from its corner. The inspector shows the selection in
@@ -8854,6 +8921,26 @@ inside its lightboxes, so the rail is empty on `/studio`.
   hands the run keys to the scene; while any is drawing the scene is read
   every 3 s, which files finished runs as takes. A clip runs the chosen video
   workflow, from the scene or from a still take.
+- **A location draw goes on in the background.** `LocationAnglesDialog` is
+  mounted once, in `App.vue`, and opened through `useLocationDrawStore`
+  (`openFor(location | null)`); closing it while a draw runs (*Keep going in
+  the background*) or while what it made waits leaves the draw going, and
+  opening it again shows where it got to. *Stop* ends the runs; *Discard*
+  throws away what was made. The dialog reports `{locationId, name, status,
+  fraction, ready}` to the store, a run's share from its `percent` in Tasks;
+  `widgets/DrawProgress.vue` draws it under the location's card and sidebar
+  row, and a new location not made yet gets a card of its own in Locations.
+  A draw that ends with the dialog shut says so in a notice. One draw at a
+  time: opening for another location opens the one under way.
+- **What draws in the background has a placeholder where it will land**
+  (`widgets/DrawPlaceholder.vue`: a dashed frame, what it is, and the draw's
+  `DrawProgress` inside). More angles reports how many views it makes
+  (`count`, `making`), and the location's lightbox shows a tile per view.
+  Sheet draws closed mid-way are kept in `useSheetDrawsStore` (it holds what
+  the sheet dialog's module map did): a placeholder card in Wardrobe,
+  Locations or Props and in the wearer's lightbox, a bar under the person
+  whose sheets they are, progress from each run's percent in Tasks, ready
+  once none is left. A click opens the dialog on the draw.
 - **More angles…** on a location's lightbox opens `io/LocationAnglesDialog`:
   a source picture from the location, a layout sentence, three views (a
   preset and words each) and the light. It runs the shots video, asks the
@@ -8862,6 +8949,33 @@ inside its lightboxes, so the rail is empty on `/studio`.
   puts them and the video in the location's set and sends the frames to the
   Scrapheap. The built-ins are found by the names they ship under. Closing it
   stops its runs.
+- **A new location starts from a video, not a sheet.** *Draw location
+  sheets…* (`openSheets` in `App.vue`) opens `LocationAnglesDialog` with no
+  location: a name and a description, then four wide pictures (the
+  *MiniMax H3 Image T2I* built-in, `POST /character-sheets/prompt` with
+  `single: true`, 2560x1440, held), which become the pictures to start from;
+  the rest is More angles. *Use* makes the set (`createPictureSet`, listed in
+  the Studio as a location) with the chosen picture, the kept views and the
+  video; the other wide pictures stay in the Scrapheap. *Draw a 2×2 sheet
+  instead* opens the sheet dialog (`openSheets({kind: "location", sheet:
+  true})`). The video model may film fewer shots than asked; the server
+  returns the ones it made and the dialog numbers them rather than guess
+  which preset went missing.
+  The wide pictures' prompt is a field: *Write it from the place* fills it
+  from the server, the owner may change it, and *Draw 4 again* on the picture
+  step draws four new ones from it in place of those shown. *Embellish*
+  appears when the wide workflow's text encoder is a chat LLM (its exported
+  CLIPLoader's `type` is in `LLM_TYPES`) and rewrites the field with it. At
+  the end the picture started from leads the row of views, and the zoom
+  steps from it through them, with Keep in the pop-out.
+  More angles films from one of the location's pictures, or from two:
+  Ctrl+click marks a second (*Start*, *End*) and the run is *MiniMax H3
+  Location Shots, First and Last*, the video ending on it (`last_frame`), the
+  new views filmed between; its loaders are told apart by title. New
+  location keeps one, its wide pictures being takes of a place, not views of
+  one. The number of new views is picked, one to four (`la-view-count`); the
+  video is two seconds a view longer, set through the shots workflow's
+  *duration* input (`GET /workflows/{id}/form-inputs`).
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always

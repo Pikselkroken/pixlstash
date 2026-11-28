@@ -17,6 +17,7 @@ from pixlstash.db_models import Picture
 from pixlstash.db_models.studio import Scene
 from pixlstash.server import Server
 from pixlstash.services import comfyui_service, location_angles
+from pixlstash.services import studio as studio_service
 from pixlstash.services.studio import (
     Item,
     Person,
@@ -124,6 +125,34 @@ def test_a_three_person_shot_names_everyone_in_their_outfit_with_the_prop_held()
     assert "A red stick umbrella (picture 6), open, held by Juno." in prompt
     assert "Heavy rain, night." in prompt
     assert shot["loras"] == []
+
+
+def test_a_minimax_shot_names_each_picture_as_its_conditioning_reads_it():
+    people, outfits, cast = _three_people()
+    shot = compose_shot(
+        _scene(cast=cast),
+        location=STREET,
+        people=people,
+        outfits=outfits,
+        props={},
+        picture_tag="<Picture {n}>",
+    )
+    prompt = shot["prompt"]
+    assert "a neon-lit street, wet asphalt (<Picture 1>)" in prompt
+    assert "short red hair (the person in <Picture 2>)" in prompt
+    assert "wearing a mustard-yellow raincoat (<Picture 3>)" in prompt
+    assert "(picture " not in prompt
+    clip = compose_shot(
+        _scene(cast=cast),
+        location=STREET,
+        people=people,
+        outfits=outfits,
+        props={},
+        kind="clip",
+        from_picture_id=900,
+        picture_tag="<Picture {n}>",
+    )
+    assert clip["prompt"].startswith("Bring <Picture 1> to life")
 
 
 def test_a_lora_cast_member_brings_their_lora_and_not_their_reference():
@@ -263,7 +292,7 @@ def _item(client, kind, **set_body) -> int:
     return set_id
 
 
-def test_a_scene_is_made_cast_and_listed_in_its_project(env):
+def test_a_scene_is_made_cast_and_listed_in_its_project(env, monkeypatch):
     client = env.client
     project = _project(client)
     other = _project(client)
@@ -312,9 +341,125 @@ def test_a_scene_is_made_cast_and_listed_in_its_project(env):
     cast = {c["id"]: c for c in everywhere["cast"]}
     assert outfit in cast[person]["outfit_ids"]
     assert cast[person]["scene_count"] >= 1
+    # Each card says every project it is in, for its Project menu.
+    assert {s["id"]: s["project_ids"] for s in everywhere["scenes"]}[scene["id"]] == [
+        project
+    ]
+    locations = {s["id"]: s for s in everywhere["locations"]}
+    assert locations[location]["project_ids"] == [project]
+    assert outfits[outfit]["project_ids"] == []
+    client.patch(
+        f"{API_PREFIX}/characters/{person}", json={"project_ids": [project, other]}
+    )
+    cast = {
+        c["id"]: c for c in client.get(f"{API_PREFIX}/studio/overview").json()["cast"]
+    }
+    assert cast[person]["project_ids"] == sorted([project, other])
 
     shot = client.post(f"{API_PREFIX}/studio/scenes/{scene['id']}/shot", json={}).json()
     assert "waving" in shot["prompt"] and "held by" in shot["prompt"]
+    # The pre-flight's tag reaches the prompt writer; only the two known ones
+    # are read.
+    asked = {}
+    real_shot_for = studio_service.shot_for
+
+    def shot_for(*args, **kwargs):
+        asked.update(kwargs)
+        return real_shot_for(*args, **kwargs)
+
+    monkeypatch.setattr(studio_service, "shot_for", shot_for)
+    client.post(
+        f"{API_PREFIX}/studio/scenes/{scene['id']}/shot",
+        json={"picture_tag": "<Picture {n}>", "max_references": 40},
+    )
+    assert asked["picture_tag"] == "<Picture {n}>"
+    assert asked["max_references"] == 40
+    assert (
+        client.post(
+            f"{API_PREFIX}/studio/scenes/{scene['id']}/shot",
+            json={"picture_tag": "{n.__class__}"},
+        ).status_code
+        == 422
+    )
+
+
+def test_the_studio_reads_the_library_open_now_not_the_one_it_started_with(env):
+    # A library switch puts a new vault on the server and closes the old
+    # one's database; the Studio must follow it (VaultDatabase is closed).
+    vault = env.server.vault
+    real = vault.db
+    used = []
+
+    class OpenNow:
+        def __getattr__(self, name):
+            used.append(name)
+            return getattr(real, name)
+
+    # As the switch does: the vault's database and auth's, one object.
+    vault.db = env.server.auth.vault_db = OpenNow()
+    try:
+        assert env.client.get(f"{API_PREFIX}/studio/overview").status_code == 200
+    finally:
+        vault.db = env.server.auth.vault_db = real
+    assert "run_immediate_read_task" in used
+
+
+def test_a_take_sent_to_the_scrapheap_leaves_the_scene(env):
+    client = env.client
+    path = os.path.join(env.temp_dir, "gone-take.png")
+    Image.new("RGB", (80, 60), (10, 200, 40)).save(path)
+    with open(path, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("gone-take.png", f.read(), "image/png"))]
+        )
+    picture_id = status["results"][0]["picture_id"]
+    scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Gone"}).json()
+    url = f"{API_PREFIX}/studio/scenes/{scene['id']}"
+    key = f"run-{uuid.uuid4().hex}"
+    client.post(f"{url}/runs", json={"runs": [{"key": key}]})
+    comfyui_service.record_run_outcome(key, "completed", picture_ids=[picture_id])
+    assert [t["picture_id"] for t in client.get(url).json()["takes"]] == [picture_id]
+
+    resp = client.request(
+        "DELETE", f"{API_PREFIX}/pictures", json={"picture_ids": [picture_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert client.get(url).json()["takes"] == []
+    card = {
+        c["id"]: c for c in client.get(f"{API_PREFIX}/studio/overview").json()["scenes"]
+    }[scene["id"]]
+    assert card["take_count"] == 0 and card["cover_picture_id"] is None
+
+
+def test_an_items_card_takes_the_shape_of_its_pictures(env):
+    client = env.client
+    path = os.path.join(env.temp_dir, "wide-view.png")
+    Image.new("RGB", (160, 90), (40, 120, 200)).save(path)
+    with open(path, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("wide-view.png", f.read(), "image/png"))]
+        )
+    picture_id = status["results"][0]["picture_id"]
+    location = _item(client, "location")
+    empty = _item(client, "prop")
+    resp = client.post(
+        f"{API_PREFIX}/picture_sets/{location}/members",
+        json={"picture_ids": [picture_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    overview = client.get(f"{API_PREFIX}/studio/overview").json()
+    assert {i["id"]: i["aspect"] for i in overview["locations"]}[location] == 1.7778
+    # Nothing to measure: no shape, and the card keeps its own.
+    assert {i["id"]: i["aspect"] for i in overview["props"]}[empty] is None
+
+    # Deleted, to the Scrapheap: it leaves the location with it.
+    resp = client.request(
+        "DELETE", f"{API_PREFIX}/pictures", json={"picture_ids": [picture_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    overview = client.get(f"{API_PREFIX}/studio/overview").json()
+    shown = {i["id"]: i["picture_ids"] for i in overview["locations"]}[location]
+    assert picture_id not in shown
 
 
 def test_a_prop_is_held_only_by_someone_in_the_cast(env):
@@ -395,7 +540,7 @@ def test_a_scene_naming_a_missing_set_is_refused(env):
 def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     client = env.client
     path = os.path.join(env.temp_dir, "take.png")
-    Image.new("RGB", (64, 64), (200, 40, 40)).save(path)
+    Image.new("RGB", (96, 64), (200, 40, 40)).save(path)
     with open(path, "rb") as f:
         status = upload_pictures_and_wait(
             client, [("file", ("take.png", f.read(), "image/png"))]
@@ -420,6 +565,9 @@ def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     assert [t["picture_id"] for t in filed["takes"]] == [picture_id]
     assert filed["takes"][0]["format"].lower() == "png"
     assert filed["ended"][0]["picture_count"] == 1
+    # The scene's card takes its cover's shape.
+    cards = client.get(f"{API_PREFIX}/studio/overview").json()["scenes"]
+    assert {c["id"]: c["cover_aspect"] for c in cards}[scene["id"]] == 1.5
 
     # A picture already filed is not filed again, by another run or twice.
     again = f"run-{uuid.uuid4().hex}"
@@ -554,24 +702,119 @@ def test_the_shots_prompt_has_the_picture_first_and_a_cut_per_shot():
     assert location_angles.shots_seconds(3) == 8
 
 
-def test_cuts_are_found_where_the_difference_jumps_and_a_wrong_count_refuses():
+def test_two_pictures_film_the_new_views_between_them():
+    prompt = location_angles.location_shots_prompt(
+        "", "", [{"preset": "closer", "words": "the bar"}], last_picture=True
+    )
+    assert prompt.startswith(
+        "Gimbal footage inside the place in <Picture 1> and <Picture 2>"
+    )
+    assert "A sequence of 3 static shots" in prompt
+    assert "SHOT 1: exactly <Picture 1>, held still." in prompt
+    assert prompt.endswith("SHOT 3: exactly <Picture 2>, held still.")
+    assert location_angles.shots_seconds(3, last_picture=True) == 10
+    # The last shot is the second picture, not a new view.
+    spans = [(10, 30), (30, 50), (50, 70)]
+    assert location_angles.new_spans_before_the_last_picture(spans) == spans[:2]
+    with pytest.raises(location_angles.ShotsNotFound):
+        location_angles.new_spans_before_the_last_picture([(10, 70)])
+
+
+def test_every_cut_the_video_made_is_found_and_none_refuses():
     diffs = [0.3] * 47
     for at in (11, 23, 35):
         diffs[at] = 30.0
     diffs[24] = 28.0  # one cut spread over two frames is still one cut
-    assert location_angles.find_cuts(diffs, 3) == [12, 24, 36]
-    with pytest.raises(location_angles.ShotsNotFound, match="3 hard cuts where 2"):
-        location_angles.find_cuts(diffs, 2)
+    assert location_angles.find_cuts(diffs) == [12, 24, 36]
+    # The model merged two shots: the cuts it did make are kept.
+    diffs[23] = diffs[24] = 0.3
+    assert location_angles.find_cuts(diffs) == [12, 36]
+    with pytest.raises(location_angles.ShotsNotFound, match="no cut"):
+        location_angles.find_cuts([0.3] * 47)
 
 
 def test_the_sharpest_frame_of_each_new_shot_is_past_the_settle(tmp_path):
     path = str(tmp_path / "shots.mp4")
     _shots_video(path)
-    picked = location_angles.sharpest_frames(path, 3)
+    picked = location_angles.sharpest_frames(path)
     assert len(picked) == 3
     for shot, index in enumerate(picked, start=1):
         # Each pick inside its own shot, after the blurred settle.
         assert shot * 24 + 8 <= index < (shot + 1) * 24
+
+
+def test_a_cut_too_near_the_end_gives_no_shot_of_its_own():
+    # Cuts at 48 and 96 of 144 frames: two shots. One more at 141 is a flash.
+    assert location_angles.shot_spans([48, 96, 141], 144) == [(48, 96), (96, 141)]
+    assert location_angles.shot_spans([48], 144) == [(48, 144)]
+    with pytest.raises(location_angles.ShotsNotFound):
+        location_angles.shot_spans([140], 144)
+
+
+def test_the_picked_frame_is_steady_over_its_neighbours_and_near_the_middle():
+    # A still shot, every frame as sharp: the middle wins, not an edge.
+    still = location_angles.pick_frame(0, 48, [100.0] * 48, [0.05] * 48)
+    assert 22 <= still <= 25
+    # A pan with a one-frame dip at 12: the dip's neighbours still move, so
+    # the steady stretch at 30-36 wins although no frame there is sharper.
+    motion = [2.0] * 48
+    motion[12] = 0.0
+    for i in range(28, 39):
+        motion[i] = 0.1
+    assert 30 <= location_angles.pick_frame(0, 48, [100.0] * 48, motion) <= 36
+    # A shot shorter than two settles still never takes the blur after its
+    # cut, however sharp a frame there reads.
+    short = [100.0] * 8
+    short[1] = 1000.0
+    assert (
+        location_angles.pick_frame(0, 8, short, [0.05] * 8)
+        >= location_angles.SETTLE_FRAMES
+    )
+
+
+def test_the_things_in_a_picture_are_offered_biggest_first_with_their_side():
+    regions = [
+        ("wooden chair", [1700, 600, 1800, 800], None),
+        ("brick fireplace", [100, 300, 700, 1000], None),
+        ("a pub with tables", [0, 0, 2560, 1440], None),  # the place itself
+        ("Brick  Fireplace", [1000, 300, 1200, 600], None),  # said already
+        ("long oak bar", [1100, 400, 1500, 900], None),
+        # The room again after "in"; a description rather than a thing.
+        ("wooden bar stools in dimly lit room", [2000, 800, 2300, 1100], None),
+        ("restored wooden booth with leather seats and table", [0, 0, 900, 900], None),
+    ]
+    assert location_angles.thing_phrases(regions, 2560, 1440) == [
+        "the brick fireplace on the left",
+        "the long oak bar in the middle",
+        "the wooden bar stools on the right",
+        "the wooden chair on the right",
+    ]
+    many = [(f"thing {i}", [i, 0, i + 10, 10], None) for i in range(20)]
+    assert (
+        len(location_angles.thing_phrases(many, 2560, 1440))
+        == location_angles.THINGS_MAX
+    )
+
+
+def test_a_describer_that_fails_is_a_refusal_not_a_crash(tmp_path):
+    Image.new("RGB", (64, 36)).save(tmp_path / "wide.png")
+
+    def broken(_paths):
+        raise RuntimeError("model did not load")
+
+    server = SimpleNamespace(
+        vault=SimpleNamespace(
+            image_root=str(tmp_path),
+            db=SimpleNamespace(
+                run_immediate_read_task=lambda _fn, ids: [
+                    SimpleNamespace(id=ids[0], file_path="wide.png")
+                ]
+            ),
+            _engine=SimpleNamespace(describe_regions=broken),
+        )
+    )
+    with pytest.raises(location_angles.SheetUnreadable):
+        location_angles.things_in_picture(server, 7)
 
 
 def test_a_restore_that_turns_back_into_the_original_is_refused():
@@ -601,18 +844,21 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
     ).json()
     assert prompt["seconds"] == 8 and "SHOT 4" in prompt["prompt"]
 
-    wrong = client.post(
-        f"{API_PREFIX}/item-sheets/shots",
-        json={"video_picture_id": video_id, "shots": 2},
-    )
-    assert wrong.status_code == 409, wrong.text
+    # Four new shots asked for, three filmed: the three are kept.
     made = client.post(
         f"{API_PREFIX}/item-sheets/shots",
-        json={"video_picture_id": video_id, "shots": 3},
+        json={"video_picture_id": video_id, "shots": 4},
     )
     assert made.status_code == 200, made.text
     frames = made.json()["picture_ids"]
     assert len(frames) == 3 and video_id not in frames
+    # Ending on a second picture: its shot is no new view.
+    between = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": video_id, "shots": 2, "ends_on_picture": True},
+    )
+    assert between.status_code == 200, between.text
+    assert len(between.json()["picture_ids"]) == 2
 
     checked = client.post(
         f"{API_PREFIX}/item-sheets/shots/check",
@@ -632,6 +878,26 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
         ).status_code
         == 404
     )
+    assert (
+        client.post(
+            f"{API_PREFIX}/item-sheets/shots/things", json={"picture_id": 999999}
+        ).status_code
+        == 404
+    )
+
+    # One shot and no cut: no new view, so it is refused.
+    single = os.path.join(env.temp_dir, "single.mp4")
+    _shots_video(single, shots=1)
+    with open(single, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("single.mp4", f.read(), "video/mp4"))]
+        )
+    assert status["status"] == "completed", status
+    refused = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": status["results"][0]["picture_id"], "shots": 3},
+    )
+    assert refused.status_code == 409 and "no cut" in refused.json()["detail"]
 
 
 def test_only_an_item_that_exists_is_starred(env):

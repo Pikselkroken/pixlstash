@@ -109,17 +109,19 @@ export async function buildLocationShotsPrompt(body) {
 
 /**
  * Import the sharpest frame of each new shot of a shots video, in shot order.
- * A 409 when the video holds another number of cuts.
+ * A 409 when the video holds no new shot.
  *
  * @param {number} videoPictureId
  * @param {number} shots - new shots, the picture's own left out.
+ * @param {boolean} [endsOnPicture] - the last shot is a second picture.
  * @returns {Promise<{picture_ids: number[]}>}
  */
-export async function takeLocationShots(videoPictureId, shots) {
+export async function takeLocationShots(videoPictureId, shots, endsOnPicture = false) {
   return unwrap(
     apiClient.post("/item-sheets/shots", {
       video_picture_id: videoPictureId,
       shots,
+      ...(endsOnPicture ? { ends_on_picture: true } : {}),
     }),
   );
 }
@@ -134,5 +136,32 @@ export async function takeLocationShots(videoPictureId, shots) {
 export async function checkLocationShots(originalId, pairs) {
   return unwrap(
     apiClient.post("/item-sheets/shots/check", { original_id: originalId, pairs }),
+  );
+}
+
+/**
+ * What a new view of a location's picture could show, as Florence-2 sees the
+ * picture: phrases like "the brick fireplace on the left", biggest first.
+ *
+ * @param {number} pictureId
+ * @returns {Promise<{things: string[]}>}
+ */
+export async function locationPictureThings(pictureId) {
+  return unwrap(
+    apiClient.post("/item-sheets/shots/things", { picture_id: pictureId }),
+  );
+}
+
+/**
+ * A prompt rewritten richer by the LLM a workflow already loads as its text
+ * encoder (its CLIPLoader node), run on ComfyUI's Generate Text node.
+ *
+ * @param {{class_type: string, inputs: Object<string, string>}} loader
+ * @param {string} prompt
+ * @returns {Promise<{prompt: string}>}
+ */
+export async function embellishPrompt(loader, prompt) {
+  return unwrap(
+    apiClient.post("/item-sheets/prompt/embellish", { loader, prompt }, { timeout: 0 }),
   );
 }

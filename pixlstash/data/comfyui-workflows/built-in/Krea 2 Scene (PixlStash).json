@@ -1,0 +1,210 @@
+{
+  "1": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Scene pictures"
+    }
+  },
+  "2": {
+    "inputs": {
+      "unet_name": "krea2TurboINTXQuants_int8Mixed85GB.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "3": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader"
+  },
+  "4": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader"
+  },
+  "5": {
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "max_shift": 1.15,
+      "base_shift": 0.5,
+      "width": 1216,
+      "height": 832
+    },
+    "class_type": "ModelSamplingFlux"
+  },
+  "6": {
+    "inputs": {
+      "clip": [
+        "3",
+        0
+      ],
+      "prompt": [
+        "18",
+        0
+      ],
+      "image1": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus"
+  },
+  "7": {
+    "inputs": {
+      "positive": [
+        "6",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "resolution": "resize",
+      "resolution.megapixels": 1.0,
+      "images.image0": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ReferenceMultiLatent"
+  },
+  "8": {
+    "inputs": {
+      "conditioning": [
+        "7",
+        0
+      ],
+      "reference_latents_method": "index_timestep_zero"
+    },
+    "class_type": "FluxKontextMultiReferenceLatentMethod"
+  },
+  "9": {
+    "inputs": {
+      "conditioning": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "10": {
+    "inputs": {
+      "width": 1216,
+      "height": 832,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Scene canvas"
+    }
+  },
+  "11": {
+    "inputs": {
+      "noise_seed": 1
+    },
+    "class_type": "RandomNoise"
+  },
+  "12": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect"
+  },
+  "13": {
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1
+    },
+    "class_type": "BasicScheduler"
+  },
+  "14": {
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "9",
+        0
+      ],
+      "cfg": 1
+    },
+    "class_type": "CFGGuider"
+  },
+  "15": {
+    "inputs": {
+      "noise": [
+        "11",
+        0
+      ],
+      "guider": [
+        "14",
+        0
+      ],
+      "sampler": [
+        "12",
+        0
+      ],
+      "sigmas": [
+        "13",
+        0
+      ],
+      "latent_image": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced"
+  },
+  "16": {
+    "inputs": {
+      "samples": [
+        "15",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "17": {
+    "inputs": {
+      "images": [
+        "16",
+        0
+      ],
+      "filename_prefix": "Scene-Krea2"
+    },
+    "class_type": "SaveImage"
+  },
+  "18": {
+    "inputs": {
+      "value": "A wide establishing shot of the location in the pictures, same architecture, materials and light."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Prompt"
+    }
+  }
+}

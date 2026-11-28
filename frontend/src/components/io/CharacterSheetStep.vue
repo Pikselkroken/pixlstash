@@ -120,12 +120,12 @@
           <span class="cs-hint">{{ descriptionHint }}</span>
         </div>
         <!-- An item's name: the set its panels go in. The description says
-             the rest. -->
+             the rest; left blank, the name is taken from it, as shown. -->
         <RecentInput
           v-if="item"
           v-model="form.name"
           label="Name"
-          :placeholder="item.newName"
+          :placeholder="nameFromDescription(form.description) || item.newName"
           data-testid="cs-item-name"
         />
         <!-- Each offers what earlier sheets were drawn with, the last one
@@ -845,6 +845,7 @@ import { usePromptAssist } from "../../composables/usePromptAssist";
 import { readChoices, withRecent, writeChoices } from "../../utils/recentValues";
 import { HANDLES, moveBox, nudgeBox, resizeBox } from "../../utils/sheetCuts";
 import { ITEM_KINDS } from "../../utils/sheetKinds";
+import { nameFromDescription } from "../../utils/itemNames";
 import PromptAssistGroup from "./PromptAssistGroup.vue";
 
 const props = defineProps({
@@ -872,7 +873,8 @@ const FRAMINGS = [
   { id: "knees_up", label: "Knees-up" },
   { id: "full_body", label: "Full body" },
 ];
-const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
+// One sheet is a choice of its own: a quick look, or a sheet to cut at once.
+const COUNTS = [1, 2, 3, 4].map((n) => ({ id: n, label: String(n) }));
 // The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
 // photo each cuts to (a 600×768 cell of the large sheet, scaled).
 const SIZES = [
@@ -993,8 +995,10 @@ const tasks = useTasksStore();
 const item = computed(() => ITEM_KINDS[props.kind] || null);
 const name = computed(() => props.character?.name || "");
 /** What an item's panels are filed as: the set it names. */
+// Left blank, an item is named from what its sheets are drawn of.
 const itemName = computed(
-  () => form.name.trim() || item.value?.newName || "",
+  () =>
+    form.name.trim() || nameFromDescription(form.description) || item.value?.newName || "",
 );
 /** Where a mode's last workflow is remembered: an item kind's apart from a
  * character's, since items draw only in prose. */

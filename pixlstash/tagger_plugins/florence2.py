@@ -563,6 +563,23 @@ class Florence2Service:
             max_dim=max_dim,
         )
 
+    def describe_regions(self, image_paths: list, max_dim: int = 1024) -> dict:
+        """Name the things in a batch of still images, a short phrase and a box
+        each (``<DENSE_REGION_CAPTION>``), in the shape :meth:`detect_objects`
+        returns."""
+        task_token = "<DENSE_REGION_CAPTION>"
+        return self._run_batch(
+            image_paths,
+            task_token,
+            lambda text, original, _fed: self._parse_detections(
+                text, task_token, original
+            ),
+            what="region captioning",
+            num_beams=3,
+            max_new_tokens=1024,
+            max_dim=max_dim,
+        )
+
     def read_text(
         self,
         image_paths: list,

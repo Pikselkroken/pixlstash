@@ -25,6 +25,16 @@ const api = vi.hoisted(() => ({
   runWorkflowCard: vi.fn(),
   deleteScene: vi.fn(),
   confirm: vi.fn(),
+  listSetInStudio: vi.fn(),
+  createPictureSet: vi.fn(),
+  deletePictureSet: vi.fn(),
+  patchPictureSet: vi.fn(),
+  bulkAddPicturesToSet: vi.fn(),
+  deleteCharacter: vi.fn(),
+  patchCharacter: vi.fn(),
+  removePictureFromSet: vi.fn(),
+  deletePictures: vi.fn(),
+  getReferencePictures: vi.fn(),
 }));
 vi.mock("../../composables/useConfirm", () => ({
   useConfirm: () => ({ confirm: api.confirm }),
@@ -39,7 +49,7 @@ vi.mock("../../api/studio", () => ({
   setStudioFavourite: api.setStudioFavourite,
   deleteScene: api.deleteScene,
   removeTake: vi.fn(),
-  listSetInStudio: vi.fn(),
+  listSetInStudio: api.listSetInStudio,
   stopUsingSetInStudio: vi.fn(),
 }));
 vi.mock("../../api/workflows", () => ({
@@ -48,14 +58,33 @@ vi.mock("../../api/workflows", () => ({
   runWorkflowCard: api.runWorkflowCard,
 }));
 vi.mock("../../api/pictures", () => ({
+  deletePictures: api.deletePictures,
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
   pictureMediaUrl: (id, format) => `/media/${id}.${format}`,
 }));
-vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn() }));
+vi.mock("../../api/pictureSets", () => ({
+  listPictureSets: vi.fn(),
+  createPictureSet: api.createPictureSet,
+  deletePictureSet: api.deletePictureSet,
+  patchPictureSet: api.patchPictureSet,
+  bulkAddPicturesToSet: api.bulkAddPicturesToSet,
+  removePictureFromSet: api.removePictureFromSet,
+}));
+vi.mock("../../api/characters", () => ({
+  characterThumbnailUrl: (id) => `/character/${id}.webp`,
+  deleteCharacter: api.deleteCharacter,
+  patchCharacter: api.patchCharacter,
+  getReferencePictures: api.getReferencePictures,
+}));
 
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
+import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
+import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 import StudioView from "./StudioView.vue";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
 const OVERVIEW = {
   scenes: [
@@ -108,11 +137,15 @@ let router;
 async function mountAt(path) {
   router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/studio", name: "studio", component: { template: "<div />" } }],
+    routes: [
+      { path: "/studio", name: "studio", component: { template: "<div />" } },
+      { path: "/", name: "all-pictures", component: { template: "<div />" } },
+    ],
   });
   await router.push(path);
   await router.isReady();
-  const wrapper = mount(StudioView, { global: { plugins: [router] } });
+  const wrapper = mount(StudioView, { global: { plugins: [router] }, attachTo: document.body });
+  mounted = wrapper;
   await flushPromises();
   return wrapper;
 }
@@ -125,8 +158,10 @@ const cardKeys = (wrapper) =>
 beforeEach(() => {
   setActivePinia(createPinia());
   for (const fn of Object.values(api)) fn.mockReset();
-  api.getStudioOverview.mockResolvedValue(OVERVIEW);
+  // A copy: a test that unstars an item must not unstar it for the next.
+  api.getStudioOverview.mockResolvedValue(structuredClone(OVERVIEW));
   api.getScene.mockResolvedValue(SCENE);
+  api.getReferencePictures.mockResolvedValue({ reference_picture_ids: [] });
   api.writeShot.mockResolvedValue({
     prompt: "A medium shot in a neon street (picture 1).",
     negative: "blurry",
@@ -159,8 +194,12 @@ beforeEach(() => {
   }
 });
 
+let mounted = null;
+
 afterEach(() => {
   vi.useRealTimers();
+  mounted?.unmount();
+  mounted = null;
 });
 
 describe("the Studio's grids", () => {
@@ -211,7 +250,11 @@ describe("the Studio's grids", () => {
 
   it("opens an item's lightbox from its card and closes back to the grid", async () => {
     const wrapper = await mountAt("/studio?section=locations");
+    // One click selects; it takes two to open.
     await wrapper.find('[data-testid="studio-card-location-30"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+    await wrapper.find('[data-testid="studio-card-location-30"]').trigger("dblclick");
     await flushPromises();
     expect(router.currentRoute.value.query.open).toBe("location:30");
     expect(wrapper.find('[data-testid="studio-item"]').exists()).toBe(true);
@@ -229,11 +272,623 @@ describe("the Studio's grids", () => {
     expect(location.props("modelValue")).toBe("30");
   });
 
+  it("lists every outfit in the Wardrobe, filtered by who wears it, and adds a set as an outfit", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push({ id: 25, name: "Yellow wellies", character_id: null, picture_ids: [26], favourite: false, scene_count: 0 });
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=wardrobe");
+    expect(wrapper.find(".studio-title").text()).toBe("Wardrobe");
+    expect(cardKeys(wrapper)).toEqual(["outfit-20", "outfit-25"]);
+    expect(wrapper.text()).toContain("Mira's outfit");
+    expect(wrapper.text()).toContain("Not anyone's");
+
+    const filter = wrapper.findComponent('[data-testid="studio-filter-wearer"]');
+    await filter.vm.$emit("update:modelValue", "nobody");
+    expect(cardKeys(wrapper)).toEqual(["outfit-25"]);
+    await filter.vm.$emit("update:modelValue", "5");
+    expect(cardKeys(wrapper)).toEqual(["outfit-20"]);
+
+    await wrapper.find('[data-testid="studio-draw-sheets"]').trigger("click");
+    expect(wrapper.emitted("item-sheets")).toEqual([[{ kind: "outfit" }]]);
+    await wrapper.find('[data-testid="studio-add-set"]').trigger("click");
+    await flushPromises();
+    const dialog = wrapper.findAllComponents({ name: "AppDialog" }).find((d) => d.props("title") === "Add an outfit");
+    expect(dialog.props("open")).toBe(true);
+    await wrapper.findComponent('[data-testid="studio-add-set-pick"]').vm.$emit("update:modelValue", "88");
+    await dialog.findAllComponents({ name: "AppButton" }).find((b) => b.text() === "Add").trigger("click");
+    await flushPromises();
+    expect(api.listSetInStudio).toHaveBeenCalledWith(88, "outfit");
+  });
+
   it("opens Add a set when a sidebar row menu asks for it", async () => {
     const wrapper = await mountAt("/studio?section=props&add=1");
     expect(router.currentRoute.value.query).toEqual({ section: "props" });
     const dialog = wrapper.findAllComponents({ name: "AppDialog" }).find((d) => d.props("title") === "Add a prop");
     expect(dialog.props("open")).toBe(true);
+  });
+});
+
+const selected = (wrapper) =>
+  wrapper
+    .findAll(".studio-card[aria-pressed=true]")
+    .map((el) => el.attributes("data-key"));
+const menu = () => document.body.querySelector('[data-testid="studio-card-menu"]');
+const verb = (name) => menu()?.querySelector(`[data-verb="${name}"]`);
+
+describe("selecting Studio cards", () => {
+  it("selects on click, adds with Ctrl, ranges with Shift, and clears on Esc or the empty grid", async () => {
+    const wrapper = await mountAt("/studio?section=favourites");
+    const card = (key) => wrapper.find(`[data-key="${key}"]`);
+    expect(selected(wrapper)).toEqual([]);
+
+    await card("scene:1").trigger("click");
+    expect(selected(wrapper)).toEqual(["scene:1"]);
+    await card("location:30").trigger("click", { ctrlKey: true });
+    expect(selected(wrapper)).toEqual(["scene:1", "location:30"]);
+    await card("scene:1").trigger("click", { ctrlKey: true });
+    expect(selected(wrapper)).toEqual(["location:30"]);
+
+    const keys = wrapper.findAll(".studio-card").map((el) => el.attributes("data-key"));
+    await card(keys[0]).trigger("click");
+    await card(keys[2]).trigger("click", { shiftKey: true });
+    expect(selected(wrapper)).toEqual(keys.slice(0, 3));
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+
+    await card(keys[0]).trigger("keydown", { key: "Escape" });
+    expect(selected(wrapper)).toEqual([]);
+
+    await card("scene:1").trigger("click");
+    const scroller = wrapper.find(".studio-scroll--tiles");
+    await scroller.trigger("pointerdown");
+    // A real click carries its count; trigger() cannot set it.
+    scroller.element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    await flushPromises();
+    expect(selected(wrapper)).toEqual([]);
+  });
+
+  it("wears the selection pill: its verbs act on the selection, and Clear ends it", async () => {
+    api.confirm.mockResolvedValue(true);
+    const wrapper = await mountAt("/studio?section=scenes");
+    expect(wrapper.find('[data-testid="studio-selbar"]').exists()).toBe(false);
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await wrapper.find('[data-key="scene:2"]').trigger("click", { ctrlKey: true });
+    const pill = () => wrapper.find('[data-testid="studio-selbar"]');
+    expect(pill().exists()).toBe(true);
+    const verbs = pill().findAll("[data-verb]").map((b) => b.attributes("data-verb"));
+    // Destructive last, then Clear.
+    expect(verbs.slice(-2)).toEqual(["delete", "clear"]);
+    expect(verbs).toContain("duplicate");
+
+    await pill().find('[data-verb="delete"]').trigger("click");
+    await flushPromises();
+    expect(api.deleteScene.mock.calls.map(([id]) => id)).toEqual([1, 2]);
+
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await pill().find('[data-verb="clear"]').trigger("click");
+    expect(pill().exists()).toBe(false);
+  });
+
+  it("opens the menu on a right-click, on that card alone when it was not selected", async () => {
+    const wrapper = await mountAt("/studio?section=scenes");
+    await wrapper.find('[data-key="scene:2"]').trigger("click");
+    await wrapper.find('[data-key="scene:1"]').trigger("contextmenu");
+    await flushPromises();
+    expect(selected(wrapper)).toEqual(["scene:1"]);
+    expect(verb("open")).toBeTruthy();
+    expect(verb("duplicate").disabled).toBe(false);
+
+    verb("open").click();
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBe("scene:1");
+    expect(menu()).toBeNull();
+  });
+
+  it("duplicates a scene with its cast, props, setting and camera under a free name", async () => {
+    api.createScene.mockResolvedValue({ id: 9 });
+    const wrapper = await mountAt("/studio?section=scenes");
+    await wrapper.find('[data-key="scene:1"]').trigger("contextmenu");
+    await flushPromises();
+    verb("duplicate").click();
+    await flushPromises();
+    expect(api.createScene).toHaveBeenCalledWith({
+      name: "Rain at the taxi rank copy",
+      project_id: 7,
+      location_set_id: 30,
+    });
+    expect(api.patchScene).toHaveBeenCalledWith(9, {
+      camera: SCENE.camera,
+      setting: SCENE.setting,
+      cast: SCENE.cast,
+      props: SCENE.props,
+    });
+  });
+
+  it("takes a half-made scene copy away again when its cast cannot be written", async () => {
+    api.createScene.mockResolvedValue({ id: 9 });
+    api.patchScene.mockRejectedValueOnce(new Error("offline"));
+    api.deleteScene.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=scenes");
+    await wrapper.find('[data-key="scene:1"]').trigger("contextmenu");
+    await flushPromises();
+    verb("duplicate").click();
+    await flushPromises();
+    expect(api.deleteScene).toHaveBeenCalledWith(9);
+  });
+
+  it("takes a half-made set copy away again when its pictures cannot be added", async () => {
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 32 } });
+    api.bulkAddPicturesToSet.mockRejectedValueOnce(new Error("offline"));
+    api.deletePictureSet.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    verb("duplicate").click();
+    await flushPromises();
+    expect(api.deletePictureSet).toHaveBeenCalledWith(32);
+    expect(api.listSetInStudio).not.toHaveBeenCalled();
+  });
+
+  it("duplicates a set as a set of the same pictures, listed as the same kind; never a person", async () => {
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 31 } });
+    const wrapper = await mountAt("/studio?section=favourites");
+    await wrapper.find('[data-key="location:30"]').trigger("contextmenu");
+    await flushPromises();
+    verb("duplicate").click();
+    await flushPromises();
+    expect(api.createPictureSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Neon rain street copy" }),
+    );
+    expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(31, [31, 32, 33, 34]);
+    expect(api.listSetInStudio).toHaveBeenCalledWith(31, "location");
+
+    await wrapper.find('[data-key="cast:5"]').trigger("contextmenu");
+    await flushPromises();
+    expect(verb("duplicate").disabled).toBe(true);
+  });
+
+  it("deletes the whole selection, each by its kind, after asking once", async () => {
+    api.confirm.mockResolvedValue(true);
+    const wrapper = await mountAt("/studio?section=favourites");
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await wrapper.find('[data-key="cast:5"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="location:30"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="location:30"]').trigger("contextmenu");
+    await flushPromises();
+    expect(verb("delete").textContent).toContain("Delete 3");
+    verb("delete").click();
+    await flushPromises();
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(api.deleteScene).toHaveBeenCalledWith(1);
+    expect(api.deleteCharacter).toHaveBeenCalledWith(5);
+    expect(api.deletePictureSet).toHaveBeenCalledWith(30);
+  });
+
+  it("deletes nothing when the ask is declined", async () => {
+    api.confirm.mockResolvedValue(false);
+    const wrapper = await mountAt("/studio?section=scenes");
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await wrapper.find('[data-key="scene:1"]').trigger("keydown", { key: "Delete" });
+    await flushPromises();
+    expect(api.confirm).toHaveBeenCalledTimes(1);
+    expect(api.deleteScene).not.toHaveBeenCalled();
+  });
+
+  it("puts the selection in a project: a scene moves, a person or a set gains it", async () => {
+    api.getStudioOverview.mockResolvedValue({
+      ...OVERVIEW,
+      scenes: OVERVIEW.scenes.map((sc) => ({ ...sc, project_ids: sc.id === 1 ? [3] : [] })),
+      cast: OVERVIEW.cast.map((c) => ({ ...c, project_ids: [3] })),
+      locations: OVERVIEW.locations.map((l) => ({ ...l, project_ids: [] })),
+    });
+    const wrapper = await mountAt("/studio?section=favourites");
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await wrapper.find('[data-key="cast:5"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="location:30"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="location:30"]').trigger("contextmenu");
+    await flushPromises();
+    const picker = wrapper.findComponent(AddToEntityControl);
+    // Project 3 holds two of the three: the flyout shows it partly ticked.
+    expect([...picker.props("membership")["project-3"]].sort()).toEqual(["cast:5", "scene:1"]);
+
+    picker.vm.$emit("selected", { projectId: 9, action: "added" });
+    await flushPromises();
+    expect(api.patchScene).toHaveBeenCalledWith(1, { project_id: 9 });
+    expect(api.patchCharacter).toHaveBeenCalledWith(5, { project_ids: [3, 9] });
+    expect(api.patchPictureSet).toHaveBeenCalledWith(30, { project_ids: [9] });
+
+    picker.vm.$emit("selected", { projectId: 3, action: "removed" });
+    await flushPromises();
+    expect(api.patchScene).toHaveBeenLastCalledWith(1, { project_id: null });
+    expect(api.patchCharacter).toHaveBeenLastCalledWith(5, { project_ids: [] });
+  });
+});
+
+describe("adding existing outfits to a wardrobe", () => {
+  async function pickFor(personKey, ids) {
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push(
+      { id: 25, name: "Yellow wellies", character_id: null, picture_ids: [26], favourite: false, scene_count: 0 },
+    );
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt(`/studio?section=cast&open=${personKey}`);
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    for (const id of ids) await wrapper.find(`[data-testid="outfit-pick-${id}"]`).trigger("click");
+    await wrapper.find('[data-testid="outfit-add"]').trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("makes an outfit that is no one's the person's, and copies another person's", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 90 } });
+    await pickFor("cast:6", [25, 20]);
+    // A name of its own is kept.
+    expect(api.patchPictureSet).toHaveBeenCalledWith(25, { parent_character_id: 6 });
+    // Mira's raincoat is taken from nobody: Juno gets a set of the same pictures.
+    expect(api.patchPictureSet).not.toHaveBeenCalledWith(20, expect.anything());
+    expect(api.createPictureSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Mustard raincoat", parent_character_id: 6 }),
+    );
+    expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(90, [21, 22, 23, 24]);
+    expect(api.listSetInStudio).toHaveBeenCalledWith(90, "outfit");
+  });
+
+  it("names the copy for the person when its name is taken", async () => {
+    api.createPictureSet
+      .mockRejectedValueOnce(Object.assign(new Error("taken"), { response: { status: 409 } }))
+      .mockResolvedValueOnce({ picture_set: { id: 91 } });
+    await pickFor("cast:6", [20]);
+    expect(api.createPictureSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "Mustard raincoat (Juno)" }),
+    );
+    expect(api.listSetInStudio).toHaveBeenCalledWith(91, "outfit");
+  });
+
+  it("names an outfit still called New outfit from its sheet's words when it is given", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push({
+      id: 26, name: "New outfit", description: "a yellow raincoat, hood up",
+      character_id: null, picture_ids: [27], favourite: false, scene_count: 0,
+    });
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=cast&open=cast:6");
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="outfit-pick-26"]').trigger("click");
+    await wrapper.find('[data-testid="outfit-add"]').trigger("click");
+    await flushPromises();
+    expect(api.patchPictureSet).toHaveBeenCalledWith(26, {
+      parent_character_id: 6,
+      name: "Yellow raincoat",
+    });
+  });
+
+  it("offers nothing the person already wears", async () => {
+    const overview = structuredClone(OVERVIEW);
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="outfit-pick-20"]').exists()).toBe(false);
+  });
+});
+
+describe("renaming Studio items", () => {
+  const field = (w) => w.find('[data-testid="studio-rename"]');
+
+  it("renames from the menu, with F2 and by double-clicking the title", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    api.patchScene.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    verb("rename").click();
+    await flushPromises();
+    expect(field(wrapper).element.value).toBe("Red umbrella");
+    // Typing Delete in the field deletes no card.
+    await field(wrapper).trigger("keydown", { key: "Delete" });
+    expect(api.confirm).not.toHaveBeenCalled();
+    await field(wrapper).setValue("Big red umbrella");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(api.patchPictureSet).toHaveBeenCalledWith(40, { name: "Big red umbrella" });
+    wrapper.unmount();
+
+    const scenes = await mountAt("/studio?section=scenes");
+    await scenes.find('[data-key="scene:2"]').trigger("click");
+    await scenes.find('[data-key="scene:2"]').trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(scenes).element.value).toBe("Shoreline walk");
+    await field(scenes).trigger("keydown", { key: "Escape" });
+    expect(field(scenes).exists()).toBe(false);
+    // The title's double-click renames; it does not open the scene.
+    await scenes.find('[data-testid="studio-title-scene-1"]').trigger("dblclick");
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+    await field(scenes).setValue("Rain at the rank");
+    await field(scenes).trigger("blur");
+    await flushPromises();
+    expect(api.patchScene).toHaveBeenCalledWith(1, { name: "Rain at the rank" });
+    expect(api.patchScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("names props called New prop from their descriptions, all at once", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    const overview = structuredClone(OVERVIEW);
+    overview.props = [
+      { id: 40, name: "New prop", description: "a red umbrella, open", picture_ids: [41], favourite: false, scene_count: 0 },
+      { id: 45, name: "New prop", description: "an old brass lantern", picture_ids: [46], favourite: false, scene_count: 0 },
+      { id: 47, name: "Teacup", description: "a teacup", picture_ids: [48], favourite: false, scene_count: 0 },
+    ];
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("click");
+    await wrapper.find('[data-key="prop:45"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="prop:47"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    // The teacup is named so already: two to name.
+    expect(verb("name-from-description").textContent).toContain("Name 2 from their descriptions");
+    verb("name-from-description").click();
+    await flushPromises();
+    expect(api.patchPictureSet.mock.calls).toEqual([
+      [40, { name: "Red umbrella" }],
+      [45, { name: "Old brass lantern" }],
+    ]);
+  });
+
+  it("renames an item from its lightbox title, and opens renaming from a sidebar Rename", async () => {
+    api.patchCharacter.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    await wrapper.find('[data-testid="studio-item-title"]').trigger("dblclick");
+    await flushPromises();
+    const input = wrapper.find('[data-testid="studio-item-rename"]');
+    expect(input.element.value).toBe("Mira");
+    await input.setValue("Mira Holt");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(api.patchCharacter).toHaveBeenCalledWith(5, { name: "Mira Holt" });
+    wrapper.unmount();
+
+    const asked = await mountAt("/studio?section=locations&open=location:30&rename=1");
+    await flushPromises();
+    expect(asked.find('[data-testid="studio-item-rename"]').exists()).toBe(true);
+    expect(router.currentRoute.value.query.rename).toBeUndefined();
+  });
+});
+
+describe("a person's reference pictures", () => {
+  it("shows them beside the wardrobe, and opens one in the Lightbox", async () => {
+    api.getReferencePictures.mockImplementation(async (id) => ({
+      reference_picture_ids: id === 5 ? [70, 71] : [],
+    }));
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    expect(api.getReferencePictures).toHaveBeenCalledWith(5);
+    const refs = wrapper.findAll('[data-testid^="studio-ref-"]');
+    expect(refs.map((r) => r.find("img").attributes("src"))).toEqual(["/thumb/70.webp", "/thumb/71.webp"]);
+    await refs[1].trigger("dblclick");
+    await flushPromises();
+    expect(router.currentRoute.value.query.overlay).toBe("71");
+  });
+
+  it("says where they come from when there are none", async () => {
+    const wrapper = await mountAt("/studio?section=cast&open=cast:6");
+    expect(wrapper.find('[data-testid="studio-refs-none"]').text()).toContain("Juno's faces in Media");
+  });
+});
+
+describe("a picture from the Studio in the Lightbox", () => {
+  // Opened over All Pictures, and closed back onto the Studio as it was.
+  async function opensAndComesBack(open) {
+    const here = router.currentRoute.value.fullPath;
+    await open();
+    await flushPromises();
+    const at = router.currentRoute.value;
+    expect(at.name).toBe("all-pictures");
+    await router.replace(lightboxCloseTarget(at.query));
+    expect(router.currentRoute.value.fullPath).toBe(here);
+    return at.query.overlay;
+  }
+
+  it("opens a location's picture on a double-click, and Esc comes back to the location", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    const overlay = await opensAndComesBack(() =>
+      wrapper.find('[data-testid="studio-pic-32"]').trigger("dblclick"),
+    );
+    expect(overlay).toBe("32");
+  });
+
+  it("opens a person's picture and a scene's take the same way", async () => {
+    const person = await mountAt("/studio?section=cast&open=cast:5");
+    expect(
+      await opensAndComesBack(() => person.find('[data-testid="studio-person-face"]').trigger("dblclick")),
+    ).toBe("50");
+    person.unmount();
+    const scene = await mountAt("/studio?section=scenes&open=scene:1");
+    expect(
+      await opensAndComesBack(() => scene.find('[data-testid="scene-take-900"]').trigger("dblclick")),
+    ).toBe("900");
+  });
+});
+
+describe("placeholders for what is drawing in the background", () => {
+  const drawing = (keys) => ({ phase: "drawing", runs: keys.map((key) => ({ key, status: "running" })) });
+
+  it("puts a placeholder where outfit sheets will land, in the Wardrobe and the wearer's lightbox", async () => {
+    // Still running, as Tasks lists them.
+    useTasksStore().comfyuiRuns = [{ run_id: "r1", percent: 40 }, { run_id: "r2", percent: 0 }];
+    useSheetDrawsStore().keep("outfit:5", {
+      kind: "outfit",
+      character: { id: 5, name: "Mira" },
+      label: "Raincoat",
+      snapshot: drawing(["r1", "r2"]),
+    });
+    const wardrobe = await mountAt("/studio?section=wardrobe");
+    const placeholder = wardrobe.find('[data-testid="studio-sheet-placeholder-outfit"]');
+    expect(placeholder.text()).toContain("Raincoat");
+    expect(placeholder.text()).toContain("Drawing 2 sheets…");
+    await placeholder.find(".draw-placeholder__frame").trigger("click");
+    expect(wardrobe.emitted("item-sheets").at(-1)).toEqual([
+      { kind: "outfit", character: { id: 5, name: "Mira" }, sheet: true },
+    ]);
+    wardrobe.unmount();
+
+    const person = await mountAt("/studio?section=cast&open=cast:5");
+    expect(person.find('[data-testid="studio-outfit-placeholder"]').exists()).toBe(true);
+    person.unmount();
+    const other = await mountAt("/studio?section=cast&open=cast:6");
+    expect(other.find('[data-testid="studio-outfit-placeholder"]').exists()).toBe(false);
+  });
+
+  it("puts a bar under a person whose sheets are drawing, and placeholders in Locations", async () => {
+    const draws = useSheetDrawsStore();
+    draws.keep("5", { kind: "character", character: { id: 5, name: "Mira" }, label: "Mira's sheets", snapshot: drawing(["c1"]) });
+    draws.keep("location:", { kind: "location", character: null, label: "Pub", snapshot: drawing(["l1"]) });
+    const cast = await mountAt("/studio?section=cast");
+    expect(cast.find('[data-testid="studio-sheets-progress-5"]').exists()).toBe(true);
+    expect(cast.find('[data-testid="studio-sheets-progress-6"]').exists()).toBe(false);
+    cast.unmount();
+    const places = await mountAt("/studio?section=locations");
+    expect(places.find('[data-testid="studio-sheet-placeholder-location"]').text()).toContain("Pub");
+  });
+
+  it("puts a placeholder for each view More angles is drawing in the location's lightbox", async () => {
+    useLocationDrawStore().report({
+      locationId: 30, name: "Neon rain street", status: "Filming the place…",
+      fraction: 0.3, ready: false, count: 3, making: "views",
+    });
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    const tiles = wrapper.findAll('[data-testid^="studio-view-placeholder-"]');
+    expect(tiles).toHaveLength(3);
+    expect(tiles[0].text()).toContain("Filming the place…");
+    expect(tiles[0].find(".draw-progress__track span").attributes("style")).toContain("width: 30%");
+  });
+});
+
+describe("a location draw in the background", () => {
+  it("shows its progress under the location's card, and opens it from there", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: 30, name: "Neon rain street", status: "Filming the place…", fraction: 0.4, ready: false });
+    const wrapper = await mountAt("/studio?section=locations");
+    const bar = wrapper.find('[data-testid="studio-draw-progress-30"]');
+    expect(bar.text()).toContain("Filming the place…");
+    expect(bar.find(".draw-progress__track span").attributes("style")).toContain("width: 40%");
+    await bar.trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    // The card itself still selects: the bar is its own control.
+    expect(wrapper.find('[data-key="location:30"]').attributes("aria-pressed")).toBe("false");
+  });
+
+  it("shows a new location being drawn as a card of its own until its set exists", async () => {
+    const draws = useLocationDrawStore();
+    draws.report({ locationId: null, name: "Hotel room", status: "Wide pictures to choose from", fraction: 1, ready: true });
+    const wrapper = await mountAt("/studio?section=locations");
+    const card = wrapper.find('[data-testid="studio-new-location-draw"]');
+    expect(card.text()).toContain("Hotel room");
+    expect(card.element.parentElement.textContent).toContain("Wide pictures to choose from");
+    await card.trigger("click");
+    expect(draws.dialogOpen).toBe(true);
+    draws.report(null);
+    await flushPromises();
+    expect(wrapper.find('[data-testid="studio-new-location-draw"]').exists()).toBe(false);
+  });
+});
+
+describe("a location's pictures", () => {
+  const pic = (wrapper, id) => wrapper.find(`[data-testid="studio-pic-${id}"]`);
+  const chosen = (wrapper) =>
+    wrapper.findAll(".studio-angle__pick[aria-pressed=true]").map((b) => b.attributes("data-testid"));
+
+  it("shows every picture, the first four named, and takes the selected out of the location", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.locations[0].picture_ids = [31, 32, 33, 34, 35];
+    api.getStudioOverview.mockResolvedValue(overview);
+    api.removePictureFromSet.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    expect(wrapper.findAll("figcaption").map((f) => f.text())).toEqual([
+      "Wide", "Reverse", "Left", "Right", "Picture 5",
+    ]);
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 33).trigger("click", { ctrlKey: true });
+    expect(chosen(wrapper)).toEqual(["studio-pic-31", "studio-pic-33"]);
+    // The selection pill, as on every grid.
+    await wrapper.find('[data-testid="studio-pics-bar"] [data-verb="remove"]').trigger("click");
+    await flushPromises();
+    expect(api.removePictureFromSet.mock.calls).toEqual([[30, 31], [30, 33]]);
+    // The picture is only taken out of the location, never deleted.
+    expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
+  it("deletes the selected pictures from the pill, to the Scrapheap", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 32).trigger("click");
+    await wrapper.find('[data-testid="studio-pics-bar"] [data-verb="delete"]').trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([32]);
+    expect(wrapper.find('[data-testid="studio-pics-bar"]').exists()).toBe(false);
+  });
+
+  it("deletes a Shift range with the Delete key, and Esc clears before it closes", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 33).trigger("click", { shiftKey: true });
+    expect(chosen(wrapper)).toEqual(["studio-pic-31", "studio-pic-32", "studio-pic-33"]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([31, 32, 33]);
+
+    await pic(wrapper, 34).trigger("click");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(chosen(wrapper)).toEqual([]);
+    expect(router.currentRoute.value.query.open).toBe("location:30");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+  });
+
+  it("deletes from the right-click menu, the picture under it alone when it was not selected", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 34).trigger("contextmenu");
+    await flushPromises();
+    expect(chosen(wrapper)).toEqual(["studio-pic-34"]);
+    document.body.querySelector('[data-testid="studio-pics-menu"] [data-verb="delete"]').click();
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([34]);
+    expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
+  });
+
+  it("closes only the picture menu on Esc, keeping the selection and the lightbox", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("contextmenu");
+    await flushPromises();
+    // Any other Esc handler, as an overlay further out would have.
+    const heard = vi.fn();
+    window.addEventListener("keydown", heard);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    window.removeEventListener("keydown", heard);
+    await flushPromises();
+    expect(heard).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
+    expect(chosen(wrapper)).toEqual(["studio-pic-31"]);
+    expect(router.currentRoute.value.query.open).toBe("location:30");
+  });
+
+  it("keeps the lightbox's keys off while the picture menu is open", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("contextmenu");
+    await flushPromises();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    await flushPromises();
+    expect(api.deletePictures).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.query.open).toBe("location:30");
   });
 });
 
@@ -354,7 +1009,11 @@ describe("a scene", () => {
     await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
     await flushPromises();
     // The fixed input is not counted, so two references are asked for.
-    expect(api.writeShot).toHaveBeenLastCalledWith(1, { kind: "still", max_references: 2 });
+    expect(api.writeShot).toHaveBeenLastCalledWith(1, {
+      kind: "still",
+      max_references: 2,
+      picture_tag: "picture {n}",
+    });
     const body = api.runWorkflowCard.mock.calls[0][0];
     expect(body.workflow_id).toBe("manual:edit");
     expect(body.prompt).toBe("A medium shot in a neon street (picture 1).");
@@ -368,6 +1027,54 @@ describe("a scene", () => {
       { key: "run-b", kind: "still", from_picture_id: null },
     ]);
     expect(wrapper.findAll(".scene-take--drawing")).toHaveLength(2);
+  });
+
+  it("offers a scene workflow first and fans every picture into its one input", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:edit", name: "Image Edit", type: "img2img", reference_inputs: 2 },
+        {
+          id: "builtin:scene",
+          name: "MiniMax H3 Image Scene (PixlStash)",
+          type: "txt2img",
+          reference_inputs: 1,
+          built_in: true,
+        },
+      ],
+    });
+    api.preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          picture_inputs: [
+            {
+              slot_label: "Scene pictures",
+              input_name: "image",
+              mode: "fill",
+              more_pictures: 98,
+              picture_tag: "<Picture {n}>",
+            },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await wrapper.find('[data-testid="scene-shoot"]').trigger("click");
+    await flushPromises();
+    expect(api.writeShot).toHaveBeenLastCalledWith(1, {
+      kind: "still",
+      max_references: 99,
+      picture_tag: "<Picture {n}>",
+    });
+    const body = api.runWorkflowCard.mock.calls[0][0];
+    expect(body.workflow_id).toBe("builtin:scene");
+    expect(body.inputs).toEqual([
+      {
+        slot_label: "Scene pictures",
+        input_name: "image",
+        picture_id: 31,
+        more_picture_ids: [77, 21],
+      },
+    ]);
   });
 
   it("keeps handing a shoot's runs to the scene when the first hand-over fails", async () => {
@@ -401,6 +1108,7 @@ describe("a scene", () => {
       kind: "clip",
       from_picture_id: 900,
       max_references: 2,
+      picture_tag: "picture {n}",
     });
     const body = api.runWorkflowCard.mock.calls[0][0];
     expect(body.workflow_id).toBe("manual:i2v");
@@ -412,14 +1120,38 @@ describe("a scene", () => {
     });
   });
 
-  it("says why a clip cannot start from a still when the workflow takes no picture", async () => {
+  it("offers no video workflow that takes no picture, and says why a clip cannot be made", async () => {
     api.preflightWorkflowRun.mockResolvedValue({ groups: [{ picture_inputs: [] }] });
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-take-900"]').trigger("click");
-    await wrapper.find('[data-testid="scene-clip-from-take"]').trigger("click");
+    await flushPromises();
+    const button = wrapper.findComponent('[data-testid="scene-clip-from-take"]');
+    expect(button.props("disabled")).toBe(true);
+    expect(button.props("tooltip")).toBe("No video workflow here starts from a picture");
+    await button.trigger("click");
     await flushPromises();
     expect(api.runWorkflowCard).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("takes no picture");
+  });
+
+  it("offers only the workflows that can shoot a scene", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:edit", name: "Image Edit", type: "img2img", reference_inputs: 2 },
+        { id: "manual:restyle", name: "Restyle", type: "img2img", reference_inputs: 0 },
+        { id: "manual:inpaint", name: "Inpaint", type: "inpaint", reference_inputs: 0 },
+        { id: "manual:sheet", name: "Edit (sheet)", type: "img2img", reference_inputs: 1 },
+        { id: "manual:hidden", name: "Old edit", type: "img2img", reference_inputs: 1, hidden: true },
+        { id: "manual:i2v", name: "MiniMax H3: Image to Video", type: "video", reference_inputs: 0 },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)", type: "video", reference_inputs: 0 },
+      ],
+    });
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await flushPromises();
+    const selects = wrapper.findAllComponents({ name: "AppSelect" });
+    const offered = (pick) =>
+      selects.map((s) => s.props("options").map((o) => o.value)).find(pick) ?? [];
+    expect(offered((v) => v.includes("manual:edit"))).toEqual(["manual:edit"]);
+    expect(offered((v) => v.includes("manual:i2v"))).toEqual(["manual:i2v"]);
   });
 });
 
@@ -497,6 +1229,26 @@ describe("the sheet tiles", () => {
     const take = scenes.find('[data-testid="studio-card-scene-1"]');
     expect(take.find(".studio-tile-media--scene").exists()).toBe(true);
     expect(take.findAll(".studio-tile-chips img")).toHaveLength(2);
+  });
+
+  it("shapes an item's and a scene's card as their pictures, never cropping them", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.locations[0].aspect = 1.7778;
+    overview.outfits[0].aspect = 0.8;
+    overview.scenes[0].cover_aspect = 1.5;
+    api.getStudioOverview.mockResolvedValue(overview);
+    const shape = (w, key) =>
+      w.find(`[data-testid="studio-card-${key}"] .studio-tile-media`).attributes("style") ?? "";
+    const places = await mountAt("/studio?section=locations");
+    expect(shape(places, "location-30")).toContain("--tile-aspect: 1.7778");
+    places.unmount();
+    const clothes = await mountAt("/studio?section=wardrobe");
+    expect(shape(clothes, "outfit-20")).toContain("--tile-aspect: 0.8");
+    clothes.unmount();
+    const scenes = await mountAt("/studio?section=scenes");
+    expect(shape(scenes, "scene-1")).toContain("--tile-aspect: 1.5");
+    // Not measured: the card keeps the shape its kind's sheet has.
+    expect(shape(scenes, "scene-2")).not.toContain("--tile-aspect");
   });
 
   it("shows an item short of its four angles as its first picture, whole", async () => {
