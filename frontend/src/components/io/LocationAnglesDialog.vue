@@ -983,9 +983,12 @@ async function useNew() {
   const ids = [source.value, videoId, ...kept.value];
   await restoreScrapheap([source.value, ...kept.value]);
   // The location's from here: a Use that fails later and is then discarded
-  // must not send the picture it is built on back to the Scrapheap.
+  // must not send the picture it is built on back to the Scrapheap. The kept
+  // views go back with a Discard until they are in the set.
   broughtBack.delete(source.value);
+  for (const id of kept.value) broughtBack.add(id);
   await bulkAddPicturesToSet(set.id, ids);
+  for (const id of kept.value) broughtBack.delete(id);
   // The set is the location: the Studio lists it as one (#2819), once it
   // holds the pictures, so a Use that fails leaves no empty location there.
   try {
@@ -1009,8 +1012,13 @@ async function use() {
       return;
     }
     if (kept.value.length) await restoreScrapheap([...kept.value]);
+    // Back to the Scrapheap with a Discard until they are in the location.
+    for (const id of kept.value) broughtBack.add(id);
     await bulkAddPicturesToSet(props.location.id, [videoId, ...kept.value]);
+    for (const id of kept.value) broughtBack.delete(id);
     if (frameIds.length) await deletePictures(frameIds);
+    // A view kept by a Use that failed, then dropped before this one.
+    sendBack([...broughtBack]);
     emit("done", kept.value.length);
     emit("close");
   } catch (e) {

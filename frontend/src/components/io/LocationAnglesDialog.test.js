@@ -546,6 +546,22 @@ describe("More angles", () => {
     expect(api.runWorkflowCard.mock.calls[0][0].values).toBeUndefined();
   });
 
+  it("sends the views a failed Use brought back to the Scrapheap when it is discarded", async () => {
+    api.bulkAddPicturesToSet.mockRejectedValueOnce(new Error("offline"));
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    expect(api.restoreScrapheap).toHaveBeenCalledWith([601, 603]);
+    expect(wrapper.emitted("done")).toBeUndefined();
+
+    await wrapper.findAll("button").find((b) => b.text() === "Discard").trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([601, 603]);
+  });
+
   it("offers the 2×2 sheet instead of a new location's video", async () => {
     const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
     await wrapper.find('[data-testid="la-sheet"]').trigger("click");

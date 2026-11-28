@@ -173,6 +173,25 @@ def pick_frame(
     return max(range(first, last), key=score)
 
 
+def shot_spans(starts: list[int], total: int) -> list[tuple[int, int]]:
+    """Each new shot's ``(start, end)`` frames, from the cuts' *starts* in a
+    video of *total* frames. One no longer than the settle after its cut is a
+    flash, not a shot: it holds no steady frame, so it is left out (a cut on
+    the last frames would otherwise give back its own blur). Raises
+    :class:`ShotsNotFound` when no shot is left."""
+    bounds = [*starts, total]
+    spans = [
+        (start, end)
+        for start, end in zip(bounds, bounds[1:])
+        if end - start > SETTLE_FRAMES
+    ]
+    if not spans:
+        raise ShotsNotFound(
+            "The video's cuts leave no shot long enough to hold still. Draw it again."
+        )
+    return spans
+
+
 def sharpest_frames(path: str) -> list[int]:
     """The steadiest, sharpest frame index of each new shot (the picture's
     shot left out), one per shot the video holds: see :func:`pick_frame`."""
@@ -197,12 +216,10 @@ def sharpest_frames(path: str) -> list[int]:
         capture.release()
     if len(sharpness) < 2:
         raise ShotsNotFound("The video could not be read frame by frame.")
-    starts = find_cuts(diffs)
     motion = [0.0, *diffs]
-    bounds = [*starts, len(sharpness)]
     return [
         pick_frame(start, end, sharpness, motion)
-        for start, end in zip(bounds, bounds[1:])
+        for start, end in shot_spans(find_cuts(diffs), len(sharpness))
     ]
 
 

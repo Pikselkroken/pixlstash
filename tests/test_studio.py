@@ -637,6 +637,14 @@ def test_the_sharpest_frame_of_each_new_shot_is_past_the_settle(tmp_path):
         assert shot * 24 + 8 <= index < (shot + 1) * 24
 
 
+def test_a_cut_too_near_the_end_gives_no_shot_of_its_own():
+    # Cuts at 48 and 96 of 144 frames: two shots. One more at 141 is a flash.
+    assert location_angles.shot_spans([48, 96, 141], 144) == [(48, 96), (96, 141)]
+    assert location_angles.shot_spans([48], 144) == [(48, 144)]
+    with pytest.raises(location_angles.ShotsNotFound):
+        location_angles.shot_spans([140], 144)
+
+
 def test_the_picked_frame_is_steady_over_its_neighbours_and_near_the_middle():
     # A still shot, every frame as sharp: the middle wins, not an edge.
     still = location_angles.pick_frame(0, 48, [100.0] * 48, [0.05] * 48)
