@@ -8858,6 +8858,18 @@ inside its lightboxes, so the rail is empty on `/studio`.
   puts them and the video in the location's set and sends the frames to the
   Scrapheap. The built-ins are found by the names they ship under. Closing it
   stops its runs.
+- **A new location starts from a video, not a sheet.** *Draw location
+  sheets…* (`openSheets` in `App.vue`) opens `LocationAnglesDialog` with no
+  location: a name and a description, then four wide pictures (the
+  *MiniMax H3 Image T2I* built-in, `POST /character-sheets/prompt` with
+  `single: true`, 2560x1440, held), which become the pictures to start from;
+  the rest is More angles. *Use* makes the set (`createPictureSet`, listed in
+  the Studio as a location) with the chosen picture, the kept views and the
+  video; the other wide pictures stay in the Scrapheap. *Draw a 2×2 sheet
+  instead* opens the sheet dialog (`openSheets({kind: "location", sheet:
+  true})`). The video model may film fewer shots than asked; the server
+  returns the ones it made and the dialog numbers them rather than guess
+  which preset went missing.
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always

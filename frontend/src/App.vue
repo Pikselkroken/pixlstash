@@ -81,6 +81,7 @@ import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vu
 import TrainLoraDialog from "./components/io/TrainLoraDialog.vue";
 import TrainingSetBuild from "./components/views/TrainingSetBuild.vue";
 import CharacterSheetsDialog from "./components/io/CharacterSheetsDialog.vue";
+import LocationAnglesDialog from "./components/io/LocationAnglesDialog.vue";
 import FaceClustersDialog from "./components/io/FaceClustersDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
@@ -618,7 +619,20 @@ const sheetsKind = ref("character");
 const sheetsOpen = ref(false);
 const sheetsReturnFocus = ref(null);
 
-function openSheets({ kind = "character", character = null, returnFocusTo = null }) {
+// A new location starts from a video of one wide picture (LocationAnglesDialog
+// without a location); its "Draw a 2×2 sheet instead" opens the sheet dialog.
+const newLocationOpen = ref(false);
+
+function openSheets({
+  kind = "character",
+  character = null,
+  returnFocusTo = null,
+  sheet = false,
+}) {
+  if (kind === "location" && !sheet) {
+    newLocationOpen.value = true;
+    return;
+  }
   sheetsKind.value = kind;
   sheetsCharacter.value = character;
   sheetsReturnFocus.value = returnFocusTo ?? character?.returnFocusTo ?? null;
@@ -1411,6 +1425,15 @@ defineExpose({
     <ConfirmDialog />
     <ModelDropFolderDialog />
     <TrainLoraDialog />
+    <LocationAnglesDialog
+      :open="newLocationOpen"
+      @close="newLocationOpen = false"
+      @sheet="
+        newLocationOpen = false;
+        openSheets({ kind: 'location', sheet: true });
+      "
+      @done="(n, set, ids) => set && onSheetsCut({ kind: 'location', pictureIds: ids, set })"
+    />
     <CharacterSheetsDialog
       :open="sheetsOpen"
       :kind="sheetsKind"

@@ -13,6 +13,10 @@ vi.mock("vuetify/components", async () => {
 
 const api = vi.hoisted(() => ({
   buildLocationShotsPrompt: vi.fn(),
+  buildSheetPrompt: vi.fn(),
+  createPictureSet: vi.fn(),
+  listSetInStudio: vi.fn(),
+  getWorkflowCard: vi.fn(),
   takeLocationShots: vi.fn(),
   checkLocationShots: vi.fn(),
   bulkAddPicturesToSet: vi.fn(),
@@ -26,10 +30,15 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildLocationShotsPrompt: api.buildLocationShotsPrompt,
+  buildSheetPrompt: api.buildSheetPrompt,
   takeLocationShots: api.takeLocationShots,
   checkLocationShots: api.checkLocationShots,
 }));
-vi.mock("../../api/pictureSets", () => ({ bulkAddPicturesToSet: api.bulkAddPicturesToSet }));
+vi.mock("../../api/pictureSets", () => ({
+  bulkAddPicturesToSet: api.bulkAddPicturesToSet,
+  createPictureSet: api.createPictureSet,
+}));
+vi.mock("../../api/studio", () => ({ listSetInStudio: api.listSetInStudio }));
 vi.mock("../../api/pictures", () => ({
   deletePictures: api.deletePictures,
   restoreScrapheap: api.restoreScrapheap,
@@ -37,6 +46,7 @@ vi.mock("../../api/pictures", () => ({
 }));
 vi.mock("../../api/workflows", () => ({
   getRunOutcome: api.getRunOutcome,
+  getWorkflowCard: api.getWorkflowCard,
   listWorkflowCards: api.listWorkflowCards,
   preflightWorkflowRun: api.preflightWorkflowRun,
   runWorkflowCard: api.runWorkflowCard,
@@ -135,6 +145,79 @@ describe("More angles", () => {
     expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(30, [500, 601, 603]);
     expect(api.deletePictures).toHaveBeenCalledWith([701, 702, 703]);
     expect(wrapper.emitted("done")[0]).toEqual([2]);
+  });
+
+  it("draws a new location's wide pictures first, then films the views from the chosen one", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:wide", name: "MiniMax H3 Image T2I (PixlStash)" },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" },
+        { id: "manual:restore", name: "MiniMax H3 Restore a Frame (PixlStash)" },
+      ],
+    });
+    api.getWorkflowCard.mockResolvedValue({
+      card: {
+        defaults: [
+          { slot_label: "core:w", input_name: "width" },
+          { slot_label: "core:h", input_name: "height" },
+          { slot_label: "core:s", input_name: "seed" },
+        ],
+      },
+    });
+    api.buildSheetPrompt.mockResolvedValue({ prompt: "WIDE", negative: "NEG", width: 2560, height: 1440 });
+    const shotRuns = api.runWorkflowCard.getMockImplementation();
+    api.runWorkflowCard.mockImplementation(async (body) =>
+      body.workflow_id === "manual:wide"
+        ? { prompts: [1, 2, 3, 4].map((n) => ({ run_id: `run-w${n}` })) }
+        : shotRuns(body),
+    );
+    Object.assign(OUTPUTS, { "run-w1": [41], "run-w2": [42], "run-w3": [43], "run-w4": [44] });
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 77, name: "Walled garden" } });
+
+    const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
+    expect(wrapper.find('[data-testid="la-draw"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="la-name"] input').setValue("Walled garden");
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a walled garden");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+
+    expect(api.buildSheetPrompt).toHaveBeenCalledWith({
+      kind: "location",
+      description: "a walled garden",
+      single: true,
+    });
+    const wide = api.runWorkflowCard.mock.calls[0][0];
+    expect(wide).toMatchObject({ workflow_id: "manual:wide", prompt: "WIDE", count: 4, hold: true });
+    expect(wide.values).toEqual([
+      { slot_label: "core:w", input_name: "width", value: 2560 },
+      { slot_label: "core:h", input_name: "height", value: 1440 },
+    ]);
+    // The four become the pictures to start from; the second is chosen.
+    const sources = wrapper.findAll(".la-source");
+    expect(sources).toHaveLength(4);
+    await sources[1].trigger("click");
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    const video = api.runWorkflowCard.mock.calls[1][0];
+    expect(video.inputs[0].picture_id).toBe(42);
+    expect(api.buildLocationShotsPrompt.mock.calls[0][0].description).toBe("a walled garden");
+
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    expect(api.createPictureSet).toHaveBeenCalledWith({
+      name: "Walled garden",
+      description: "a walled garden",
+    });
+    expect(api.listSetInStudio).toHaveBeenCalledWith(77, "location");
+    expect(api.restoreScrapheap).toHaveBeenCalledWith([42, 601, 603]);
+    expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(77, [42, 500, 601, 603]);
+    expect(wrapper.emitted("done")[0]).toEqual([2, { id: 77, name: "Walled garden" }, [42, 500, 601, 603]]);
+  });
+
+  it("offers the 2×2 sheet instead of a new location's video", async () => {
+    const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
+    await wrapper.find('[data-testid="la-sheet"]').trigger("click");
+    expect(wrapper.emitted("sheet")).toHaveLength(1);
   });
 
   it("keeps the views a video with too few shots made, numbered rather than misnamed", async () => {

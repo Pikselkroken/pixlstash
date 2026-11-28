@@ -1606,6 +1606,22 @@ def test_prompt_route_hands_out_the_canvas(client):
             json={"kind": kind, "description": "x", "size": "4k", "layout": "prose"},
         ).json()
         assert (drawn["width"], drawn["height"]) == canvas
+    # A location's single wide picture, which More angles films the rest from.
+    wide = client.post(
+        f"{API_PREFIX}/character-sheets/prompt",
+        json={"kind": "location", "description": "a walled garden", "single": True},
+    ).json()
+    assert (wide["width"], wide["height"]) == (2560, 1440)
+    assert (
+        "wide establishing photograph of one place, a walled garden" in wide["prompt"]
+    )
+    assert "four photos" not in wide["prompt"]
+    for kind in ("prop", "character"):
+        refused = client.post(
+            f"{API_PREFIX}/character-sheets/prompt",
+            json={"kind": kind, "description": "x", "single": True},
+        )
+        assert refused.status_code == 422, (kind, refused.text)
     prose = client.post(
         f"{API_PREFIX}/character-sheets/prompt",
         json={"description": "x", "reference": True, "layout": "prose"},

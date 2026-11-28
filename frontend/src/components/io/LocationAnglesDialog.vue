@@ -1,19 +1,39 @@
 <template>
   <AppDialog
     :open="open"
-    :title="`More angles of ${location?.name ?? 'the location'}`"
-    subtitle="New views of exactly this place, from one of its pictures"
+    :title="isNew ? 'New location' : `More angles of ${location?.name ?? 'the location'}`"
+    :subtitle="
+      isNew
+        ? 'A wide picture of the place, then more views of exactly it, filmed from that picture'
+        : 'New views of exactly this place, from one of its pictures'
+    "
     size="lg"
     :persistent="working"
     @close="close"
   >
     <div class="la" data-testid="location-angles">
-      <template v-if="phase === 'describe'">
+      <template v-if="phase === 'place'">
+        <AppInput v-model="name" label="Name" placeholder="New location" data-testid="la-name" />
+        <AppTextarea
+          v-model="description"
+          label="The place"
+          :rows="3"
+          placeholder="a narrow trail through a snowy pine forest, a fallen log across the path"
+          data-testid="la-description"
+        />
+        <p class="la-hint">
+          First {{ WIDE_COUNT }} wide pictures of it to choose from, then the other views
+          are filmed from the one you choose, so they all show the same place. Always
+          empty, in plain daylight.
+        </p>
+      </template>
+
+      <template v-else-if="phase === 'describe'">
         <section class="la-section">
-          <FieldLabel>From this picture</FieldLabel>
+          <FieldLabel>{{ isNew ? "Start from the picture that looks right" : "From this picture" }}</FieldLabel>
           <div class="la-sources" role="radiogroup" aria-label="The picture to start from">
             <button
-              v-for="(pid, i) in location?.picture_ids ?? []"
+              v-for="(pid, i) in sources"
               :key="pid"
               type="button"
               role="radio"
@@ -95,7 +115,13 @@
             </span>
           </label>
         </div>
-        <p class="la-hint">The video goes into {{ location?.name }} too, as an establishing shot.</p>
+        <p class="la-hint">
+          <template v-if="isNew">
+            {{ placeName }} is made with the picture you started from, the views you keep and
+            the video, as an establishing shot.
+          </template>
+          <template v-else>The video goes into {{ location?.name }} too, as an establishing shot.</template>
+        </p>
       </template>
 
       <p v-if="error" class="la-error" role="alert">{{ error }}</p>
@@ -107,7 +133,22 @@
         phase === "pick" ? "Discard" : "Cancel"
       }}</AppButton>
       <AppButton
-        v-if="phase === 'describe'"
+        v-if="phase === 'place'"
+        tooltip="Draw the place as four views on one picture instead"
+        data-testid="la-sheet"
+        @click="emit('sheet')"
+        >Draw a 2×2 sheet instead</AppButton
+      >
+      <AppButton
+        v-if="phase === 'place'"
+        variant="primary"
+        :disabled="!description.trim()"
+        data-testid="la-wide"
+        @click="drawWide"
+        >Draw {{ WIDE_COUNT }} wide pictures</AppButton
+      >
+      <AppButton
+        v-else-if="phase === 'describe'"
         variant="primary"
         :disabled="!source || !ready"
         data-testid="la-draw"
@@ -148,10 +189,12 @@ import AppTextarea from "../widgets/AppTextarea.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import {
   buildLocationShotsPrompt,
+  buildSheetPrompt,
   checkLocationShots,
   takeLocationShots,
 } from "../../api/characterSheets";
-import { bulkAddPicturesToSet } from "../../api/pictureSets";
+import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
+import { listSetInStudio } from "../../api/studio";
 import {
   deletePictures,
   pictureThumbnailUrl,
@@ -159,6 +202,7 @@ import {
 } from "../../api/pictures";
 import {
   getRunOutcome,
+  getWorkflowCard,
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
@@ -169,14 +213,18 @@ import { runKey } from "../../utils/gpuMemory";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  /** The Studio's location: `{id, name, description, picture_ids}`. */
+  /** The Studio's location: `{id, name, description, picture_ids}`. None
+   * makes a new location: its wide pictures are drawn first (*Draw location
+   * sheets…*), and *Use* makes its set. */
   location: { type: Object, default: null },
 });
-const emit = defineEmits(["close", "done"]);
+const emit = defineEmits(["close", "done", "sheet"]);
 
 /** The built-ins this draws with, by the names they ship under. */
 const SHOTS_WORKFLOW = "MiniMax H3 Location Shots (PixlStash)";
 const RESTORE_WORKFLOW = "MiniMax H3 Restore a Frame (PixlStash)";
+const WIDE_WORKFLOW = "MiniMax H3 Image T2I (PixlStash)";
+const WIDE_COUNT = 4;
 const PRESETS = [
   { label: "Closer", value: "closer" },
   { label: "Opposite side", value: "opposite" },
@@ -194,8 +242,12 @@ const PLACEHOLDERS = {
 };
 const POLL_MS = 3000;
 
-const phase = ref("describe");
+const phase = ref("describe"); // place (new only) | describe | working | pick
 const source = ref(null);
+const name = ref("");
+const description = ref("");
+// A new location's wide pictures, held in the Scrapheap until one is used.
+const candidates = ref([]);
 const layout = ref("");
 const light = ref("plain daylight");
 const shots = ref([]);
@@ -212,13 +264,26 @@ let alive = true;
 let drawing = 0;
 
 const ready = computed(() => shots.value.length > 0);
+const isNew = computed(() => !props.location);
+const sources = computed(() => props.location?.picture_ids ?? candidates.value);
+const placeName = computed(
+  () => props.location?.name ?? (name.value.trim() || "New location"),
+);
+const placeDescription = computed(() =>
+  isNew.value
+    ? description.value.trim()
+    : props.location?.description || props.location?.name || "",
+);
 
 watch(
   () => props.open,
   (open) => {
     if (!open) return;
-    phase.value = "describe";
+    phase.value = isNew.value ? "place" : "describe";
     source.value = props.location?.picture_ids?.[0] ?? null;
+    name.value = "";
+    description.value = "";
+    candidates.value = [];
     layout.value = "";
     light.value = "plain daylight";
     shots.value = [
@@ -277,13 +342,67 @@ async function inputsOf(workflowId) {
   return groups.flatMap((g) => g.picture_inputs || []).filter((i) => i.mode !== "fixed");
 }
 
+/** Start a run and give back its keys, one per picture asked for. */
+async function startAll(body) {
+  const answer = await runWorkflowCard(body);
+  const keys = (answer?.prompts || []).map((p) => runKey(p)).filter(Boolean);
+  if (!keys.length) throw new Error(answer?.error || "The workflow can't run as it is.");
+  liveKeys.push(...keys);
+  return keys;
+}
+
 /** Start one run and give back its key. */
 async function start(body) {
-  const answer = await runWorkflowCard(body);
-  const key = (answer?.prompts || []).map((p) => runKey(p)).find(Boolean);
-  if (!key) throw new Error(answer?.error || "The workflow can't run as it is.");
-  liveKeys.push(key);
-  return key;
+  return (await startAll(body))[0];
+}
+
+/** A new location: draw its wide pictures, then choose one and its views. */
+async function drawWide() {
+  if (working.value || !description.value.trim()) return;
+  working.value = true;
+  error.value = "";
+  phase.value = "working";
+  try {
+    status.value = "Getting the workflow ready…";
+    const { cards } = await listWorkflowCards();
+    const card = builtIn(cards, WIDE_WORKFLOW);
+    const [{ card: full }, wide] = await Promise.all([
+      getWorkflowCard(card.id),
+      buildSheetPrompt({ kind: "location", description: description.value.trim(), single: true }),
+    ]);
+    const sizes = (full?.defaults || []).filter((d) => ["width", "height"].includes(d.input_name));
+    if (!sizes.length) throw new Error(`${WIDE_WORKFLOW} has no picture size to set.`);
+    status.value = `Drawing ${WIDE_COUNT} wide pictures…`;
+    const keys = await startAll({
+      workflow_id: card.id,
+      prompt: wide.prompt,
+      negative: wide.negative,
+      values: sizes.map((d) => ({
+        slot_label: d.slot_label,
+        input_name: d.input_name,
+        value: d.input_name === "width" ? wide.width : wide.height,
+      })),
+      count: WIDE_COUNT,
+      // Not the library's until one is used: straight to the Scrapheap.
+      hold: true,
+      label: `New location · ${placeName.value}`,
+    });
+    candidates.value = (await finished(keys)).map((ids) => ids.at(-1)).filter((id) => id != null);
+    if (!candidates.value.length) throw new Error("The runs made no picture.");
+    source.value = candidates.value[0];
+    phase.value = "describe";
+  } catch (e) {
+    for (const key of liveKeys) {
+      stopRun(key).catch((err) => console.warn("Couldn't stop a wide picture run", key, err));
+    }
+    liveKeys = [];
+    if (!alive || !props.open) return;
+    console.warn("Drawing a new location's wide pictures failed", e);
+    error.value = `Couldn't draw the wide pictures. ${errorMessage(e, "Please try again.")}`;
+    phase.value = "place";
+  } finally {
+    working.value = false;
+  }
 }
 
 /** Wait for every run in *keys* to end; their pictures, in run order. */
@@ -336,7 +455,7 @@ async function draw() {
       throw new Error("The More angles workflows have lost their picture inputs. Restore them from the built-in workflows.");
     }
     const { prompt } = await buildLocationShotsPrompt({
-      description: props.location?.description || props.location?.name || "",
+      description: placeDescription.value,
       layout: layout.value,
       light: light.value,
       shots: shots.value,
@@ -348,7 +467,7 @@ async function draw() {
       prompt,
       inputs: [{ ...pick(shotInputs[0]), picture_id: source.value }],
       count: 1,
-      label: `More angles · ${props.location?.name}`,
+      label: `More angles · ${placeName.value}`,
     });
     const [videoPictures] = await finished([videoKey]);
     videoId = videoPictures.at(-1);
@@ -372,7 +491,7 @@ async function draw() {
           ],
           count: 1,
           hold: true,
-          label: `More angles · ${props.location?.name}`,
+          label: `More angles · ${placeName.value}`,
         }),
       );
     }
@@ -410,18 +529,50 @@ async function draw() {
 
 const pick = (input) => ({ slot_label: input.slot_label, input_name: input.input_name });
 
+/** A new location's set: the picture started from, the kept views and the
+ * video. Made first, so a name already taken stops before anything moves;
+ * the other wide pictures stay in the Scrapheap. */
+async function useNew() {
+  let set;
+  try {
+    ({ picture_set: set } = await createPictureSet({
+      name: placeName.value,
+      description: placeDescription.value,
+    }));
+  } catch (e) {
+    error.value = `Couldn't make the set ${placeName.value}. ${errorMessage(e, "Please try again.")} Discard and start again with another name.`;
+    return;
+  }
+  // The set is the location: the Studio lists it as one (#2819).
+  try {
+    await listSetInStudio(set.id, "location");
+  } catch (e) {
+    console.warn("Couldn't list the new location in the Studio", set.id, e);
+  }
+  const ids = [source.value, videoId, ...kept.value];
+  await restoreScrapheap([source.value, ...kept.value]);
+  await bulkAddPicturesToSet(set.id, ids);
+  if (frameIds.length) await deletePictures(frameIds);
+  emit("done", kept.value.length, set, ids);
+  emit("close");
+}
+
 async function use() {
   if (working.value) return;
   working.value = true;
   error.value = "";
   try {
+    if (isNew.value) {
+      await useNew();
+      return;
+    }
     if (kept.value.length) await restoreScrapheap([...kept.value]);
     await bulkAddPicturesToSet(props.location.id, [videoId, ...kept.value]);
     if (frameIds.length) await deletePictures(frameIds);
     emit("done", kept.value.length);
     emit("close");
   } catch (e) {
-    error.value = `Couldn't put the views in ${props.location?.name}. ${errorMessage(e, "Please try again.")}`;
+    error.value = `Couldn't put the views in ${placeName.value}. ${errorMessage(e, "Please try again.")}`;
   } finally {
     working.value = false;
   }

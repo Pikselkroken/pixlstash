@@ -4328,4 +4328,5 @@ never composes a prompt: it asks the scene for one.
 | Read | `GET /studio/scenes/{id}` | files ended runs as `takes`; `ended` says `completed`, `failed` or `lost` |
 | Items | `PUT`/`DELETE /studio/items/{set_id}` | a set as an outfit, location or prop; the sheet dialog calls `PUT` for each set it makes |
 | Favourites | `PUT /studio/favourites` | `{kind, item_id, favourite}` |
+| New location | `POST /character-sheets/prompt` (`kind: location`, `single: true`), run *MiniMax H3 Image T2I* (`hold`, four), then More angles from the chosen one; *Use* creates the set | the client orders the runs and makes the set; the server writes the wide prompt |
 | More angles | `POST /item-sheets/shots/prompt`, run *MiniMax H3 Location Shots*, `POST /item-sheets/shots`, run *MiniMax H3 Restore a Frame* per frame (`hold`), `POST /item-sheets/shots/check` | the client orders the runs; the server writes the prompt, finds the frames and checks the views |

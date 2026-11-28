@@ -90,6 +90,13 @@ class SheetPromptRequest(BaseModel):
         "left out and no look is appended, whatever `photo_look` says. The "
         "`moss` and `regions` layouts ignore it.",
     )
+    single: bool = Field(
+        False,
+        description="`location` only: one wide photograph of the place at "
+        f"{character_sheet.LOCATION_VIEW_SIZE[0]}x"
+        f"{character_sheet.LOCATION_VIEW_SIZE[1]} instead of a four-view "
+        "sheet, the picture More angles films the other views from.",
+    )
 
 
 class SheetPrompt(BaseModel):
@@ -324,8 +331,22 @@ def create_router(server) -> APIRouter:
         response_model=SheetPrompt,
     )
     def sheet_prompt(payload: SheetPromptRequest):
+        if payload.single:
+            if payload.kind != "location":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Only a location is drawn as a single wide picture.",
+                )
+            width, height = character_sheet.LOCATION_VIEW_SIZE
+            return SheetPrompt(
+                prompt=character_sheet.location_view_prompt(payload.description),
+                negative=character_sheet.NEGATIVE_PROMPT,
+                width=width,
+                height=height,
+            )
         width, height = character_sheet.item_canvas(payload.kind, payload.size)
         fields = payload.model_dump()
+        fields.pop("single")
         kind = fields.pop("kind")
         if kind == "character":
             prompt = character_sheet.sheet_prompt(**fields)

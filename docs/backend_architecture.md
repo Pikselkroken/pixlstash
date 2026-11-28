@@ -13911,7 +13911,11 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   2>`; restoring from noise flips back to the picture, so `POST
   /item-sheets/shots/check` refuses a view that matches the picture better
   than its frame or drifts below `RESTORE_KEEPS` (grey correlation at 128 px).
-  The kept views and the video join the location's set.
+  The kept views and the video join the location's set. A new location
+  starts here too: `POST /character-sheets/prompt` with `kind: location,
+  single: true` writes one wide establishing photograph
+  (`location_view_prompt`, `LOCATION_VIEW_SIZE` 2560x1440) to film the
+  views from; `single` on any other kind is a 422.
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
   design proposes): a shot is one run of one workflow.
 
