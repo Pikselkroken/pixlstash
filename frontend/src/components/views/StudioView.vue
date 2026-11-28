@@ -97,7 +97,7 @@
       <div
         ref="scrollEl"
         class="studio-scroll studio-scroll--tiles"
-        @pointerdown="pressedBackground = isBackground($event.target)"
+        @pointerdown="onBackgroundPress"
         @click="onBackgroundClick"
       >
         <div v-if="store.loaded && !cards.length" class="studio-empty">
@@ -746,6 +746,10 @@ watch(cards, (shown) => {
 // a card onto the gap is a fumbled pick, not a click on nothing.
 let pressedBackground = false;
 const isBackground = (target) => target === scrollEl.value || target === gridEl.value;
+
+function onBackgroundPress(event) {
+  pressedBackground = isBackground(event.target);
+}
 
 function onBackgroundClick(event) {
   if (pressedBackground && event.detail > 0) selectedKeys.value = [];

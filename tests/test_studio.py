@@ -623,6 +623,14 @@ def test_the_picked_frame_is_steady_over_its_neighbours_and_near_the_middle():
     for i in range(28, 39):
         motion[i] = 0.1
     assert 30 <= location_angles.pick_frame(0, 48, [100.0] * 48, motion) <= 36
+    # A shot shorter than two settles still never takes the blur after its
+    # cut, however sharp a frame there reads.
+    short = [100.0] * 8
+    short[1] = 1000.0
+    assert (
+        location_angles.pick_frame(0, 8, short, [0.05] * 8)
+        >= location_angles.SETTLE_FRAMES
+    )
 
 
 def test_the_things_in_a_picture_are_offered_biggest_first_with_their_side():
@@ -647,6 +655,27 @@ def test_the_things_in_a_picture_are_offered_biggest_first_with_their_side():
         len(location_angles.thing_phrases(many, 2560, 1440))
         == location_angles.THINGS_MAX
     )
+
+
+def test_a_describer_that_fails_is_a_refusal_not_a_crash(tmp_path):
+    Image.new("RGB", (64, 36)).save(tmp_path / "wide.png")
+
+    def broken(_paths):
+        raise RuntimeError("model did not load")
+
+    server = SimpleNamespace(
+        vault=SimpleNamespace(
+            image_root=str(tmp_path),
+            db=SimpleNamespace(
+                run_immediate_read_task=lambda _fn, ids: [
+                    SimpleNamespace(id=ids[0], file_path="wide.png")
+                ]
+            ),
+            _engine=SimpleNamespace(describe_regions=broken),
+        )
+    )
+    with pytest.raises(location_angles.SheetUnreadable):
+        location_angles.things_in_picture(server, 7)
 
 
 def test_a_restore_that_turns_back_into_the_original_is_refused():

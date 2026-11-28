@@ -51,12 +51,20 @@ export async function duplicateCard(card, takenNames) {
       project_id: scene.project_id ?? null,
       location_set_id: scene.location_set_id ?? null,
     });
-    await patchScene(made.id, {
-      camera: scene.camera,
-      setting: scene.setting,
-      cast: scene.cast,
-      props: scene.props,
-    });
+    try {
+      await patchScene(made.id, {
+        camera: scene.camera,
+        setting: scene.setting,
+        cast: scene.cast,
+        props: scene.props,
+      });
+    } catch (e) {
+      // Half a copy is not a copy: take the empty scene away again.
+      await deleteScene(made.id).catch((err) =>
+        console.warn("Couldn't remove a half-made scene copy", made.id, err),
+      );
+      throw e;
+    }
     return { id: made.id, name };
   }
   if (!SET_KINDS.has(card.kind)) throw new Error(duplicateReason(card));

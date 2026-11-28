@@ -714,17 +714,18 @@ async function useNew() {
       error.value = `Couldn't make the set ${placeName.value}. ${errorMessage(e, "Please try again.")} Discard and start again with another name.`;
       return;
     }
-    // The set is the location: the Studio lists it as one (#2819).
-    try {
-      await listSetInStudio(madeSet.id, "location");
-    } catch (e) {
-      console.warn("Couldn't list the new location in the Studio", madeSet.id, e);
-    }
   }
   const set = madeSet;
   const ids = [source.value, videoId, ...kept.value];
   await restoreScrapheap([source.value, ...kept.value]);
   await bulkAddPicturesToSet(set.id, ids);
+  // The set is the location: the Studio lists it as one (#2819), once it
+  // holds the pictures, so a Use that fails leaves no empty location there.
+  try {
+    await listSetInStudio(set.id, "location");
+  } catch (e) {
+    console.warn("Couldn't list the new location in the Studio", set.id, e);
+  }
   if (frameIds.length) await deletePictures(frameIds);
   broughtBack.delete(source.value);
   sendBack([...broughtBack]);

@@ -261,10 +261,13 @@ describe("More angles", () => {
     await wrapper.find('[data-testid="la-use"]').trigger("click");
     await flushPromises();
     expect(wrapper.emitted("done")).toBeUndefined();
+    // Not listed in the Studio while it is still empty.
+    expect(api.listSetInStudio).not.toHaveBeenCalled();
     await wrapper.find('[data-testid="la-use"]').trigger("click");
     await flushPromises();
     expect(api.createPictureSet).toHaveBeenCalledTimes(1);
     expect(api.bulkAddPicturesToSet).toHaveBeenLastCalledWith(78, [41, 500, 601, 603]);
+    expect(api.listSetInStudio).toHaveBeenCalledWith(78, "location");
     expect(wrapper.emitted("done")).toHaveLength(1);
   });
 

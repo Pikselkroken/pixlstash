@@ -622,6 +622,23 @@ const sheetsReturnFocus = ref(null);
 // A new location starts from a video of one wide picture (LocationAnglesDialog
 // without a location); its "Draw a 2×2 sheet instead" opens the sheet dialog.
 const newLocationOpen = ref(false);
+// Opened from code, so focus goes back to what opened it by hand: Vuetify
+// restores only to an activator (#overlays-drop-focus).
+let newLocationTrigger = null;
+
+function closeNewLocation() {
+  newLocationOpen.value = false;
+  const trigger = newLocationTrigger;
+  newLocationTrigger = null;
+  nextTick(() => trigger?.focus?.());
+}
+
+function newLocationToSheet() {
+  const trigger = newLocationTrigger;
+  newLocationTrigger = null;
+  newLocationOpen.value = false;
+  openSheets({ kind: "location", sheet: true, returnFocusTo: trigger });
+}
 
 function openSheets({
   kind = "character",
@@ -630,6 +647,7 @@ function openSheets({
   sheet = false,
 }) {
   if (kind === "location" && !sheet) {
+    newLocationTrigger = returnFocusTo ?? character?.returnFocusTo ?? document.activeElement;
     newLocationOpen.value = true;
     return;
   }
@@ -1427,11 +1445,8 @@ defineExpose({
     <TrainLoraDialog />
     <LocationAnglesDialog
       :open="newLocationOpen"
-      @close="newLocationOpen = false"
-      @sheet="
-        newLocationOpen = false;
-        openSheets({ kind: 'location', sheet: true });
-      "
+      @close="closeNewLocation"
+      @sheet="newLocationToSheet"
       @done="(n, set, ids) => set && onSheetsCut({ kind: 'location', pictureIds: ids, set })"
     />
     <CharacterSheetsDialog

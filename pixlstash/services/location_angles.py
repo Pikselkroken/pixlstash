@@ -153,13 +153,12 @@ def pick_frame(
     """The steadiest, sharpest frame of the shot spanning frames *start* to *end*.
 
     *motion[i]* is the grey difference into frame *i*. The settle after the
-    cut and the frames before the next cut are left out when the shot is long
-    enough; each frame scores its sharpness over (1 + the mean motion around
+    cut is always left out (in a short shot, up to its last frame), and the
+    frames before the next cut when there is room; each frame scores its sharpness over (1 + the mean motion around
     it), less up to :data:`CENTRE_WEIGHT` for its distance from the middle.
     """
-    first, last = start + SETTLE_FRAMES, end - SETTLE_FRAMES
-    if last <= first:
-        first, last = start, end
+    first = min(start + SETTLE_FRAMES, end - 1)
+    last = max(end - SETTLE_FRAMES, first + 1)
     middle = (start + end - 1) / 2
     half = max((end - start) / 2, 1.0)
 
@@ -372,5 +371,10 @@ def things_in_picture(server, picture_id: int) -> list[str]:
             "Couldn't read picture %s at %s to describe it: %s", picture_id, path, exc
         )
         raise SheetUnreadable(f"Picture {picture_id} can't be read.") from exc
-    regions = engine.describe_regions([path]).get(path, [])
+    try:
+        regions = engine.describe_regions([path]).get(path, [])
+    except Exception as exc:
+        # A model that will not load is a 409 the dialog words, not a 500.
+        logger.warning("Couldn't describe picture %s at %s: %s", picture_id, path, exc)
+        raise SheetUnreadable(f"Picture {picture_id} can't be described.") from exc
     return thing_phrases(regions, width, height)
