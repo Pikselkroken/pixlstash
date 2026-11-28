@@ -302,17 +302,6 @@ watch(
 watch(() => store.scope, () => store.refresh());
 onMounted(() => store.refresh());
 
-// New scene from the sidebar's footer arrives as `?new=1`, a one-shot.
-watch(
-  () => route.query.new,
-  (value) => {
-    if (!value) return;
-    go({ new: null }, { replace: true });
-    newScene();
-  },
-  { immediate: true },
-);
-
 const sectionTitle = computed(() =>
   section.value === "favourites"
     ? "Favourites"
@@ -490,6 +479,19 @@ function newScene(locationId = null) {
   newOpen.value = true;
 }
 
+// New scene from the sidebar arrives as `?new=1`, or `?new=location:<id>`
+// from a location's row menu, a one-shot.
+watch(
+  () => route.query.new,
+  (value) => {
+    if (!value) return;
+    go({ new: null }, { replace: true });
+    const [kind, id] = String(value).split(":");
+    newScene(kind === "location" ? Number(id) || null : null);
+  },
+  { immediate: true },
+);
+
 async function createNewScene() {
   const name = newName.value.trim();
   if (!name || creating.value) return;
@@ -527,6 +529,17 @@ watch(addSetOpen, async (open) => {
     allSets.value = [];
   }
 });
+
+// Add a set… from a Locations or Props row menu: `?add=1`, a one-shot.
+watch(
+  () => route.query.add,
+  (value) => {
+    if (!value) return;
+    go({ add: null }, { replace: true });
+    addSetOpen.value = true;
+  },
+  { immediate: true },
+);
 
 const setOptions = computed(() => {
   const used = new Set(

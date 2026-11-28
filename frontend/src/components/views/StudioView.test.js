@@ -219,6 +219,22 @@ describe("the Studio's grids", () => {
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ section: "locations" });
   });
+
+  it("opens New scene at the location a sidebar row menu asked for", async () => {
+    const wrapper = await mountAt("/studio?section=scenes&new=location:30");
+    expect(router.currentRoute.value.query.new).toBeUndefined();
+    const dialog = wrapper.findAllComponents({ name: "AppDialog" }).find((d) => d.props("title") === "New scene");
+    expect(dialog.props("open")).toBe(true);
+    const location = wrapper.findComponent('[data-testid="studio-new-location"]');
+    expect(location.props("modelValue")).toBe("30");
+  });
+
+  it("opens Add a set when a sidebar row menu asks for it", async () => {
+    const wrapper = await mountAt("/studio?section=props&add=1");
+    expect(router.currentRoute.value.query).toEqual({ section: "props" });
+    const dialog = wrapper.findAllComponents({ name: "AppDialog" }).find((d) => d.props("title") === "Add a prop");
+    expect(dialog.props("open")).toBe(true);
+  });
 });
 
 describe("a scene", () => {
