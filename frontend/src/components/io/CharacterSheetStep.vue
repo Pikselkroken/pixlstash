@@ -872,7 +872,8 @@ const FRAMINGS = [
   { id: "knees_up", label: "Knees-up" },
   { id: "full_body", label: "Full body" },
 ];
-const COUNTS = [2, 3, 4].map((n) => ({ id: n, label: String(n) }));
+// One sheet is a choice of its own: a quick look, or a sheet to cut at once.
+const COUNTS = [1, 2, 3, 4].map((n) => ({ id: n, label: String(n) }));
 // The canvas sizes `POST /character-sheets/prompt` draws at, and the passport
 // photo each cuts to (a 600×768 cell of the large sheet, scaled).
 const SIZES = [

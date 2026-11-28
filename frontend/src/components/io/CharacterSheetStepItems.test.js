@@ -256,6 +256,21 @@ describe("CharacterSheetStep: an outfit", () => {
     wrapper.unmount();
   });
 
+  it("offers one sheet, and then draws just one", async () => {
+    const wrapper = mountOutfit();
+    await flushPromises();
+    const counts = wrapper.findComponent('[aria-label="Sheets to draw"]');
+    expect(counts.props("options").map((o) => o.id)).toEqual([1, 2, 3, 4]);
+    counts.vm.$emit("update:modelValue", 1);
+    await wrapper.find('[data-testid="cs-description"] textarea').setValue("a mustard raincoat");
+    await flushPromises();
+    await wrapper.vm.footer.primary.run();
+    await flushPromises();
+    expect(api.runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 1, label: "Outfit sheet · New outfit" }),
+    );
+  });
+
   it("can draw once the chosen workflow passes, before the rest answer", async () => {
     // A large library pre-flights a hundred workflows; one still out must not
     // hold Draw back.
