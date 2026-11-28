@@ -280,6 +280,9 @@ class LocationShotsPromptRequest(BaseModel):
     layout: str = Field("", max_length=2000)
     light: str = Field("plain daylight", max_length=200)
     shots: list[LocationShot] = Field(min_length=1, max_length=4)
+    last_picture: bool = Field(
+        False, description="A second picture is the video's last frame and shot."
+    )
 
 
 class LocationShotsPrompt(BaseModel):
@@ -290,6 +293,9 @@ class LocationShotsPrompt(BaseModel):
 class LocationShotsRequest(BaseModel):
     video_picture_id: int
     shots: int = Field(ge=1, le=4, description="New shots, the picture's own left out.")
+    ends_on_picture: bool = Field(
+        False, description="The last shot is a second picture, not a new view."
+    )
 
 
 class PictureThingsRequest(BaseModel):
@@ -502,9 +508,13 @@ def create_router(server) -> APIRouter:
         shots = [shot.model_dump() for shot in payload.shots]
         return LocationShotsPrompt(
             prompt=location_angles.location_shots_prompt(
-                payload.description, payload.layout, shots, payload.light
+                payload.description,
+                payload.layout,
+                shots,
+                payload.light,
+                last_picture=payload.last_picture,
             ),
-            seconds=location_angles.shots_seconds(len(shots)),
+            seconds=location_angles.shots_seconds(len(shots), payload.last_picture),
         )
 
     @router.post(
@@ -522,7 +532,10 @@ def create_router(server) -> APIRouter:
     def location_shots(request: Request, payload: LocationShotsRequest):
         try:
             frame_ids = location_angles.frames_of_video(
-                server, payload.video_picture_id, payload.shots
+                server,
+                payload.video_picture_id,
+                payload.shots,
+                ends_on_picture=payload.ends_on_picture,
             )
         except character_sheet.SheetNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

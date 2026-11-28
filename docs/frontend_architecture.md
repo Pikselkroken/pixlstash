@@ -8914,7 +8914,12 @@ inside its lightboxes, so the rail is empty on `/studio`.
   CLIPLoader's `type` is in `LLM_TYPES`) and rewrites the field with it. At
   the end the picture started from leads the row of views, and the zoom
   steps from it through them, with Keep in the pop-out.
-  The number of new views is picked, one to four (`la-view-count`); the
+  More angles films from one of the location's pictures, or from two:
+  Ctrl+click marks a second (*Start*, *End*) and the run is *MiniMax H3
+  Location Shots, First and Last*, the video ending on it (`last_frame`), the
+  new views filmed between; its loaders are told apart by title. New
+  location keeps one, its wide pictures being takes of a place, not views of
+  one. The number of new views is picked, one to four (`la-view-count`); the
   video is two seconds a view longer, set through the shots workflow's
   *duration* input (`GET /workflows/{id}/form-inputs`).
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`

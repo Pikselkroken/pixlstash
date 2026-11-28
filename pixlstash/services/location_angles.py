@@ -89,14 +89,18 @@ def location_shots_prompt(
     layout: str,
     shots: list[dict],
     light: str = "plain daylight",
+    last_picture: bool = False,
 ) -> str:
-    """The shots video's prompt: shot 1 is the picture, then one per row.
+    """The shots video's prompt: shot 1 is the picture, then one per row, and
+    with *last_picture* a last shot that is a second picture of the place
+    (``last_frame``), so the new views are filmed between two known ones.
 
     *layout* is where each unique feature is as seen from the picture, said
     once (the model keeps it; "exactly one" for each keeps it from repeating
     one). Each shot is ``{preset, words}``.
     """
-    place = description.strip().rstrip(".") or "the place in <Picture 1>"
+    pictures = "<Picture 1> and <Picture 2>" if last_picture else "<Picture 1>"
+    place = description.strip().rstrip(".") or f"the place in {pictures}"
     lines = [
         f"Gimbal footage inside {place}, {light.strip() or 'plain daylight'}, no people."
     ]
@@ -104,7 +108,7 @@ def location_shots_prompt(
         lines.append(layout.strip().rstrip(".") + ".")
     lines.append("The place and everything in it stay exactly the same throughout.")
     lines.append(
-        f"A sequence of {len(shots) + 1} static shots of the same place, each held "
+        f"A sequence of {len(shots) + 1 + last_picture} static shots of the same place, each held "
         "perfectly still on a tripod, joined by hard cuts."
     )
     lines.append("SHOT 1: exactly <Picture 1>, held still.")
@@ -112,12 +116,14 @@ def location_shots_prompt(
         preset = shot.get("preset") if shot.get("preset") in SHOT_PRESETS else "closer"
         words = (shot.get("words") or "").strip() or DEFAULT_WORDS[preset]
         lines.append(f"SHOT {number}: {SHOT_PRESETS[preset].format(words=words)}.")
+    if last_picture:
+        lines.append(f"SHOT {len(shots) + 2}: exactly <Picture 2>, held still.")
     return " ".join(lines)
 
 
-def shots_seconds(shot_count: int) -> int:
-    """The video's length: two seconds a shot, the picture's included."""
-    return SHOT_SECONDS * (shot_count + 1)
+def shots_seconds(shot_count: int, last_picture: bool = False) -> int:
+    """The video's length: two seconds a shot, the pictures' own included."""
+    return SHOT_SECONDS * (shot_count + 1 + last_picture)
 
 
 def find_cuts(diffs: list[float]) -> list[int]:
@@ -192,9 +198,10 @@ def shot_spans(starts: list[int], total: int) -> list[tuple[int, int]]:
     return spans
 
 
-def sharpest_frames(path: str) -> list[int]:
+def sharpest_frames(path: str, ends_on_picture: bool = False) -> list[int]:
     """The steadiest, sharpest frame index of each new shot (the picture's
-    shot left out), one per shot the video holds: see :func:`pick_frame`."""
+    shot left out, and with *ends_on_picture* the last shot too, which is the
+    second picture), one per shot the video holds: see :func:`pick_frame`."""
     capture = cv2.VideoCapture(path)
     diffs: list[float] = []
     sharpness: list[float] = []
@@ -217,16 +224,33 @@ def sharpest_frames(path: str) -> list[int]:
     if len(sharpness) < 2:
         raise ShotsNotFound("The video could not be read frame by frame.")
     motion = [0.0, *diffs]
-    return [
-        pick_frame(start, end, sharpness, motion)
-        for start, end in shot_spans(find_cuts(diffs), len(sharpness))
-    ]
+    spans = shot_spans(find_cuts(diffs), len(sharpness))
+    if ends_on_picture:
+        spans = new_spans_before_the_last_picture(spans)
+    return [pick_frame(start, end, sharpness, motion) for start, end in spans]
 
 
-def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
+def new_spans_before_the_last_picture(
+    spans: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """*spans* without the last, which is the second picture held still.
+    Raises :class:`ShotsNotFound` when that leaves no new shot: the video
+    cut straight from one picture to the other."""
+    if len(spans) < 2:
+        raise ShotsNotFound(
+            "The video went straight from one picture to the other, so it holds no "
+            "new view. Draw it again."
+        )
+    return spans[:-1]
+
+
+def frames_of_video(
+    server, video_id: int, shot_count: int, ends_on_picture: bool = False
+) -> list[int]:
     """Import the sharpest frame of each new shot as a picture made from the
     video, in shot order: as many as the video holds, which may be more or
-    fewer than the *shot_count* asked for. Raises :class:`SheetNotFound`,
+    fewer than the *shot_count* asked for. *ends_on_picture*: the last shot
+    is a second picture, not a new view. Raises :class:`SheetNotFound`,
     :class:`SheetUnreadable` or :class:`ShotsNotFound`."""
     found = server.vault.db.run_immediate_read_task(pictures_in_session, [video_id])
     if found is None:
@@ -237,7 +261,7 @@ def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
         raise SheetUnreadable(
             f"Picture {video_id} is not a video this server can read."
         )
-    indices = sharpest_frames(path)
+    indices = sharpest_frames(path, ends_on_picture)
     if len(indices) != shot_count:
         logger.info(
             "Location shots video %s holds %d new shots where %d were asked for; "

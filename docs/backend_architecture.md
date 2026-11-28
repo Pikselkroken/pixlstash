@@ -13913,7 +13913,12 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   2>`; restoring from noise flips back to the picture, so `POST
   /item-sheets/shots/check` refuses a view that matches the picture better
   than its frame or drifts below `RESTORE_KEEPS` (grey correlation at 128 px).
-  The kept views and the video join the location's set. A new location
+  The kept views and the video join the location's set. With two
+  pictures the run is *MiniMax H3 Location Shots, First and Last*, the second
+  picture the video's `last_frame`: the prompt's last shot is exactly
+  `<Picture 2>` (`last_picture`), the video is a shot longer, and
+  `POST /item-sheets/shots` with `ends_on_picture` leaves that last shot out
+  (`new_spans_before_the_last_picture`). A new location
   starts here too: `POST /character-sheets/prompt` with `kind: location,
   single: true` writes one wide establishing photograph
   (`location_view_prompt`, `LOCATION_VIEW_SIZE` 2560x1440) to film the

@@ -157,7 +157,7 @@ describe("More angles", () => {
     });
     // The video is the location's; only the restores are held until kept.
     expect(video.hold).toBeUndefined();
-    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3);
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3, false);
     expect(restores).toHaveLength(3);
     expect(restores[0]).toMatchObject({ workflow_id: "manual:restore", hold: true });
     // The frame goes in as the frame, the picture as the original, by label.
@@ -542,7 +542,70 @@ describe("More angles", () => {
     expect(asked[0].words).toBe("the fireplace");
     const video = api.runWorkflowCard.mock.calls[0][0];
     expect(video.values).toEqual([{ slot_label: "core:dur", input_name: "value", value: 10 }]);
-    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 4);
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 4, false);
+  });
+
+  it("films between two of the location's pictures when a second is Ctrl-clicked", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" },
+        { id: "manual:firstlast", name: "MiniMax H3 Location Shots, First and Last (PixlStash)" },
+        { id: "manual:restore", name: "MiniMax H3 Restore a Frame (PixlStash)" },
+      ],
+    });
+    const restoreInputs = api.preflightWorkflowRun.getMockImplementation();
+    api.preflightWorkflowRun.mockImplementation(async (body) =>
+      body.workflow_id === "manual:firstlast"
+        ? {
+            groups: [{
+              reasons: [{ code: "picture_input_unfilled" }],
+              picture_inputs: [
+                // The last shot's loader first: matched by title, not order.
+                { slot_label: "core:z9", title: "The location, last shot", input_name: "image", mode: "picker" },
+                { slot_label: "core:a1", title: "The location", input_name: "image", mode: "picker" },
+              ],
+            }],
+          }
+        : restoreInputs(body),
+    );
+    api.runWorkflowCard.mockImplementation(async ({ workflow_id }) => ({
+      prompts: [{ run_id: workflow_id === "manual:firstlast" ? "run-video" : `run-r${Math.random()}` }],
+    }));
+    api.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "run-video" ? [500] : [600 + Number(String(key).length)],
+    }));
+    const wrapper = mountDialog();
+    expect(wrapper.text()).toContain("From these pictures");
+    await wrapper.find('[data-testid="la-source-2"]').trigger("click", { ctrlKey: true });
+    const badges = wrapper.findAll(".la-source__end").map((b) => b.text());
+    expect(badges).toEqual(["Start", "End"]);
+
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.buildLocationShotsPrompt.mock.calls[0][0].last_picture).toBe(true);
+    const video = api.runWorkflowCard.mock.calls[0][0];
+    expect(video.workflow_id).toBe("manual:firstlast");
+    expect(video.inputs).toEqual([
+      { slot_label: "core:a1", input_name: "image", picture_id: 31 },
+      { slot_label: "core:z9", input_name: "image", picture_id: 33 },
+    ]);
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3, true);
+    expect(wrapper.find('[data-testid="la-original-end"] img').attributes("src")).toBe("/thumb/33.webp");
+  });
+
+  it("films from one picture again after a plain click", async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-source-2"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-testid="la-source-1"]').trigger("click");
+    expect(wrapper.findAll(".la-source__end")).toHaveLength(0);
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.runWorkflowCard.mock.calls[0][0]).toMatchObject({
+      workflow_id: "manual:shots",
+      inputs: [{ slot_label: "core:a1", input_name: "image", picture_id: 32 }],
+    });
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3, false);
   });
 
   it("films at the workflow's own length when it has no duration to set", async () => {
@@ -707,7 +770,7 @@ describe("More angles", () => {
     vi.useRealTimers();
     await flushPromises();
     expect(api.stopRun).not.toHaveBeenCalled();
-    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3);
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3, false);
     expect(draws.job).toMatchObject({ locationId: 30, ready: true, fraction: 1 });
     expect(push).toHaveBeenCalledWith(
       expect.objectContaining({ text: "The new views of The pub are ready to pick." }),

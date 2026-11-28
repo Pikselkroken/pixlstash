@@ -614,6 +614,24 @@ def test_the_shots_prompt_has_the_picture_first_and_a_cut_per_shot():
     assert location_angles.shots_seconds(3) == 8
 
 
+def test_two_pictures_film_the_new_views_between_them():
+    prompt = location_angles.location_shots_prompt(
+        "", "", [{"preset": "closer", "words": "the bar"}], last_picture=True
+    )
+    assert prompt.startswith(
+        "Gimbal footage inside the place in <Picture 1> and <Picture 2>"
+    )
+    assert "A sequence of 3 static shots" in prompt
+    assert "SHOT 1: exactly <Picture 1>, held still." in prompt
+    assert prompt.endswith("SHOT 3: exactly <Picture 2>, held still.")
+    assert location_angles.shots_seconds(3, last_picture=True) == 10
+    # The last shot is the second picture, not a new view.
+    spans = [(10, 30), (30, 50), (50, 70)]
+    assert location_angles.new_spans_before_the_last_picture(spans) == spans[:2]
+    with pytest.raises(location_angles.ShotsNotFound):
+        location_angles.new_spans_before_the_last_picture([(10, 70)])
+
+
 def test_every_cut_the_video_made_is_found_and_none_refuses():
     diffs = [0.3] * 47
     for at in (11, 23, 35):
@@ -746,6 +764,13 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
     assert made.status_code == 200, made.text
     frames = made.json()["picture_ids"]
     assert len(frames) == 3 and video_id not in frames
+    # Ending on a second picture: its shot is no new view.
+    between = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": video_id, "shots": 2, "ends_on_picture": True},
+    )
+    assert between.status_code == 200, between.text
+    assert len(between.json()["picture_ids"]) == 2
 
     checked = client.post(
         f"{API_PREFIX}/item-sheets/shots/check",

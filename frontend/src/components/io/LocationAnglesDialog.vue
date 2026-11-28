@@ -57,27 +57,33 @@
 
       <template v-else-if="phase === 'describe'">
         <section class="la-section">
-          <FieldLabel>{{ isNew ? "Start from the picture that looks right" : "From this picture" }}</FieldLabel>
-          <div class="la-sources" role="radiogroup" aria-label="The picture to start from">
+          <FieldLabel>{{ isNew ? "Start from the picture that looks right" : "From these pictures" }}</FieldLabel>
+          <div
+            class="la-sources"
+            :role="isNew ? 'radiogroup' : 'group'"
+            :aria-label="isNew ? 'The picture to start from' : 'The pictures to film from'"
+          >
             <div v-for="(pid, i) in sources" :key="pid" class="la-tile">
               <button
                 type="button"
-                role="radio"
+                :role="isNew ? 'radio' : 'checkbox'"
                 class="la-source"
-                :class="{ 'la-source--on': source === pid }"
-                :aria-checked="source === pid ? 'true' : 'false'"
-                :aria-label="`Picture ${i + 1}`"
+                :class="{ 'la-source--on': source === pid || lastSource === pid }"
+                :aria-checked="source === pid || lastSource === pid ? 'true' : 'false'"
+                :aria-label="`Picture ${i + 1}${source === pid ? ', the start' : lastSource === pid ? ', the end' : ''}`"
                 :aria-keyshortcuts="'Z'"
                 :data-testid="`la-source-${i}`"
-                @click="source = pid"
+                @click="pickSource(pid, $event)"
                 @dblclick="openZoom(pid)"
                 @wheel="onTileWheel($event, pid)"
                 @keydown.z.exact="openZoom(pid)"
               >
                 <img :src="pictureThumbnailUrl(pid)" alt="" />
-                <span v-if="source === pid" class="la-source__ck" aria-hidden="true"
+                <span v-if="source === pid && !lastSource" class="la-source__ck" aria-hidden="true"
                   ><v-icon size="14">mdi-check</v-icon></span
                 >
+                <span v-else-if="source === pid" class="la-source__end" aria-hidden="true">Start</span>
+                <span v-else-if="lastSource === pid" class="la-source__end" aria-hidden="true">End</span>
               </button>
               <!-- Zoom has its own control: a click on the picture chooses it. -->
               <button
@@ -131,6 +137,10 @@
             >
           </div>
         </details>
+        <p v-if="!isNew && sources.length > 1" class="la-hint" data-testid="la-sources-hint">
+          Click a picture to film from it. Ctrl+click a second to end the video on
+          it: the new views are filmed between the two, so both hold the place.
+        </p>
         <AppTextarea
           v-model="layout"
           label="Where things are, seen from this picture"
@@ -246,6 +256,22 @@
             </div>
             <span class="la-view__foot">Started from</span>
           </div>
+          <div v-if="lastSource" class="la-view la-view--original" data-testid="la-original-end">
+            <div class="la-tile">
+              <img :src="pictureThumbnailUrl(lastSource)" alt="" @dblclick="openZoom(lastSource)" />
+              <button
+                type="button"
+                class="la-mag"
+                :data-source="lastSource"
+                aria-label="Zoom in on the picture the video ended on"
+                data-testid="la-zoom-open"
+                @click="openZoom(lastSource)"
+              >
+                <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+              </button>
+            </div>
+            <span class="la-view__foot">Ended on</span>
+          </div>
           <div
             v-for="view in views"
             :key="view.restored_id"
@@ -301,7 +327,7 @@
     >
       <template #actions>
         <AppButton
-          v-if="zoomedId != null && phase === 'pick' && zoomedId !== source"
+          v-if="zoomedId != null && phase === 'pick' && zoomedId !== source && zoomedId !== lastSource"
           :variant="kept.includes(zoomedId) ? 'secondary' : 'primary'"
           data-testid="la-zoom-keep"
           @click="toggleKept(zoomedId)"
@@ -439,6 +465,8 @@ const emit = defineEmits(["close", "done", "sheet"]);
 
 /** The built-ins this draws with, by the names they ship under. */
 const SHOTS_WORKFLOW = "MiniMax H3 Location Shots (PixlStash)";
+// The same, ending on a second picture (`last_frame`).
+const SHOTS_FIRST_LAST_WORKFLOW = "MiniMax H3 Location Shots, First and Last (PixlStash)";
 const RESTORE_WORKFLOW = "MiniMax H3 Restore a Frame (PixlStash)";
 const WIDE_WORKFLOW = "MiniMax H3 Image T2I (PixlStash)";
 const WIDE_COUNT = 4;
@@ -497,6 +525,8 @@ const LLM_TYPES = new Set([
 
 const phase = ref("describe"); // place (new only) | describe | working | pick
 const source = ref(null);
+// A second picture the video ends on (More angles only), or null.
+const lastSource = ref(null);
 const name = ref("");
 const description = ref("");
 // A new location's wide pictures, held in the Scrapheap until one is used.
@@ -588,12 +618,13 @@ const placeDescription = computed(() =>
 // so each view is compared with it. Closing refocuses the zoom control.
 const sourceList = computed(() =>
   phase.value === "pick"
-    ? [source.value, ...views.value.map((v) => v.restored_id)]
+    ? [source.value, ...(lastSource.value ? [lastSource.value] : []), ...views.value.map((v) => v.restored_id)]
     : sources.value,
 );
 const zoomCaption = computed(() => {
   if (phase.value !== "pick") return `Picture ${zoomPos.value + 1} of ${sources.value.length}`;
   if (zoomedId.value === source.value) return "The picture you started from";
+  if (zoomedId.value === lastSource.value) return "The picture the video ended on";
   const view = views.value.find((v) => v.restored_id === zoomedId.value);
   return view ? `${view.name}${view.ok ? "" : ` · ${view.reason}`}` : "";
 });
@@ -670,6 +701,7 @@ watch(
     if (!open || held.value) return;
     phase.value = isNew.value ? "place" : "describe";
     source.value = props.location?.picture_ids?.[0] ?? null;
+    lastSource.value = null;
     name.value = "";
     description.value = "";
     candidates.value = [];
@@ -974,14 +1006,15 @@ async function draw() {
   try {
     report("Getting the workflows ready…", 0);
     const { cards } = await listWorkflowCards();
-    const shotsCard = builtIn(cards, SHOTS_WORKFLOW);
+    const endsOnPicture = lastSource.value != null;
+    const shotsCard = builtIn(cards, endsOnPicture ? SHOTS_FIRST_LAST_WORKFLOW : SHOTS_WORKFLOW);
     const restoreCard = builtIn(cards, RESTORE_WORKFLOW);
     const [shotInputs, restoreInputs, length] = await Promise.all([
       inputsOf(shotsCard.id),
       inputsOf(restoreCard.id),
       durationOf(shotsCard.id),
     ]);
-    if (!shotInputs.length || restoreInputs.length < 2) {
+    if (!shotInputs.length || (endsOnPicture && shotInputs.length < 2) || restoreInputs.length < 2) {
       throw new Error("The More angles workflows have lost their picture inputs. Restore them from the built-in workflows.");
     }
     if (isNew.value && !broughtBack.has(source.value)) {
@@ -993,13 +1026,14 @@ async function draw() {
       layout: layout.value,
       light: light.value,
       shots: shots.value,
+      ...(endsOnPicture ? { last_picture: true } : {}),
     });
 
     report("Filming the place…", 0.02);
     const videoKey = await start({
       workflow_id: shotsCard.id,
       prompt,
-      inputs: [{ ...pick(shotInputs[0]), picture_id: source.value }],
+      inputs: endsOnPicture ? firstAndLast(shotInputs) : [{ ...pick(shotInputs[0]), picture_id: source.value }],
       // Two seconds a shot: more views, a longer video, not shorter shots.
       ...(length ? { values: [{ ...pick(length), value: seconds }] } : {}),
       count: 1,
@@ -1012,7 +1046,11 @@ async function draw() {
     if (videoId == null) throw new Error("The video run made nothing.");
 
     report("Taking the new views out of the video…", 0.6);
-    ({ picture_ids: frameIds } = await takeLocationShots(videoId, shots.value.length));
+    ({ picture_ids: frameIds } = await takeLocationShots(
+      videoId,
+      shots.value.length,
+      endsOnPicture,
+    ));
 
     const restoring = `Restoring ${frameIds.length} views…`;
     report(restoring, 0.62);
@@ -1077,6 +1115,35 @@ async function draw() {
 }
 
 const pick = (input) => ({ slot_label: input.slot_label, input_name: input.input_name });
+
+/** A click picks the picture to film from; Ctrl+click (More angles) a second
+ * the video ends on, and again takes it away. A new location's wide pictures
+ * are takes of a place, not views of one, so there it is one. */
+function pickSource(pid, event) {
+  const adding = !isNew.value && (event?.ctrlKey || event?.metaKey);
+  if (!adding) {
+    source.value = pid;
+    lastSource.value = null;
+  } else if (pid === lastSource.value) {
+    lastSource.value = null;
+  } else if (pid === source.value) {
+    source.value = lastSource.value ?? pid;
+    lastSource.value = null;
+  } else {
+    lastSource.value = pid;
+  }
+}
+
+/** The first-and-last shots workflow's two inputs, by their nodes' titles:
+ * the one that names the last shot takes the second picture. */
+function firstAndLast(inputs) {
+  const last = inputs.find((i) => /last/i.test(i.title || "")) ?? inputs[1];
+  const first = inputs.find((i) => i !== last);
+  return [
+    { ...pick(first), picture_id: source.value },
+    { ...pick(last), picture_id: lastSource.value },
+  ];
+}
 
 /** The shots workflow's duration in seconds, by its node's title, or null
  * when it has none to set (the video then keeps the length it ships with). */
@@ -1222,6 +1289,19 @@ async function use() {
 .la-source:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--space-1);
+}
+
+.la-source__end {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 20px;
 }
 
 .la-source__ck {
