@@ -213,6 +213,11 @@ describe("More angles", () => {
     await flushPromises();
     const video = api.runWorkflowCard.mock.calls[1][0];
     expect(video.inputs[0].picture_id).toBe(42);
+    // A run takes only a kept picture: the chosen one is back before it films.
+    expect(api.restoreScrapheap.mock.calls[0]).toEqual([[42]]);
+    expect(api.restoreScrapheap.mock.invocationCallOrder[0]).toBeLessThan(
+      api.runWorkflowCard.mock.invocationCallOrder[1],
+    );
     expect(api.buildLocationShotsPrompt.mock.calls[0][0].description).toBe("a walled garden");
 
     await wrapper.find('[data-testid="la-use"]').trigger("click");
@@ -303,6 +308,38 @@ describe("More angles", () => {
     await wrapper.find('[data-testid="la-draw"]').trigger("click");
     await flushPromises();
     expect(api.runWorkflowCard.mock.calls[0][0].inputs[0].picture_id).toBe(34);
+  });
+
+  it("sends a wide picture drawn from back to the Scrapheap when the new location is discarded", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:wide", name: "MiniMax H3 Image T2I (PixlStash)" },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" },
+        { id: "manual:restore", name: "MiniMax H3 Restore a Frame (PixlStash)" },
+      ],
+    });
+    api.getWorkflowCard.mockResolvedValue({ card: { defaults: [{ slot_label: "core:w", input_name: "width" }] } });
+    api.buildSheetPrompt.mockResolvedValue({ prompt: "WIDE", width: 2560, height: 1440 });
+    const shotRuns = api.runWorkflowCard.getMockImplementation();
+    api.runWorkflowCard.mockImplementation(async (body) =>
+      body.workflow_id === "manual:wide"
+        ? { prompts: [{ run_id: "run-w1" }, { run_id: "run-w2" }] }
+        : shotRuns(body),
+    );
+    Object.assign(OUTPUTS, { "run-w1": [41], "run-w2": [42] });
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a yard");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.restoreScrapheap).toHaveBeenCalledWith([41]);
+    api.deletePictures.mockClear();
+
+    await wrapper.findAll("button").find((b) => b.text() === "Discard").trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([41]);
   });
 
   it("offers the 2×2 sheet instead of a new location's video", async () => {

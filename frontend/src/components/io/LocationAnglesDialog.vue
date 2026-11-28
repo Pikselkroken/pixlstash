@@ -351,6 +351,9 @@ let frameIds = [];
 // A new location's set once made: a Use that failed after it is retried
 // into the same set rather than making a second one under a taken name.
 let madeSet = null;
+// A new location's wide pictures drawn from, back from the Scrapheap: a run
+// takes only a kept picture as an input. Sent back unless *Use* keeps one.
+let broughtBack = new Set();
 let liveKeys = [];
 let alive = true;
 // Bumped by a close: a draw started before it stops following its runs.
@@ -449,6 +452,7 @@ watch(
     videoId = null;
     frameIds = [];
     madeSet = null;
+    broughtBack = new Set();
     liveKeys = [];
   },
   { immediate: true },
@@ -461,7 +465,17 @@ function close() {
   }
   liveKeys = [];
   working.value = false;
+  sendBack([...broughtBack]);
   emit("close");
+}
+
+/** Wide pictures brought back to be drawn from but not used: to the Scrapheap. */
+function sendBack(ids) {
+  broughtBack = new Set([...broughtBack].filter((id) => !ids.includes(id)));
+  if (!ids.length) return;
+  deletePictures(ids).catch((e) =>
+    console.warn("Couldn't send unused wide pictures back to the Scrapheap", ids, e),
+  );
 }
 
 onBeforeUnmount(() => {
@@ -607,6 +621,10 @@ async function draw() {
     if (!shotInputs.length || restoreInputs.length < 2) {
       throw new Error("The More angles workflows have lost their picture inputs. Restore them from the built-in workflows.");
     }
+    if (isNew.value && !broughtBack.has(source.value)) {
+      await restoreScrapheap([source.value]);
+      broughtBack.add(source.value);
+    }
     const { prompt } = await buildLocationShotsPrompt({
       description: placeDescription.value,
       layout: layout.value,
@@ -708,6 +726,8 @@ async function useNew() {
   await restoreScrapheap([source.value, ...kept.value]);
   await bulkAddPicturesToSet(set.id, ids);
   if (frameIds.length) await deletePictures(frameIds);
+  broughtBack.delete(source.value);
+  sendBack([...broughtBack]);
   emit("done", kept.value.length, set, ids);
   emit("close");
 }
