@@ -33,6 +33,31 @@ test('the title-bar Guide opens the A–Z grid, and search narrows it', async ({
   await view.getByTestId('guide-search').locator('input').fill('')
 })
 
+test('the API concept shows the server reference in place', async ({ page }) => {
+  await openApp(page)
+  await page.keyboard.press('F1')
+  await page.getByTestId('guide-card-api').click()
+  await page.getByTestId('guide-view-reference').click()
+  await expect(page).toHaveURL(/\/guide\/api\?view=reference/)
+  const frame = page.getByTestId('guide-reference')
+  await expect(frame).toHaveAttribute('src', /\/scalar$/)
+  // The frame holds the server's own page, not a copy in the app.
+  await expect
+    .poll(async () => (await frame.elementHandle()).contentFrame().then((f) => f.title()))
+    .toBe('PixlStash API Reference')
+  // And the hash-pinned Scalar bundle loaded and rendered it (a wrong
+  // integrity hash leaves the title but blocks the script).
+  await expect(
+    page.frameLocator('[data-testid="guide-reference"]').locator('[data-v-app]').first(),
+  ).toBeAttached({ timeout: 30_000 })
+
+  // A concept with no server page offers no Reference view.
+  await page.getByTestId('titlebar-guide').click()
+  await page.getByTestId('guide-card-people').click()
+  await expect(page.getByTestId('guide-concept')).toBeVisible()
+  await expect(page.getByTestId('guide-view-reference')).toHaveCount(0)
+})
+
 test('F1 opens the Guide; a concept opens in place and a wizard rings its control', async ({
   page,
 }) => {
