@@ -348,6 +348,9 @@ const views = ref([]);
 const kept = ref([]);
 let videoId = null;
 let frameIds = [];
+// A new location's set once made: a Use that failed after it is retried
+// into the same set rather than making a second one under a taken name.
+let madeSet = null;
 let liveKeys = [];
 let alive = true;
 // Bumped by a close: a draw started before it stops following its runs.
@@ -445,6 +448,7 @@ watch(
     kept.value = [];
     videoId = null;
     frameIds = [];
+    madeSet = null;
     liveKeys = [];
   },
   { immediate: true },
@@ -682,22 +686,24 @@ const pick = (input) => ({ slot_label: input.slot_label, input_name: input.input
  * video. Made first, so a name already taken stops before anything moves;
  * the other wide pictures stay in the Scrapheap. */
 async function useNew() {
-  let set;
-  try {
-    ({ picture_set: set } = await createPictureSet({
-      name: placeName.value,
-      description: placeDescription.value,
-    }));
-  } catch (e) {
-    error.value = `Couldn't make the set ${placeName.value}. ${errorMessage(e, "Please try again.")} Discard and start again with another name.`;
-    return;
+  if (!madeSet) {
+    try {
+      ({ picture_set: madeSet } = await createPictureSet({
+        name: placeName.value,
+        description: placeDescription.value,
+      }));
+    } catch (e) {
+      error.value = `Couldn't make the set ${placeName.value}. ${errorMessage(e, "Please try again.")} Discard and start again with another name.`;
+      return;
+    }
+    // The set is the location: the Studio lists it as one (#2819).
+    try {
+      await listSetInStudio(madeSet.id, "location");
+    } catch (e) {
+      console.warn("Couldn't list the new location in the Studio", madeSet.id, e);
+    }
   }
-  // The set is the location: the Studio lists it as one (#2819).
-  try {
-    await listSetInStudio(set.id, "location");
-  } catch (e) {
-    console.warn("Couldn't list the new location in the Studio", set.id, e);
-  }
+  const set = madeSet;
   const ids = [source.value, videoId, ...kept.value];
   await restoreScrapheap([source.value, ...kept.value]);
   await bulkAddPicturesToSet(set.id, ids);
