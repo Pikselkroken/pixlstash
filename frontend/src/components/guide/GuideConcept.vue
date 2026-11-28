@@ -116,7 +116,7 @@
       v-else
       class="gc-ref"
       :src="referenceUrl"
-      :title="`${concept.name} reference`"
+      :aria-label="`${concept.name} reference`"
       data-testid="guide-reference"
     />
   </div>
