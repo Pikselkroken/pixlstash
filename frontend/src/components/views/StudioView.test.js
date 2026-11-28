@@ -32,6 +32,8 @@ const api = vi.hoisted(() => ({
   bulkAddPicturesToSet: vi.fn(),
   deleteCharacter: vi.fn(),
   patchCharacter: vi.fn(),
+  removePictureFromSet: vi.fn(),
+  deletePictures: vi.fn(),
 }));
 vi.mock("../../composables/useConfirm", () => ({
   useConfirm: () => ({ confirm: api.confirm }),
@@ -55,6 +57,7 @@ vi.mock("../../api/workflows", () => ({
   runWorkflowCard: api.runWorkflowCard,
 }));
 vi.mock("../../api/pictures", () => ({
+  deletePictures: api.deletePictures,
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
   pictureMediaUrl: (id, format) => `/media/${id}.${format}`,
 }));
@@ -64,6 +67,7 @@ vi.mock("../../api/pictureSets", () => ({
   deletePictureSet: api.deletePictureSet,
   patchPictureSet: api.patchPictureSet,
   bulkAddPicturesToSet: api.bulkAddPicturesToSet,
+  removePictureFromSet: api.removePictureFromSet,
 }));
 vi.mock("../../api/characters", () => ({
   characterThumbnailUrl: (id) => `/character/${id}.webp`,
@@ -464,6 +468,64 @@ describe("selecting Studio cards", () => {
     await flushPromises();
     expect(api.patchScene).toHaveBeenLastCalledWith(1, { project_id: null });
     expect(api.patchCharacter).toHaveBeenLastCalledWith(5, { project_ids: [] });
+  });
+});
+
+describe("a location's pictures", () => {
+  const pic = (wrapper, id) => wrapper.find(`[data-testid="studio-pic-${id}"]`);
+  const chosen = (wrapper) =>
+    wrapper.findAll(".studio-angle__pick[aria-pressed=true]").map((b) => b.attributes("data-testid"));
+
+  it("shows every picture, the first four named, and takes the selected out of the location", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.locations[0].picture_ids = [31, 32, 33, 34, 35];
+    api.getStudioOverview.mockResolvedValue(overview);
+    api.removePictureFromSet.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    expect(wrapper.findAll("figcaption").map((f) => f.text())).toEqual([
+      "Wide", "Reverse", "Left", "Right", "Picture 5",
+    ]);
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 33).trigger("click", { ctrlKey: true });
+    expect(chosen(wrapper)).toEqual(["studio-pic-31", "studio-pic-33"]);
+    await wrapper.find('[data-testid="studio-pics-remove"]').trigger("click");
+    await flushPromises();
+    expect(api.removePictureFromSet.mock.calls).toEqual([[30, 31], [30, 33]]);
+    // The picture is only taken out of the location, never deleted.
+    expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
+  it("deletes a Shift range with the Delete key, and Esc clears before it closes", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 33).trigger("click", { shiftKey: true });
+    expect(chosen(wrapper)).toEqual(["studio-pic-31", "studio-pic-32", "studio-pic-33"]);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([31, 32, 33]);
+
+    await pic(wrapper, 34).trigger("click");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(chosen(wrapper)).toEqual([]);
+    expect(router.currentRoute.value.query.open).toBe("location:30");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+  });
+
+  it("deletes from the right-click menu, the picture under it alone when it was not selected", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("click");
+    await pic(wrapper, 34).trigger("contextmenu");
+    await flushPromises();
+    expect(chosen(wrapper)).toEqual(["studio-pic-34"]);
+    document.body.querySelector('[data-testid="studio-pics-menu"] [data-verb="delete"]').click();
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([34]);
+    expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
   });
 });
 

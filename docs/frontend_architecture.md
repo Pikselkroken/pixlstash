@@ -8857,6 +8857,12 @@ inside its lightboxes, so the rail is empty on `/studio`.
   so adding one moves it; a person or a set gains it. A copy of a scene keeps
   its cast, props, setting and camera but not its takes; a copy of a set
   keeps its pictures and kind; a person is not duplicated.
+- **An item's lightbox shows every picture** of an outfit, location or prop,
+  the first four named as the sheet cuts them, and selects them with the
+  grid's gestures (click, Ctrl, Shift, Esc clears before it closes). A bar
+  and a right-click menu offer *Remove from this …* (`DELETE
+  /picture_sets/{id}/members/{picture}`, the picture stays) and *Delete*
+  (`deletePictures`, to the Scrapheap; also the Delete key).
 - **`StudioScene`** is blocking on the picture: the location's view (the
   camera's `view`) is the stage, each person and prop a box dragged into
   place and sized from its corner. The inspector shows the selection in

@@ -107,19 +107,60 @@
             </div>
           </div>
         </template>
-        <div v-else class="studio-angles">
-          <figure
-            v-for="(pid, i) in item.picture_ids.slice(0, 4)"
-            :key="pid"
-            class="studio-angle"
+        <template v-else>
+          <!-- Click selects (Ctrl adds, Shift ranges), Esc clears, Delete or
+               right-click acts on the selection: the picture grid's gestures. -->
+          <div
+            v-if="selected.length"
+            class="studio-selbar"
+            role="toolbar"
+            aria-label="Selected pictures"
+            data-testid="studio-pics-bar"
           >
-            <img :src="pictureThumbnailUrl(pid)" :alt="`${item.name}, ${angleNames[i]}`" />
-            <figcaption>{{ angleNames[i] }}</figcaption>
-          </figure>
-          <p v-if="!item.picture_ids.length" class="studio-hint">
-            No pictures yet. New sheets… draws them.
-          </p>
-        </div>
+            <span class="studio-sub">{{ selected.length }} selected</span>
+            <AppButton
+              size="sm"
+              icon-left="playlist-remove"
+              data-testid="studio-pics-remove"
+              @click="removeSelected"
+              >Remove from this {{ noun }}</AppButton
+            >
+            <AppButton
+              size="sm"
+              variant="danger"
+              icon-left="delete-outline"
+              tooltip="To the Scrapheap, where it can be restored (Del)"
+              data-testid="studio-pics-delete"
+              @click="deleteSelected"
+              >Delete</AppButton
+            >
+            <AppButton size="sm" variant="ghost" @click="selected = []">Clear</AppButton>
+          </div>
+          <div class="studio-angles" @click.self="selected = []">
+            <figure
+              v-for="(pid, i) in item.picture_ids"
+              :key="pid"
+              class="studio-angle"
+              :class="{ 'studio-angle--on': selected.includes(pid) }"
+            >
+              <button
+                type="button"
+                class="studio-angle__pick"
+                :aria-pressed="selected.includes(pid) ? 'true' : 'false'"
+                :aria-label="`${item.name}, ${pictureName(i)}`"
+                :data-testid="`studio-pic-${pid}`"
+                @click="onPictureClick(pid, i, $event)"
+                @contextmenu.prevent="openPictureMenu(pid, $event)"
+              >
+                <img :src="pictureThumbnailUrl(pid)" alt="" />
+              </button>
+              <figcaption>{{ pictureName(i) }}</figcaption>
+            </figure>
+            <p v-if="!item.picture_ids.length" class="studio-hint">
+              No pictures yet. New sheets… draws them.
+            </p>
+          </div>
+        </template>
       </div>
     </div>
     <aside class="studio-inspector" aria-label="Inspector">
@@ -202,25 +243,61 @@
       @close="closeAngles"
       @done="emit('changed')"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="menu"
+        ref="menuEl"
+        class="ctx-menu studio-ctx-menu"
+        role="menu"
+        tabindex="-1"
+        :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+        data-testid="studio-pics-menu"
+        @contextmenu.prevent
+        @mousedown.stop
+        @keydown="onMenuKeydown"
+      >
+        <button type="button" role="menuitem" class="ctx-item" data-verb="remove" @click="runMenu(removeSelected)">
+          <v-icon class="ctx-icon" aria-hidden="true">mdi-playlist-remove</v-icon>
+          <span class="ctx-label-text">Remove from this {{ noun }}</span>
+        </button>
+        <div class="ctx-sep" role="separator"></div>
+        <button
+          type="button"
+          role="menuitem"
+          class="ctx-item ctx-item--danger"
+          data-verb="delete"
+          @click="runMenu(deleteSelected)"
+        >
+          <v-icon class="ctx-icon" aria-hidden="true">mdi-delete-outline</v-icon>
+          <span class="ctx-label-text">Delete</span>
+          <span class="ctx-shortcut" aria-hidden="true">Del</span>
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
 /**
- * The lightbox of a person, an outfit, a location or a prop (#2819): its four
- * angles (a person's wardrobe), and in the inspector its words, who wears it
- * and the scenes it is in. ‹ › steps through its section's items.
+ * The lightbox of a person, an outfit, a location or a prop (#2819): its
+ * pictures, the first four named as the sheet cuts them (a person's
+ * wardrobe), and in the inspector its words, who wears it and the scenes it
+ * is in. ‹ › steps through its section's items. The pictures select as on the
+ * picture grid, to take out of the item or delete.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import LocationAnglesDialog from "../io/LocationAnglesDialog.vue";
-import { pictureThumbnailUrl } from "../../api/pictures";
+import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
+import { removePictureFromSet } from "../../api/pictureSets";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard";
 import {
   ITEM_ANGLES,
   KIND_LIST,
@@ -254,6 +331,110 @@ function closeAngles() {
 
 const item = computed(() => store.byKey.get(`${props.kind}:${props.itemId}`) || null);
 const angleNames = computed(() => (props.kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES));
+const pictureName = (i) => angleNames.value[i] ?? `Picture ${i + 1}`;
+const noun = computed(() => STUDIO_KINDS[props.kind]?.label.toLowerCase() ?? "item");
+
+// ── The pictures' selection ───────────────────────────────────────────────
+const selected = ref([]);
+
+function onPictureClick(pid, index, event) {
+  const ids = item.value?.picture_ids ?? [];
+  if (event?.shiftKey) {
+    const anchor = ids.findIndex((id) => selected.value.includes(id));
+    const from = anchor < 0 ? index : anchor;
+    const [start, end] = from <= index ? [from, index] : [index, from];
+    selected.value = ids.slice(start, end + 1);
+  } else if (event?.ctrlKey || event?.metaKey) {
+    selected.value = selected.value.includes(pid)
+      ? selected.value.filter((id) => id !== pid)
+      : [...selected.value, pid];
+  } else {
+    selected.value = [pid];
+  }
+}
+
+// A picture no longer in the item cannot stay selected; another item, none.
+watch(
+  () => item.value?.picture_ids,
+  (ids) => {
+    const now = new Set(ids ?? []);
+    if (selected.value.some((id) => !now.has(id))) {
+      selected.value = selected.value.filter((id) => now.has(id));
+    }
+  },
+);
+watch(() => props.itemId, () => {
+  selected.value = [];
+});
+
+/** Take the selected pictures out of this item; they stay in the library. */
+async function removeSelected() {
+  const ids = [...selected.value];
+  if (!ids.length) return;
+  const failed = [];
+  for (const id of ids) {
+    try {
+      await removePictureFromSet(props.itemId, id);
+    } catch (e) {
+      console.warn("Couldn't take a picture out of the Studio item", props.itemId, id, e);
+      failed.push(id);
+    }
+  }
+  selected.value = failed;
+  emit("changed");
+  if (failed.length) {
+    noticeStore.error(`Couldn't take ${failed.length} of the pictures out of ${item.value?.name}.`, {
+      key: "studio-pics-remove",
+    });
+  }
+}
+
+/** Delete the selected pictures: to the Scrapheap, where they can be restored. */
+async function deleteSelected() {
+  const ids = [...selected.value];
+  if (!ids.length) return;
+  try {
+    await deletePictures(ids);
+    selected.value = [];
+    emit("changed");
+  } catch (e) {
+    noticeStore.error(`Couldn't delete the pictures. ${errorMessage(e, "Please try again.")}`, {
+      key: "studio-pics-delete",
+    });
+  }
+}
+
+// ── Their menu ────────────────────────────────────────────────────────────
+const menu = ref(null); // { x, y }
+const menuEl = ref(null);
+let menuTrigger = null;
+
+async function openPictureMenu(pid, event) {
+  if (!selected.value.includes(pid)) selected.value = [pid];
+  menuTrigger = event.currentTarget ?? null;
+  menu.value = {
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120)),
+  };
+  await nextTick();
+  menuEl.value?.querySelector(".ctx-item")?.focus();
+}
+
+function closeMenu({ refocus = false } = {}) {
+  if (!menu.value) return;
+  menu.value = null;
+  if (refocus) menuTrigger?.focus?.();
+  menuTrigger = null;
+}
+
+function runMenu(verb) {
+  closeMenu({ refocus: true });
+  verb();
+}
+
+function onOutside() {
+  closeMenu();
+}
 
 const neighbours = computed(() => {
   const list = store.overview[KIND_LIST[props.kind]] || [];
@@ -322,12 +503,22 @@ async function stopUsing() {
 function onKey(event) {
   if (anglesOpen.value) return;
   if (event.defaultPrevented || event.target?.closest?.("input, textarea, [role=dialog]")) return;
-  if (event.key === "Escape") emit("close");
+  // Esc closes the menu, then clears the selection, and only then the lightbox.
+  if (event.key === "Escape" && menu.value) closeMenu({ refocus: true });
+  else if (event.key === "Escape" && selected.value.length) selected.value = [];
+  else if (event.key === "Delete" && selected.value.length) deleteSelected();
+  else if (event.key === "Escape") emit("close");
   else if (event.key === "ArrowLeft") step(-1);
   else if (event.key === "ArrowRight") step(1);
 }
-onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  document.addEventListener("mousedown", onOutside);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  document.removeEventListener("mousedown", onOutside);
+});
 </script>
 
 <style scoped src="./Studio.css"></style>
