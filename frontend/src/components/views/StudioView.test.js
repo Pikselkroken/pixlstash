@@ -1067,14 +1067,38 @@ describe("a scene", () => {
     });
   });
 
-  it("says why a clip cannot start from a still when the workflow takes no picture", async () => {
+  it("offers no video workflow that takes no picture, and says why a clip cannot be made", async () => {
     api.preflightWorkflowRun.mockResolvedValue({ groups: [{ picture_inputs: [] }] });
     const wrapper = await mountAt("/studio?open=scene:1");
     await wrapper.find('[data-testid="scene-take-900"]').trigger("click");
-    await wrapper.find('[data-testid="scene-clip-from-take"]').trigger("click");
+    await flushPromises();
+    const button = wrapper.findComponent('[data-testid="scene-clip-from-take"]');
+    expect(button.props("disabled")).toBe(true);
+    expect(button.props("tooltip")).toBe("No video workflow here starts from a picture");
+    await button.trigger("click");
     await flushPromises();
     expect(api.runWorkflowCard).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("takes no picture");
+  });
+
+  it("offers only the workflows that can shoot a scene", async () => {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:edit", name: "Image Edit", type: "img2img", reference_inputs: 2 },
+        { id: "manual:restyle", name: "Restyle", type: "img2img", reference_inputs: 0 },
+        { id: "manual:inpaint", name: "Inpaint", type: "inpaint", reference_inputs: 0 },
+        { id: "manual:sheet", name: "Edit (sheet)", type: "img2img", reference_inputs: 1 },
+        { id: "manual:hidden", name: "Old edit", type: "img2img", reference_inputs: 1, hidden: true },
+        { id: "manual:i2v", name: "MiniMax H3: Image to Video", type: "video", reference_inputs: 0 },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)", type: "video", reference_inputs: 0 },
+      ],
+    });
+    const wrapper = await mountAt("/studio?open=scene:1");
+    await flushPromises();
+    const selects = wrapper.findAllComponents({ name: "AppSelect" });
+    const offered = (pick) =>
+      selects.map((s) => s.props("options").map((o) => o.value)).find(pick) ?? [];
+    expect(offered((v) => v.includes("manual:edit"))).toEqual(["manual:edit"]);
+    expect(offered((v) => v.includes("manual:i2v"))).toEqual(["manual:i2v"]);
   });
 });
 

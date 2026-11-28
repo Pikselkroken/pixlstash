@@ -352,6 +352,7 @@
                 variant="secondary"
                 icon-left="movie-open-play-outline"
                 :disabled="!clipWorkflow || shooting"
+                :tooltip="clipWorkflow ? '' : 'No video workflow here starts from a picture'"
                 data-testid="scene-clip-from-take"
                 @click="shoot('clip', shownTake.picture_id)"
                 >Make a clip from this take</AppButton
@@ -497,6 +498,7 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
+import { isSceneClipCandidate, isSceneStillWorkflow } from "../../utils/studioWorkflows";
 import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
@@ -940,33 +942,59 @@ function keepChoice(kind, id) {
 watch(stillWorkflow, (id) => keepChoice("still", id));
 watch(clipWorkflow, (id) => keepChoice("clip", id));
 
-const isVideo = (card) => card.type === "video";
-const stillOptions = computed(() =>
+// Only the workflows that can shoot a scene (utils/studioWorkflows.js).
+const stillCards = computed(() =>
   cards.value
-    .filter((c) => !isVideo(c))
-    .sort((a, b) => (b.reference_inputs || 0) - (a.reference_inputs || 0))
-    .map((c) => ({
-      label: c.reference_inputs ? `${c.name} · ${c.reference_inputs} pictures in` : c.name,
-      value: c.id,
-    })),
+    .filter(isSceneStillWorkflow)
+    .sort((a, b) => (b.reference_inputs || 0) - (a.reference_inputs || 0)),
 );
-const clipOptions = computed(() => {
-  const videos = cards.value.filter(isVideo).map((c) => ({ label: c.name, value: c.id }));
-  return videos.length
-    ? videos
-    : [{ label: "No video workflow in Workflows", value: "", disabled: true }];
-});
+const stillOptions = computed(() =>
+  stillCards.value.length
+    ? stillCards.value.map((c) => ({
+        label: `${c.name} · ${c.reference_inputs} ${c.reference_inputs === 1 ? "picture" : "pictures"} in`,
+        value: c.id,
+      }))
+    : [{ label: "No workflow here takes reference pictures in", value: "", disabled: true }],
+);
+// A clip starts from a still: a video workflow that takes a picture, as its
+// pre-flight says (a card cannot). Each is asked once.
+const takesPicture = ref({});
+const clipCards = computed(() =>
+  cards.value.filter((c) => isSceneClipCandidate(c) && takesPicture.value[c.id] === true),
+);
+const clipOptions = computed(() =>
+  clipCards.value.length
+    ? clipCards.value.map((c) => ({ label: c.name, value: c.id }))
+    : [{ label: "No video workflow here starts from a picture", value: "", disabled: true }],
+);
+
+async function weighClipWorkflows(list) {
+  await Promise.all(
+    list.filter(isSceneClipCandidate).map(async (card) => {
+      try {
+        const inputs = await pictureInputs(card.id);
+        if (alive) takesPicture.value = { ...takesPicture.value, [card.id]: inputs.length > 0 };
+      } catch (e) {
+        console.warn("Couldn't ask whether a video workflow takes a picture", card.id, e);
+      }
+    }),
+  );
+}
 
 async function loadCards() {
   try {
     const { cards: list } = await listWorkflowCards();
     if (!alive) return;
     cards.value = list;
-    const ids = new Set(list.map((c) => c.id));
-    if (!ids.has(stillWorkflow.value)) stillWorkflow.value = stillOptions.value[0]?.value ?? null;
-    if (!ids.has(clipWorkflow.value)) {
-      const i2v = list.find((c) => isVideo(c) && /image to video/i.test(c.name));
-      clipWorkflow.value = i2v?.id ?? list.find(isVideo)?.id ?? null;
+    // A choice kept from before that is no longer offered gives way.
+    const stills = new Set(stillCards.value.map((c) => c.id));
+    if (!stills.has(stillWorkflow.value)) stillWorkflow.value = stillCards.value[0]?.id ?? null;
+    await weighClipWorkflows(list);
+    if (!alive) return;
+    const clips = clipCards.value;
+    if (!clips.some((c) => c.id === clipWorkflow.value)) {
+      const i2v = clips.find((c) => /image to video/i.test(c.name));
+      clipWorkflow.value = i2v?.id ?? clips[0]?.id ?? null;
     }
   } catch (e) {
     console.warn("Couldn't list the workflows for the Studio", e);

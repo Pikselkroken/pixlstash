@@ -8844,6 +8844,13 @@ inside its lightboxes, so the rail is empty on `/studio`.
   its workflow picks. New
   scene and Add a set reach the grid's own dialogs through one-shot route
   keys, `?new=1` or `?new=location:<id>` and `?add=1`.
+- **Shoot offers only the workflows that can shoot a scene**
+  (`utils/studioWorkflows.js`): a still on an image workflow with at least
+  one reference input, a clip on a video workflow whose pre-flight names a
+  picture input (asked once per card). Hidden ones, drafts, sheet workflows
+  and the Studio's own pipeline built-ins (Location Shots, Restore a Frame,
+  the sheet and wide-picture ones) are never offered; with none left the
+  picker says so and the clip button says why it is off.
 - **The grids select as the picture grid does**: click selects one,
   Ctrl/Cmd+click adds or takes away, Shift+click takes the run from the first
   selected, Ctrl+A takes all, Esc or a click on the empty grid clears;
