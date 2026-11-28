@@ -1165,7 +1165,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("DELETE", "/api/v1/pictures/import/staging/{staging_id}"): RoutePolicy(
         _OWNER,
-        justification="Cancel an uncommitted staging session; owner only",
+        justification="Cancel a staging session or stop its import; owner only",
     ),
     ("POST", "/api/v1/pictures/score_character_likeness"): RoutePolicy(
         _OWNER, justification="Owner scoring op; POST not in READ_SAFE; owner only"

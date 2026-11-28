@@ -201,7 +201,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/pictures/import/staging` | owner_only |  | (#459, v1.8.0) Open async streaming-staging session; upload path, streams client bytes into vault — NOT a §16.3 host-FS read; mirrors `POST /pictures/import`; POST blocked for READ tokens; gate-enforced owner_only |
 | POST | `/api/v1/pictures/import/staging/{staging_id}/files` | owner_only |  | (#459, v1.8.0) Stream upload bytes into a staging session; owner only |
 | POST | `/api/v1/pictures/import/staging/{staging_id}/commit` | owner_only |  | (#459, v1.8.0) Hand staging off to the background `PictureImportTask`; owner only |
-| DELETE | `/api/v1/pictures/import/staging/{staging_id}` | owner_only |  | (#459, v1.8.0) Cancel an uncommitted staging session, discard streamed files; owner only |
+| DELETE | `/api/v1/pictures/import/staging/{staging_id}` | owner_only |  | (#459, v1.8.0) Cancel a staging session or stop its import; owner only |
 | GET | `/api/v1/pictures/import/staging/{staging_id}/status` | owner_only |  | **Corrected 2026-08-01 (`any_token` → `owner_only`).** The original cell claimed "progress/stage/counts only (no per-object data)"; that was false when written, because the completed payload carries `scrapheaped_picture_ids`. The unguessable uuid4 `staging_id` was doing the whole job, which is a capability URL rather than an access policy. Now owner only, matching its open/files/commit/cancel siblings and the corrected `GET /pictures/import/status` |
 | POST | `/api/v1/pictures/impossible-tags/clear` | scoped_list |  |  |
 | POST | `/api/v1/pictures/impossible-tags/restore` | scoped_list |  |  |

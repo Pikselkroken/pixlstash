@@ -2611,7 +2611,7 @@ entries share the zip's key; a cancelled run's unreached files have no entry.
 `PictureImportTask` at the next file and answers `stage: "importing"`. The pictures it had already copied in
 are kept (inserted, and added to the drop's set, character and project); the files it never reached are counted
 in `cancelled_count` and removed with the staging dir. The import then ends as `completed`, so the client keeps
-polling and lands the run. On a finished session the DELETE answers 409. This drives the grid's arriving
+polling and lands the run. Once the task has ended (polled or not) the DELETE answers 409. This drives the grid's arriving
 tiles; the pictures still arrive through the `CHANGED_PICTURES` broadcast, not this list.
 
 **Both status endpoints are `OWNER_ONLY`** (corrected 2026-08-01; they were

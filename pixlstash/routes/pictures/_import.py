@@ -1627,12 +1627,16 @@ def register_routes(router, server):
             origin_client_id=session["origin_client_id"],
             restore_context=operation_log_service.request_context(request),
         )
+        # Handed off before the submit: a cancel landing meanwhile must stop
+        # this task, not discard the staging dir it is about to read.
+        session["task"] = task
+        session["stage"] = "importing"
         task_id = server.vault.submit_task(task)
         if task_id is None:
+            session["task"] = None
+            session["stage"] = "staging"
             raise HTTPException(status_code=503, detail="Task runner is not available")
-        session["task"] = task
         session["task_id"] = task_id
-        session["stage"] = "importing"
         session["last_update_epoch_ms"] = int(time.time() * 1000)
         logger.info(
             "Staging session committed: staging_id=%s task_id=%s staged_count=%d",
@@ -1661,7 +1665,13 @@ def register_routes(router, server):
     def cancel_staging_session(request: Request, staging_id: str):
         session = _get_session_or_404(request, staging_id)
         task = session.get("task")
-        if session["stage"] == "importing" and task is not None:
+        task_status = getattr(getattr(task, "status", None), "value", None)
+        # A task that already ended has nothing to stop, polled or not.
+        if (
+            session["stage"] == "importing"
+            and task is not None
+            and task_status not in ("completed", "failed", "cancelled")
+        ):
             # The task checks this between files and still inserts what it had
             # already copied in, so the import ends as ``completed``.
             task.on_cancel()

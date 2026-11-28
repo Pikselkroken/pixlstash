@@ -319,6 +319,25 @@ def test_staging_cancel_after_commit_keeps_what_already_arrived(
     assert r.status_code == 409, r.text
 
 
+def test_staging_cancel_after_the_import_ended_is_refused_unpolled(owner_server):
+    """An import that already ended has nothing to stop, even before a poll."""
+    srv, client = owner_server
+    r = client.post(f"{API}/pictures/import/staging", json={})
+    staging_id = r.json()["staging_id"]
+    client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("x.png", _png_bytes(), "image/png"))],
+    )
+    r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 200, r.text
+    task = srv.staging_sessions[staging_id]["task"]
+    assert task._done_event.wait(30), "the import never finished"
+
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 409, r.text
+    assert _wait_for_stage(client, staging_id)["imported_count"] == 1
+
+
 def test_staging_status_unknown_session_404(owner_server):
     _srv, client = owner_server
     r = client.get(f"{API}/pictures/import/staging/does-not-exist/status")

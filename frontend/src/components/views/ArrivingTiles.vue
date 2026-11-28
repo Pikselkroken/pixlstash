@@ -128,7 +128,7 @@ function chips(run) {
     landed && {
       id: "cancelled",
       icon: "mdi-cancel",
-      text: `${count(c.cancelled)} not imported, stopped`,
+      text: `${plural(c.cancelled, "file", "files")} not imported, stopped`,
       n: c.cancelled,
     },
   ].filter((chip) => chip && (chip.id === "added" || chip.n > 0));

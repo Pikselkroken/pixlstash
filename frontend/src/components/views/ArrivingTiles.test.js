@@ -245,7 +245,7 @@ describe("ArrivingTiles cancel while checking", () => {
       .findAll("[data-arriving-state]")
       .map((t) => t.attributes("data-arriving-state"));
     expect(states).toEqual(["landed"]);
-    expect(wrapper.text()).toContain("1 not imported, stopped");
+    expect(wrapper.text()).toContain("1 file not imported, stopped");
     expect(wrapper.text()).not.toContain("Cancel");
   });
 });
