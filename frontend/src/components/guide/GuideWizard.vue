@@ -65,6 +65,8 @@ const viewport = ref({ w: 0, h: 0 });
 let targets = [];
 let actedOn = null;
 let scrolledTo = null;
+// Each step may scroll once, even to the element the last step scrolled to.
+watch(step, () => (scrolledTo = null));
 let frame = 0;
 const PAD = 4;
 
