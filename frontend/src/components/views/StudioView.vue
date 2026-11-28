@@ -89,23 +89,43 @@
       <p v-if="store.error" class="studio-error" role="alert">
         {{ store.error }}
       </p>
-      <div class="studio-scroll studio-scroll--tiles">
+      <div
+        ref="scrollEl"
+        class="studio-scroll studio-scroll--tiles"
+        @pointerdown="pressedBackground = isBackground($event.target)"
+        @click="onBackgroundClick"
+      >
         <div v-if="store.loaded && !cards.length" class="studio-empty">
           <v-icon size="32">{{ emptyIcon }}</v-icon>
           <span>{{ emptyText }}</span>
         </div>
-        <div v-else class="studio-grid studio-grid--tiles" role="list">
+        <div
+          v-else
+          ref="gridEl"
+          class="studio-grid studio-grid--tiles"
+          role="list"
+          @keydown="onGridKey"
+        >
           <div
-            v-for="card in cards"
-            :key="`${card.kind}:${card.id}`"
+            v-for="(card, index) in cards"
+            :key="cardKey(card)"
             role="listitem"
             class="studio-cell"
+            :class="{ 'studio-cell--selected': isSelected(card) }"
           >
+            <!-- Click selects (Ctrl adds, Shift ranges), double-click or
+                 Enter opens, right-click is the menu: the picture grid's
+                 gestures. -->
             <button
               type="button"
               class="studio-card"
+              :aria-pressed="isSelected(card) ? 'true' : 'false'"
+              :data-key="cardKey(card)"
               :data-testid="`studio-card-${card.kind}-${card.id}`"
-              @click="openItem(card.kind, card.id)"
+              @click="onCardClick(card, index, $event)"
+              @dblclick="openItem(card.kind, card.id)"
+              @keydown.enter.prevent="openItem(card.kind, card.id)"
+              @contextmenu.prevent="openCardMenu(card, $event)"
             >
               <span
                 class="studio-card__ph studio-tile-media"
@@ -182,6 +202,48 @@
         </div>
       </div>
     </template>
+
+    <Teleport to="body">
+      <div
+        v-if="cardMenu"
+        ref="menuEl"
+        class="ctx-menu studio-ctx-menu"
+        role="menu"
+        tabindex="-1"
+        :style="menuStyle"
+        data-testid="studio-card-menu"
+        @contextmenu.prevent
+        @mousedown.stop
+        @keydown="onMenuKey"
+      >
+        <template v-for="(entry, i) in menuEntries" :key="i">
+          <div v-if="entry === SEP" class="ctx-sep" role="separator"></div>
+          <AddToEntityControl
+            v-else-if="entry.key === 'project'"
+            type="project"
+            placement="right"
+            :subject-ids="selectedKeys"
+            :membership="projectMembership"
+            data-verb="project"
+            @selected="onProjectPicked"
+          />
+          <button
+            v-else
+            type="button"
+            role="menuitem"
+            class="ctx-item"
+            :class="{ 'ctx-item--danger': entry.danger }"
+            :disabled="!!entry.reason"
+            :data-verb="entry.key"
+            @click="runEntry(entry)"
+          >
+            <v-icon class="ctx-icon" aria-hidden="true">{{ entry.icon }}</v-icon>
+            <span class="ctx-label-text">{{ entry.label }}</span>
+            <Tooltip v-if="entry.reason" :text="entry.reason" activator="parent" />
+          </button>
+        </template>
+      </div>
+    </Teleport>
 
     <AppDialog
       :open="newOpen"
@@ -274,13 +336,15 @@
  * a reload and Back land where they were; `project` in it is the scope Media
  * shares.
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
+import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
@@ -293,9 +357,19 @@ import {
   listSetInStudio,
   setStudioFavourite,
 } from "../../api/studio";
+import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
+import { onMenuKeydown } from "../../utils/menuKeyboard";
+import {
+  cardKey,
+  deleteCard,
+  deleteWords,
+  duplicateCard,
+  duplicateReason,
+  setCardProject,
+} from "../../utils/studioCardActions";
 import {
   ITEM_ANGLES,
   KIND_LIST,
@@ -314,6 +388,7 @@ const route = useRoute();
 const router = useRouter();
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+const { confirm } = useConfirm();
 
 const section = computed(() => route.query.section || "scenes");
 const openKind = computed(() => String(route.query.open || "").split(":")[0] || "");
@@ -594,6 +669,250 @@ async function toggleFavourite(card) {
   }
 }
 
+// ── Selection ─────────────────────────────────────────────────────────────
+// The picture grid's gestures: click selects one, Ctrl/Cmd+click adds or
+// takes away, Shift+click takes the run from the first selected; Esc or a
+// click on the empty grid clears. Kinds share ids, so a key names both.
+const selectedKeys = ref([]);
+const scrollEl = ref(null);
+const gridEl = ref(null);
+
+const isSelected = (card) => selectedKeys.value.includes(cardKey(card));
+const selectedCards = computed(() =>
+  cards.value.filter((card) => selectedKeys.value.includes(cardKey(card))),
+);
+
+function onCardClick(card, index, event) {
+  const key = cardKey(card);
+  if (event?.shiftKey) {
+    const anchor = cards.value.findIndex((c) => selectedKeys.value.includes(cardKey(c)));
+    const from = anchor < 0 ? index : anchor;
+    const [start, end] = from <= index ? [from, index] : [index, from];
+    selectedKeys.value = cards.value.slice(start, end + 1).map(cardKey);
+  } else if (event?.ctrlKey || event?.metaKey) {
+    selectedKeys.value = selectedKeys.value.includes(key)
+      ? selectedKeys.value.filter((k) => k !== key)
+      : [...selectedKeys.value, key];
+  } else {
+    selectedKeys.value = [key];
+  }
+}
+
+// What is not on show cannot stay selected: a new section, filter or refresh.
+watch(cards, (shown) => {
+  const keys = new Set(shown.map(cardKey));
+  if (selectedKeys.value.some((k) => !keys.has(k))) {
+    selectedKeys.value = selectedKeys.value.filter((k) => keys.has(k));
+  }
+});
+
+// Decided by where the press started, as on Workflows: a press that slips off
+// a card onto the gap is a fumbled pick, not a click on nothing.
+let pressedBackground = false;
+const isBackground = (target) => target === scrollEl.value || target === gridEl.value;
+
+function onBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) selectedKeys.value = [];
+  pressedBackground = false;
+}
+
+function onGridKey(event) {
+  if (event.key === "Escape" && selectedKeys.value.length && !cardMenu.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedKeys.value = [];
+  } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectedKeys.value = cards.value.map(cardKey);
+  } else if (event.key === "Delete" && selectedCards.value.length) {
+    event.preventDefault();
+    removeCards(selectedCards.value);
+  } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    const key = event.target?.closest?.("[data-key]")?.dataset.key;
+    const card = cards.value.find((c) => cardKey(c) === key);
+    if (!card) return;
+    event.preventDefault();
+    const at = event.target.getBoundingClientRect();
+    openCardMenu(card, { clientX: at.left, clientY: at.bottom, currentTarget: event.target }, true);
+  }
+}
+
+// ── The card menu ─────────────────────────────────────────────────────────
+// The sidebar row menu's teleported `.ctx-menu`, for the selection: a
+// right-click on a card outside it selects that card alone first.
+const SEP = "sep";
+const cardMenu = ref(null); // { x, y }
+const menuEl = ref(null);
+const menuSize = ref({ w: 0, h: 0 });
+let menuTrigger = null;
+
+async function openCardMenu(card, event, focusFirst = false) {
+  if (!isSelected(card)) selectedKeys.value = [cardKey(card)];
+  menuTrigger = event.currentTarget ?? null;
+  cardMenu.value = { x: event.clientX, y: event.clientY };
+  await nextTick();
+  menuSize.value = { w: menuEl.value?.offsetWidth ?? 0, h: menuEl.value?.offsetHeight ?? 0 };
+  if (focusFirst) menuEl.value?.querySelector(".ctx-item:not(:disabled)")?.focus();
+}
+
+function closeMenu({ refocus = false } = {}) {
+  if (!cardMenu.value) return;
+  cardMenu.value = null;
+  const trigger = menuTrigger;
+  menuTrigger = null;
+  if (refocus) trigger?.focus?.();
+}
+
+const menuStyle = computed(() => {
+  if (!cardMenu.value) return {};
+  const { x, y } = cardMenu.value;
+  const left = `${Math.max(8, Math.min(x, window.innerWidth - menuSize.value.w - 8))}px`;
+  return y + menuSize.value.h > window.innerHeight - 8
+    ? { left, bottom: `${window.innerHeight - y}px` }
+    : { left, top: `${y}px` };
+});
+
+const menuEntries = computed(() => {
+  const picked = selectedCards.value;
+  if (!picked.length) return [];
+  const one = picked.length === 1 ? picked[0] : null;
+  const noCopy = picked.map(duplicateReason).find(Boolean) ?? "";
+  const allFavourite = picked.every((c) => c.favourite);
+  const entries = [];
+  if (one) {
+    entries.push({ key: "open", label: "Open", icon: "mdi-open-in-app", run: () => openItem(one.kind, one.id) });
+  }
+  entries.push(
+    {
+      key: "favourite",
+      label: allFavourite ? "Remove from favourites" : "Add to favourites",
+      icon: allFavourite ? "mdi-heart-off-outline" : "mdi-heart-outline",
+      run: () => setFavourites(picked, !allFavourite),
+    },
+    {
+      key: "duplicate",
+      label: one ? "Duplicate" : `Duplicate ${picked.length}`,
+      icon: "mdi-content-copy",
+      reason: noCopy,
+      run: () => duplicateCards(picked),
+    },
+    { key: "project" },
+    SEP,
+    {
+      key: "delete",
+      label: one ? "Delete…" : `Delete ${picked.length}…`,
+      icon: "mdi-delete-outline",
+      danger: true,
+      run: () => removeCards(picked),
+    },
+  );
+  return entries;
+});
+
+// Each selected card in each project it is in, for the Project flyout's ticks.
+const projectMembership = computed(() => {
+  const members = {};
+  for (const card of selectedCards.value) {
+    for (const pid of card.project_ids ?? []) {
+      (members[`project-${pid}`] ??= new Set()).add(cardKey(card));
+    }
+  }
+  return members;
+});
+
+function runEntry(entry) {
+  if (entry.reason) return;
+  closeMenu({ refocus: true });
+  entry.run();
+}
+
+function onMenuKey(event) {
+  if (event.key === "Tab") {
+    event.preventDefault();
+    closeMenu({ refocus: true });
+    return;
+  }
+  onMenuKeydown(event);
+}
+
+function onOutside() {
+  closeMenu();
+}
+
+function onEscape(event) {
+  if (!cardMenu.value || event.key !== "Escape") return;
+  event.stopImmediatePropagation();
+  event.preventDefault();
+  closeMenu({ refocus: true });
+}
+
+watch(() => route.fullPath, () => closeMenu());
+document.addEventListener("mousedown", onOutside);
+document.addEventListener("keydown", onEscape, true);
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onOutside);
+  document.removeEventListener("keydown", onEscape, true);
+});
+
+// ── What the menu does ────────────────────────────────────────────────────
+/** Run `act` on each card, then refresh; one notice names what failed. */
+async function eachCard(picked, act, failure) {
+  const failed = [];
+  for (const card of picked) {
+    try {
+      await act(card);
+    } catch (e) {
+      console.warn(`Studio ${failure}`, cardKey(card), e);
+      failed.push(`${card.name}: ${errorMessage(e, "Please try again.")}`);
+    }
+  }
+  await store.refresh();
+  if (failed.length) {
+    noticeStore.error(`Couldn't ${failure} ${failed.join("; ")}`, { key: `studio-${failure}` });
+  }
+}
+
+function setFavourites(picked, on) {
+  return eachCard(
+    picked.filter((card) => !!card.favourite !== on),
+    (card) => setStudioFavourite(card.kind, card.id, on),
+    "change the favourite.",
+  );
+}
+
+async function duplicateCards(picked) {
+  const taken = new Set(cards.value.map((c) => c.name));
+  const made = [];
+  await eachCard(
+    picked,
+    async (card) => {
+      const { id, name } = await duplicateCard(card, taken);
+      taken.add(name);
+      made.push(`${card.kind}:${id}`);
+    },
+    "duplicate.",
+  );
+  // The copies are the selection, so the next gesture is on them.
+  if (made.length) selectedKeys.value = made;
+}
+
+async function removeCards(picked) {
+  if (!picked.length || !(await confirm(deleteWords(picked)))) return;
+  const gone = new Set(picked.map(cardKey));
+  await eachCard(picked, deleteCard, "delete.");
+  selectedKeys.value = selectedKeys.value.filter((k) => !gone.has(k));
+}
+
+function onProjectPicked({ projectId, action }) {
+  if (projectId == null) return;
+  const picked = selectedCards.value;
+  return eachCard(
+    picked,
+    (card) => setCardProject(card, projectId, action === "added"),
+    "change the project.",
+  );
+}
+
 // ── New scene ─────────────────────────────────────────────────────────────
 const newOpen = ref(false);
 const newName = ref("");
@@ -715,6 +1034,27 @@ async function addSet() {
 .studio-cell {
   position: relative;
   min-width: 0;
+}
+
+/* Selected: the workflow card's wash and ring, on the picture. */
+.studio-cell--selected .studio-card__ph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
+}
+
+/* The sidebar row menu's frame (StudioSidebar.vue). */
+.studio-ctx-menu {
+  position: fixed;
+  z-index: var(--z-overlay);
+  min-width: 160px;
+  max-width: 280px;
+  user-select: none;
 }
 
 .studio-scroll--tiles {

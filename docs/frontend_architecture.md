@@ -8842,6 +8842,19 @@ inside its lightboxes, so the rail is empty on `/studio`.
   its workflow picks. New
   scene and Add a set reach the grid's own dialogs through one-shot route
   keys, `?new=1` or `?new=location:<id>` and `?add=1`.
+- **The grids select as the picture grid does**: click selects one,
+  Ctrl/Cmd+click adds or takes away, Shift+click takes the run from the first
+  selected, Ctrl+A takes all, Esc or a click on the empty grid clears;
+  double-click or Enter opens. A key is `kind:id`, since kinds share ids.
+  Right-click (Menu key, Shift+F10) opens the sidebar's `.ctx-menu` for the
+  selection, selecting a card outside it alone first: Open, the favourite,
+  Duplicate, Project (`AddToEntityControl` fed `project_ids` from the
+  overview), Delete… (also the Delete key). `utils/studioCardActions.js` sends
+  each verb to the API that owns the kind: a scene's own routes; a person's
+  character routes; a set's picture-set routes. A scene is in one project,
+  so adding one moves it; a person or a set gains it. A copy of a scene keeps
+  its cast, props, setting and camera but not its takes; a copy of a set
+  keeps its pictures and kind; a person is not duplicated.
 - **`StudioScene`** is blocking on the picture: the location's view (the
   camera's `view`) is the stage, each person and prop a box dragged into
   place and sized from its corner. The inspector shows the selection in

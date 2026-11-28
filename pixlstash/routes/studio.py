@@ -17,9 +17,11 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     character_in_no_project,
     character_in_project,
@@ -453,6 +455,28 @@ def create_router(server) -> APIRouter:
                 ).all():
                     members[set_id].append(picture_id)
 
+            # Every project each person and set is in: a card's Project menu
+            # ticks them. A scene is in one project or none.
+            set_projects: dict[int, list[int]] = {}
+            for set_id, pid in session.exec(
+                select(
+                    PictureSetProjectMember.set_id, PictureSetProjectMember.project_id
+                )
+                .where(PictureSetProjectMember.set_id.in_(set_ids))
+                .order_by(PictureSetProjectMember.project_id)
+            ).all():
+                set_projects.setdefault(set_id, []).append(pid)
+            people_projects: dict[int, list[int]] = {}
+            for char_id, pid in session.exec(
+                select(
+                    CharacterProjectMember.character_id,
+                    CharacterProjectMember.project_id,
+                )
+                .where(CharacterProjectMember.character_id.in_(people_ids))
+                .order_by(CharacterProjectMember.project_id)
+            ).all():
+                people_projects.setdefault(char_id, []).append(pid)
+
             lists: dict[str, list] = {kind: [] for kind in ITEM_KINDS}
             for row, pset in item_rows:
                 if row.kind == "outfit":
@@ -472,6 +496,7 @@ def create_router(server) -> APIRouter:
                         "description": pset.description or "",
                         "character_id": pset.parent_character_id,
                         "picture_ids": members.get(pset.id, []),
+                        "project_ids": set_projects.get(pset.id, []),
                         "scene_count": used.get((row.kind, pset.id), 0),
                         "favourite": (row.kind, pset.id) in favourites,
                     }
@@ -489,6 +514,7 @@ def create_router(server) -> APIRouter:
                         "kind": "scene",
                         "name": s.name,
                         "project_id": s.project_id,
+                        "project_ids": [s.project_id] if s.project_id else [],
                         "location_set_id": s.location_set_id,
                         "cast_ids": [m.get("character_id") for m in (s.cast or [])],
                         "outfit_ids": [
@@ -516,6 +542,7 @@ def create_router(server) -> APIRouter:
                         "body_ids": tiles[c.id][1],
                         "picture_count": tiles[c.id][2],
                         "outfit_ids": outfit_ids.get(c.id, []),
+                        "project_ids": people_projects.get(c.id, []),
                         "scene_count": used.get(("cast", c.id), 0),
                         "favourite": ("cast", c.id) in favourites,
                     }

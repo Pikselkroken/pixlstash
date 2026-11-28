@@ -4320,7 +4320,7 @@ never composes a prompt: it asks the scene for one.
 
 | Step | Call | Notes |
 |---|---|---|
-| List | `GET /studio/overview?project_id=` | id, `none`, or absent for any project; a person carries `headshot_ids` (≤4), `body_ids` (≤2) and `picture_count` for their card (`studio.sheet_tile`: thumbnail first, a drawn sheet's panels next, then framing from the face box) |
+| List | `GET /studio/overview?project_id=` | id, `none`, or absent for any project; a person carries `headshot_ids` (≤4), `body_ids` (≤2) and `picture_count` for their card (`studio.sheet_tile`: thumbnail first, a drawn sheet's panels next, then framing from the face box); every item carries `project_ids`, every project it is in (a scene's one or none) |
 | Make, change | `POST /studio/scenes`, `PATCH /studio/scenes/{id}` | `cast` and `props` are replaced whole; a prop's `held_by` must be in the cast (422) |
 | Shot | `POST /studio/scenes/{id}/shot` | `{kind, from_picture_id?, max_references}` → `{prompt, negative, references, loras}` |
 | Run | `POST /workflows/run` | `inputs` filled in order from `references`, one per non-fixed picture input the pre-flight names |

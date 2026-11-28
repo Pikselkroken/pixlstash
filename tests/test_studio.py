@@ -312,6 +312,20 @@ def test_a_scene_is_made_cast_and_listed_in_its_project(env):
     cast = {c["id"]: c for c in everywhere["cast"]}
     assert outfit in cast[person]["outfit_ids"]
     assert cast[person]["scene_count"] >= 1
+    # Each card says every project it is in, for its Project menu.
+    assert {s["id"]: s["project_ids"] for s in everywhere["scenes"]}[scene["id"]] == [
+        project
+    ]
+    locations = {s["id"]: s for s in everywhere["locations"]}
+    assert locations[location]["project_ids"] == [project]
+    assert outfits[outfit]["project_ids"] == []
+    client.patch(
+        f"{API_PREFIX}/characters/{person}", json={"project_ids": [project, other]}
+    )
+    cast = {
+        c["id"]: c for c in client.get(f"{API_PREFIX}/studio/overview").json()["cast"]
+    }
+    assert cast[person]["project_ids"] == sorted([project, other])
 
     shot = client.post(f"{API_PREFIX}/studio/scenes/{scene['id']}/shot", json={}).json()
     assert "waving" in shot["prompt"] and "held by" in shot["prompt"]
