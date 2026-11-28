@@ -45,6 +45,11 @@ test('the API concept shows the server reference in place', async ({ page }) => 
   await expect
     .poll(async () => (await frame.elementHandle()).contentFrame().then((f) => f.title()))
     .toBe('PixlStash API Reference')
+  // And the hash-pinned Scalar bundle loaded and rendered it (a wrong
+  // integrity hash leaves the title but blocks the script).
+  await expect(
+    page.frameLocator('[data-testid="guide-reference"]').locator('[data-v-app]').first(),
+  ).toBeAttached({ timeout: 30_000 })
 
   // A concept with no server page offers no Reference view.
   await page.getByTestId('titlebar-guide').click()
