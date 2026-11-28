@@ -590,6 +590,30 @@ def test_the_picked_frame_is_steady_over_its_neighbours_and_near_the_middle():
     assert 30 <= location_angles.pick_frame(0, 48, [100.0] * 48, motion) <= 36
 
 
+def test_the_things_in_a_picture_are_offered_biggest_first_with_their_side():
+    regions = [
+        ("wooden chair", [1700, 600, 1800, 800], None),
+        ("brick fireplace", [100, 300, 700, 1000], None),
+        ("a pub with tables", [0, 0, 2560, 1440], None),  # the place itself
+        ("Brick  Fireplace", [1000, 300, 1200, 600], None),  # said already
+        ("long oak bar", [1100, 400, 1500, 900], None),
+        # The room again after "in"; a description rather than a thing.
+        ("wooden bar stools in dimly lit room", [2000, 800, 2300, 1100], None),
+        ("restored wooden booth with leather seats and table", [0, 0, 900, 900], None),
+    ]
+    assert location_angles.thing_phrases(regions, 2560, 1440) == [
+        "the brick fireplace on the left",
+        "the long oak bar in the middle",
+        "the wooden bar stools on the right",
+        "the wooden chair on the right",
+    ]
+    many = [(f"thing {i}", [i, 0, i + 10, 10], None) for i in range(20)]
+    assert (
+        len(location_angles.thing_phrases(many, 2560, 1440))
+        == location_angles.THINGS_MAX
+    )
+
+
 def test_a_restore_that_turns_back_into_the_original_is_refused():
     rng = np.random.default_rng(3)
     frame = Image.fromarray((rng.random((72, 128, 3)) * 255).astype(np.uint8))
@@ -641,6 +665,12 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
         client.post(
             f"{API_PREFIX}/item-sheets/shots",
             json={"video_picture_id": 999999, "shots": 3},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"{API_PREFIX}/item-sheets/shots/things", json={"picture_id": 999999}
         ).status_code
         == 404
     )

@@ -5,6 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -27,12 +28,15 @@ const api = vi.hoisted(() => ({
   preflightWorkflowRun: vi.fn(),
   runWorkflowCard: vi.fn(),
   stopRun: vi.fn(),
+  locationPictureThings: vi.fn(),
+  listPicturesByIds: vi.fn(),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildLocationShotsPrompt: api.buildLocationShotsPrompt,
   buildSheetPrompt: api.buildSheetPrompt,
   takeLocationShots: api.takeLocationShots,
   checkLocationShots: api.checkLocationShots,
+  locationPictureThings: api.locationPictureThings,
 }));
 vi.mock("../../api/pictureSets", () => ({
   bulkAddPicturesToSet: api.bulkAddPicturesToSet,
@@ -42,6 +46,8 @@ vi.mock("../../api/studio", () => ({ listSetInStudio: api.listSetInStudio }));
 vi.mock("../../api/pictures", () => ({
   deletePictures: api.deletePictures,
   restoreScrapheap: api.restoreScrapheap,
+  listPicturesByIds: api.listPicturesByIds,
+  pictureMediaUrl: (id, format) => `/media/${id}.${format}`,
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
 }));
 vi.mock("../../api/workflows", () => ({
@@ -54,6 +60,8 @@ vi.mock("../../api/workflows", () => ({
 }));
 
 import LocationAnglesDialog from "./LocationAnglesDialog.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
+import ZoomPopout from "../widgets/ZoomPopout.vue";
 
 const LOCATION = {
   id: 30,
@@ -65,6 +73,7 @@ const LOCATION = {
 const OUTPUTS = { "run-video": [500], "run-r1": [601], "run-r2": [602], "run-r3": [603] };
 
 beforeEach(() => {
+  setActivePinia(createPinia());
   for (const fn of Object.values(api)) fn.mockReset();
   api.listWorkflowCards.mockResolvedValue({
     cards: [
@@ -87,6 +96,10 @@ beforeEach(() => {
     ],
   }));
   api.stopRun.mockResolvedValue({ stopped: 1 });
+  api.locationPictureThings.mockImplementation(async (id) => ({
+    things: [`the fireplace of ${id} on the left`],
+  }));
+  api.listPicturesByIds.mockImplementation(async (ids) => ids.map((id) => ({ id, format: "png" })));
   api.buildLocationShotsPrompt.mockResolvedValue({ prompt: "SHOTS PROMPT", seconds: 8 });
   let restore = 0;
   api.runWorkflowCard.mockImplementation(async ({ workflow_id }) => ({
@@ -212,6 +225,48 @@ describe("More angles", () => {
     expect(api.restoreScrapheap).toHaveBeenCalledWith([42, 601, 603]);
     expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(77, [42, 500, 601, 603]);
     expect(wrapper.emitted("done")[0]).toEqual([2, { id: 77, name: "Walled garden" }, [42, 500, 601, 603]]);
+  });
+
+  it("offers what is in the chosen picture as each view's words, read again when the picture changes", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    const offered = () =>
+      wrapper.findAllComponents(BaseModelInput).find((c) => c.vm.$attrs["data-testid"] === "la-words-0");
+    expect(offered().props("options")).toEqual(["the fireplace of 31 on the left"]);
+
+    await wrapper.findAll(".la-source")[2].trigger("click");
+    await flushPromises();
+    expect(api.locationPictureThings).toHaveBeenLastCalledWith(33);
+    expect(offered().props("options")).toEqual(["the fireplace of 33 on the left"]);
+
+    // Back to a picture already read: its things again, not asked twice.
+    await wrapper.findAll(".la-source")[0].trigger("click");
+    await flushPromises();
+    expect(offered().props("options")).toEqual(["the fireplace of 31 on the left"]);
+    expect(api.locationPictureThings).toHaveBeenCalledTimes(2);
+
+    const light = wrapper
+      .findAllComponents(BaseModelInput)
+      .find((c) => c.vm.$attrs["data-testid"] === "la-light");
+    expect(light.props("options")).toContain("candlelight");
+  });
+
+  it("zooms a picture full size and can start from it there", async () => {
+    const wrapper = mountDialog();
+    await flushPromises();
+    await wrapper.findAll('[data-testid="la-zoom-open"]')[3].trigger("click");
+    await flushPromises();
+    const zoom = wrapper.findComponent(ZoomPopout);
+    expect(zoom.props("open")).toBe(true);
+    expect(zoom.props("src")).toBe("/media/34.png");
+
+    // The pop-out is a layer in <body>.
+    document.body.querySelector('[data-testid="la-zoom-choose"]').click();
+    zoom.vm.$emit("close");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.runWorkflowCard.mock.calls[0][0].inputs[0].picture_id).toBe(34);
   });
 
   it("offers the 2×2 sheet instead of a new location's video", async () => {

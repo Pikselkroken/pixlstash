@@ -689,6 +689,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
 | POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
 | POST   | /api/v1/item-sheets/shots/prompt                                              | characters      | Write a location's shots prompt                               |
+| POST   | /api/v1/item-sheets/shots/things                                              | characters      | The things in a location's picture, for its new views         |
 | POST   | /api/v1/item-sheets/use                                                       | characters      | Use outfit, location or prop sheets                           |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                     |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                                 |
@@ -13915,7 +13916,11 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   starts here too: `POST /character-sheets/prompt` with `kind: location,
   single: true` writes one wide establishing photograph
   (`location_view_prompt`, `LOCATION_VIEW_SIZE` 2560x1440) to film the
-  views from; `single` on any other kind is a 422.
+  views from; `single` on any other kind is a 422. `POST
+  /item-sheets/shots/things` offers what each view could show: Florence-2's
+  `<DENSE_REGION_CAPTION>` over the chosen picture (`thing_phrases`: biggest
+  box first, each label once, with its side, none filling most of the
+  picture), run in the request.
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
   design proposes): a shot is one run of one workflow.
 

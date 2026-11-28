@@ -136,3 +136,16 @@ export async function checkLocationShots(originalId, pairs) {
     apiClient.post("/item-sheets/shots/check", { original_id: originalId, pairs }),
   );
 }
+
+/**
+ * What a new view of a location's picture could show, as Florence-2 sees the
+ * picture: phrases like "the brick fireplace on the left", biggest first.
+ *
+ * @param {number} pictureId
+ * @returns {Promise<{things: string[]}>}
+ */
+export async function locationPictureThings(pictureId) {
+  return unwrap(
+    apiClient.post("/item-sheets/shots/things", { picture_id: pictureId }),
+  );
+}

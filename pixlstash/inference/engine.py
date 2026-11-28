@@ -543,6 +543,14 @@ class InferenceEngine:
         self.ensure_captioning_ready()
         return self.florence_service.detect_objects(image_paths, prompt=prompt)
 
+    def describe_regions(self, image_paths: list) -> dict:
+        """Florence-2's short phrase and box for each thing in each still
+        image; see
+        :meth:`~pixlstash.tagger_plugins.florence2.Florence2Service.describe_regions`.
+        """
+        self.ensure_captioning_ready()
+        return self.florence_service.describe_regions(image_paths)
+
     def read_text(self, image_paths: list) -> dict:
         """Read the text in a batch of still images with Florence-2.
 

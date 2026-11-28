@@ -292,6 +292,14 @@ class LocationShotsRequest(BaseModel):
     shots: int = Field(ge=1, le=4, description="New shots, the picture's own left out.")
 
 
+class PictureThingsRequest(BaseModel):
+    picture_id: int
+
+
+class PictureThings(BaseModel):
+    things: list[str]
+
+
 class LocationRestorePair(BaseModel):
     frame_id: int
     restored_id: int
@@ -530,6 +538,27 @@ def create_router(server) -> APIRouter:
             },
         )
         return UsedSheets(picture_ids=frame_ids)
+
+    @router.post(
+        "/item-sheets/shots/things",
+        summary="The things in a location's picture, for its new views",
+        description=(
+            "Florence-2's region captions of the picture, as phrases a new "
+            'view can show ("the brick fireplace on the left"), biggest '
+            f"first, at most {location_angles.THINGS_MAX}. A picture in the "
+            "Scrapheap counts. 404 for a picture that is not there; 409 when "
+            "it cannot be read or the describer is not running."
+        ),
+        response_model=PictureThings,
+    )
+    def location_picture_things(payload: PictureThingsRequest):
+        try:
+            things = location_angles.things_in_picture(server, payload.picture_id)
+        except character_sheet.SheetNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except character_sheet.SheetUnreadable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return PictureThings(things=things)
 
     @router.post(
         "/item-sheets/shots/check",

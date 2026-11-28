@@ -7,8 +7,8 @@
         ? 'A wide picture of the place, then more views of exactly it, filmed from that picture'
         : 'New views of exactly this place, from one of its pictures'
     "
-    size="lg"
-    :persistent="working"
+    size="2xl"
+    :persistent="working || zoomedId != null"
     @close="close"
   >
     <div class="la" data-testid="location-angles">
@@ -32,19 +32,38 @@
         <section class="la-section">
           <FieldLabel>{{ isNew ? "Start from the picture that looks right" : "From this picture" }}</FieldLabel>
           <div class="la-sources" role="radiogroup" aria-label="The picture to start from">
-            <button
-              v-for="(pid, i) in sources"
-              :key="pid"
-              type="button"
-              role="radio"
-              class="la-source"
-              :class="{ 'la-source--on': source === pid }"
-              :aria-checked="source === pid ? 'true' : 'false'"
-              :aria-label="`Picture ${i + 1}`"
-              @click="source = pid"
-            >
-              <img :src="pictureThumbnailUrl(pid)" alt="" />
-            </button>
+            <div v-for="(pid, i) in sources" :key="pid" class="la-tile">
+              <button
+                type="button"
+                role="radio"
+                class="la-source"
+                :class="{ 'la-source--on': source === pid }"
+                :aria-checked="source === pid ? 'true' : 'false'"
+                :aria-label="`Picture ${i + 1}`"
+                :aria-keyshortcuts="'Z'"
+                :data-testid="`la-source-${i}`"
+                @click="source = pid"
+                @dblclick="openZoom(pid)"
+                @wheel="onTileWheel($event, pid)"
+                @keydown.z.exact="openZoom(pid)"
+              >
+                <img :src="pictureThumbnailUrl(pid)" alt="" />
+                <span v-if="source === pid" class="la-source__ck" aria-hidden="true"
+                  ><v-icon size="14">mdi-check</v-icon></span
+                >
+              </button>
+              <!-- Zoom has its own control: a click on the picture chooses it. -->
+              <button
+                type="button"
+                class="la-mag"
+                :data-source="pid"
+                :aria-label="`Zoom in on picture ${i + 1}`"
+                data-testid="la-zoom-open"
+                @click="openZoom(pid)"
+              >
+                <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+              </button>
+            </div>
           </div>
         </section>
         <AppTextarea
@@ -69,15 +88,44 @@
               :options="PRESETS"
               :data-testid="`la-preset-${i}`"
             />
-            <AppInput
-              v-model="shot.words"
-              class="la-shot__words"
-              :aria-label="`What view ${i + 1} shows`"
-              :placeholder="PLACEHOLDERS[shot.preset]"
-            />
+            <div class="la-shot__words">
+              <BaseModelInput
+                v-model="shot.words"
+                class="tbm-input"
+                :options="things"
+                :list-label="`In this picture`"
+                open-on-focus
+                :aria-label="`What view ${i + 1} shows`"
+                :placeholder="PLACEHOLDERS[shot.preset]"
+                maxlength="500"
+                :data-testid="`la-words-${i}`"
+              />
+            </div>
           </div>
+          <p class="la-hint" data-testid="la-things">
+            {{
+              thingsLoading
+                ? "Looking at what is in this picture…"
+                : things.length
+                  ? "Type what each view shows, or pick from what is in this picture."
+                  : "Type what each view shows."
+            }}
+          </p>
         </section>
-        <AppInput v-model="light" label="Light" placeholder="plain daylight" />
+        <label class="la-section">
+          <FieldLabel>Light</FieldLabel>
+          <BaseModelInput
+            v-model="light"
+            class="tbm-input"
+            :options="LIGHTS"
+            list-label="Light"
+            :max-shown="LIGHTS.length"
+            open-on-focus
+            placeholder="plain daylight"
+            maxlength="200"
+            data-testid="la-light"
+          />
+        </label>
       </template>
 
       <template v-else-if="phase === 'working'">
@@ -126,6 +174,30 @@
 
       <p v-if="error" class="la-error" role="alert">{{ error }}</p>
     </div>
+
+    <ZoomPopout
+      :open="zoomedId != null"
+      :src="zoomedId != null ? fullUrl(zoomedId) : ''"
+      :alt="zoomedId != null ? `Picture ${zoomPos + 1}` : ''"
+      :caption="zoomedId != null ? `Picture ${zoomPos + 1} of ${sources.length}` : ''"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
+      :entry="zoomEntry"
+      @close="closeZoom"
+      @prev="stepZoom(-1)"
+      @next="stepZoom(1)"
+    >
+      <template #actions>
+        <AppButton
+          v-if="zoomedId != null"
+          :variant="source === zoomedId ? 'secondary' : 'primary'"
+          :disabled="source === zoomedId"
+          data-testid="la-zoom-choose"
+          @click="source = zoomedId"
+          >{{ source === zoomedId ? "Chosen" : "Start from this one" }}</AppButton
+        >
+      </template>
+    </ZoomPopout>
 
     <template #footer>
       <!-- Cancel stops a draw, but must not walk away from a half-done Use. -->
@@ -186,17 +258,23 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import ZoomPopout from "../widgets/ZoomPopout.vue";
+import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import {
   buildLocationShotsPrompt,
   buildSheetPrompt,
   checkLocationShots,
+  locationPictureThings,
   takeLocationShots,
 } from "../../api/characterSheets";
 import { bulkAddPicturesToSet, createPictureSet } from "../../api/pictureSets";
 import { listSetInStudio } from "../../api/studio";
 import {
   deletePictures,
+  listPicturesByIds,
+  pictureMediaUrl,
   pictureThumbnailUrl,
   restoreScrapheap,
 } from "../../api/pictures";
@@ -240,6 +318,18 @@ const PLACEHOLDERS = {
   left: "what is to the left",
   right: "what is to the right",
 };
+const LIGHTS = [
+  "plain daylight",
+  "soft overcast daylight",
+  "bright midday sun, hard shadows",
+  "golden hour sun, long warm shadows",
+  "blue hour dusk, lamps just on",
+  "night, warm lamplight",
+  "night, moonlight through the windows",
+  "candlelight",
+  "cold fluorescent light",
+  "neon signs at night",
+];
 const POLL_MS = 3000;
 
 const phase = ref("describe"); // place (new only) | describe | working | pick
@@ -274,6 +364,65 @@ const placeDescription = computed(() =>
     ? description.value.trim()
     : props.location?.description || props.location?.name || "",
 );
+
+// The pictures to start from, zoomed full size: the shared pop-out, stepping
+// through them in their order. Closing puts focus back on the zoom control.
+const sourceList = computed(() => sources.value);
+const {
+  zoomedId,
+  zoomEntry,
+  zoomPos,
+  hasPrev,
+  hasNext,
+  openZoom,
+  onTileWheel,
+  stepZoom,
+  closeZoom,
+} = useZoomPopout(sourceList, (id) =>
+  document.querySelector(`[data-testid="la-zoom-open"][data-source="${id}"]`)?.focus(),
+);
+watch(phase, () => {
+  zoomedId.value = null;
+});
+
+// What each picture holds, as Florence-2 sees it, offered as what a view
+// shows; read again for each picture chosen, kept per picture.
+// A picture that could not be read holds nothing, so it is not asked again.
+const thingsOf = ref({});
+const asking = new Set();
+const things = computed(() => thingsOf.value[source.value] ?? []);
+const thingsLoading = computed(() => source.value != null && !(source.value in thingsOf.value));
+watch(source, async (id) => {
+  if (id == null || id in thingsOf.value || asking.has(id)) return;
+  asking.add(id);
+  let found = [];
+  try {
+    ({ things: found } = await locationPictureThings(id));
+  } catch (e) {
+    console.warn("Couldn't read what is in the picture; the views are typed by hand", id, e);
+  } finally {
+    asking.delete(id);
+    thingsOf.value = { ...thingsOf.value, [id]: found || [] };
+  }
+}, { immediate: true });
+
+// Each picture's format, for its full-size file; the thumbnail until known.
+const formats = ref({});
+watch(sources, async (ids) => {
+  if (!ids.length) return;
+  try {
+    // A new location's pictures are held in the Scrapheap until one is used.
+    const rows = await listPicturesByIds(ids, { fields: "grid", onlyDeleted: isNew.value });
+    formats.value = Object.fromEntries((rows || []).map((r) => [r.id, r.format]));
+  } catch (e) {
+    console.warn("Couldn't read the pictures' formats; zooming the thumbnails", ids, e);
+  }
+}, { immediate: true });
+
+function fullUrl(id) {
+  const format = formats.value[id];
+  return format ? pictureMediaUrl(id, format) : pictureThumbnailUrl(id);
+}
 
 watch(
   () => props.open,
@@ -592,20 +741,31 @@ async function use() {
   gap: var(--space-2);
 }
 
+/* Four across the 2xl dialog: each about eight times the area of the old
+   96x64 tile, big enough to judge before zooming. */
 .la-sources {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
 }
 
+.la-tile {
+  position: relative;
+}
+
+/* The chosen tile carries its ring on its own border and a check mark that
+   is added, not restyled: a box-shadow change alone was not repainted until
+   the window lost and regained focus. */
 .la-source {
-  width: 96px;
-  height: 64px;
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
   overflow: hidden;
-  background: rgb(var(--v-theme-surface));
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-input-background));
   cursor: pointer;
 }
 
@@ -617,12 +777,66 @@ async function use() {
 }
 
 .la-source--on {
-  box-shadow: 0 0 0 2px var(--active-bar);
+  border-color: var(--active-bar);
 }
 
 .la-source:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--space-1);
+}
+
+.la-source__ck {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
+}
+
+/* The sheet step's zoom control (.cs-mag), on these tiles. */
+.la-mag {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-standard);
+}
+
+.la-tile:hover .la-mag,
+.la-mag:focus-visible,
+.la-source:focus-visible + .la-mag {
+  opacity: 1;
+}
+
+.la-mag:hover,
+.la-mag:focus-visible {
+  background: var(--scrim-photo-strong);
+}
+
+.la-mag:hover {
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-on-dark-surface));
+}
+
+@media (hover: none) {
+  .la-mag {
+    opacity: 1;
+  }
 }
 
 .la-shot {

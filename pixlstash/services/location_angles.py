@@ -70,6 +70,14 @@ CUT_FLOOR = 8.0
 CUT_OVER_MEDIAN = 6.0
 # A restored view must still be its frame: grey correlation at 128 px.
 RESTORE_KEEPS = 0.98
+# The things offered as what a view shows: at most this many, and none that
+# fills most of the picture (that box is the place itself, not a thing in it).
+THINGS_MAX = 8
+THINGS_MAX_AREA = 0.6
+# Florence-2's region captions run long ("wooden bar stools with green seats
+# in dimly lit room"): the "in ..." tail is the room again, and a phrase still
+# longer than this is a description, not a thing to point a camera at.
+THINGS_MAX_WORDS = 5
 
 
 class ShotsNotFound(ValueError):
@@ -311,3 +319,58 @@ def check_restored(
             }
         )
     return results
+
+
+def thing_phrases(regions: list, width: int, height: int) -> list[str]:
+    """What a view can show, from Florence-2's ``(label, [x1, y1, x2, y2], _)``
+    regions: "the brick fireplace on the left", biggest first, each label
+    once, the side from the box's centre, short phrases only."""
+    picture_area = max(width * height, 1)
+    seen, phrases = set(), []
+    for label, (x1, y1, x2, y2), *_ in sorted(
+        regions, key=lambda r: -(r[1][2] - r[1][0]) * (r[1][3] - r[1][1])
+    ):
+        name = " ".join(str(label).lower().split()).split(" in ")[0]
+        area = (x2 - x1) * (y2 - y1) / picture_area
+        too_long = len(name.split()) > THINGS_MAX_WORDS
+        if not name or too_long or name in seen or area > THINGS_MAX_AREA:
+            continue
+        seen.add(name)
+        centre = (x1 + x2) / 2 / max(width, 1)
+        side = (
+            "on the left"
+            if centre < 1 / 3
+            else "on the right"
+            if centre > 2 / 3
+            else "in the middle"
+        )
+        phrases.append(f"the {name} {side}")
+        if len(phrases) == THINGS_MAX:
+            break
+    return phrases
+
+
+def things_in_picture(server, picture_id: int) -> list[str]:
+    """:func:`thing_phrases` for a picture, a Scrapheap one too. Raises
+    :class:`SheetNotFound` or :class:`SheetUnreadable`.
+
+    ponytail: runs Florence-2 in the request beside the background tasks that
+    share the model; queue it as a task if the two ever contend.
+    """
+    found = server.vault.db.run_immediate_read_task(pictures_in_session, [picture_id])
+    if found is None:
+        raise SheetNotFound(f"No picture {picture_id}.")
+    path = ImageUtils.resolve_picture_path(server.vault.image_root, found[0].file_path)
+    engine = getattr(server.vault, "_engine", None)
+    if engine is None:
+        raise SheetUnreadable("The picture describer is not running.")
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, TypeError) as exc:
+        logger.warning(
+            "Couldn't read picture %s at %s to describe it: %s", picture_id, path, exc
+        )
+        raise SheetUnreadable(f"Picture {picture_id} can't be read.") from exc
+    regions = engine.describe_regions([path]).get(path, [])
+    return thing_phrases(regions, width, height)
