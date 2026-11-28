@@ -1,0 +1,65 @@
+{
+  "at": "2026-11-28T11:35:19.860Z",
+  "cause": "after the question was approved and the first ideas filed",
+  "order": [
+    "4-time-each-stage-of-duplicate-detection-o",
+    "5-find-likeness-candidates-with-a-gpu-near",
+    "6-decode-pictures-at-reduced-size-for-the",
+    "8-replace-the-scan-s-buckets-with-a-librar",
+    "7-stop-the-likeness-parameters-stage-from"
+  ],
+  "notes": {
+    "4-time-each-stage-of-duplicate-detection-o": {
+      "impact": 3,
+      "odds": 3,
+      "line": "Every other idea needs its baseline times and reference groups, so it goes first.",
+      "why": {
+        "impact": "It shows which stage dominates, which decides which speed-up is worth having.",
+        "odds": "It is a measurement and can hardly fail to produce one.",
+        "path": "Ideas 5 to 8 are each judged against its timings and its saved duplicate groups."
+      }
+    },
+    "5-find-likeness-candidates-with-a-gpu-near": {
+      "impact": 3,
+      "odds": 3,
+      "line": "The likeness sweep is the near-quadratic CPU stage, and a blocked GPU search already exists in the code to reuse.",
+      "why": {
+        "impact": "If the sweep dominates, replacing a near-quadratic CPU pass with a sub-second GPU one is the largest possible gain.",
+        "odds": "The arithmetic is small for a GPU and utils/near_neighbor.py already does the same search for tags.",
+        "path": "It waits for idea 4's baseline and reference groups."
+      }
+    },
+    "6-decode-pictures-at-reduced-size-for-the": {
+      "impact": 2,
+      "odds": 2,
+      "line": "The code says CPU decode is 4 of 4.2 seconds per embedding batch, but the gain depends on how many files are JPEG.",
+      "why": {
+        "impact": "It speeds up the first stage every new picture goes through, though only for formats that decode at reduced size.",
+        "odds": "Draft-mode decoding is well established for JPEG, but PNG and other formats gain little and embeddings may shift slightly.",
+        "path": "It waits for idea 4's baseline and its file-type mix."
+      }
+    },
+    "8-replace-the-scan-s-buckets-with-a-librar": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Tier 2 is already reported as milliseconds per bucket, so this is more likely to win on found groups than on time.",
+      "why": {
+        "impact": "It could remove the per-bucket caps and catch pairs the buckets never compare, but tier 2 is probably not where the time goes.",
+        "odds": "Multi-index hashing is standard, but beating an already fast bucketed comparison on time is uncertain.",
+        "path": "It waits for idea 4's tier-2 timing and reference groups."
+      }
+    },
+    "7-stop-the-likeness-parameters-stage-from": {
+      "impact": 1,
+      "odds": 1,
+      "line": "It only helps if parameters are often recomputed for unchanged pictures, which nothing shows yet.",
+      "why": {
+        "impact": "It saves repeated sweep work only after a recomputation, not on a first import.",
+        "odds": "How often unchanged pictures are recomputed is unknown and may be rare.",
+        "path": "It waits for idea 4, whose run counts how many recomputed pictures actually change."
+      }
+    }
+  },
+  "pinned": {},
+  "moved": {}
+}
