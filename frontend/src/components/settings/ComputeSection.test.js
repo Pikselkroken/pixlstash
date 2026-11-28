@@ -471,7 +471,6 @@ describe("Which GPU PixlStash uses", () => {
   });
 });
 
-
 // The Server pane's API reference link: the one section a browser session
 // sees, and the Guide's way to the API reference.
 describe("Server › API reference", () => {
