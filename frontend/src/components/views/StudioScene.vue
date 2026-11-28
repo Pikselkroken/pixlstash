@@ -79,6 +79,8 @@
               class="scene-take-media"
               :src="pictureThumbnailUrl(shownTake.picture_id)"
               alt="A take of this scene"
+              data-testid="scene-take-shown"
+              @dblclick="openInLightbox(shownTake.picture_id)"
             />
             <AppButton class="scene-take-back" variant="secondary" size="sm" @click="selection = null"
               >Back to the stage</AppButton
@@ -209,6 +211,7 @@
             :aria-label="take.kind === 'clip' ? 'A clip' : 'A still'"
             :data-testid="`scene-take-${take.picture_id}`"
             @click="selection = { type: 'take', pictureId: take.picture_id }"
+            @dblclick="openInLightbox(take.picture_id)"
           >
             <img :src="pictureThumbnailUrl(take.picture_id)" alt="" loading="lazy" />
             <span v-if="take.kind === 'clip'" class="scene-take__clip"
@@ -493,6 +496,7 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
+import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -515,6 +519,8 @@ const emit = defineEmits(["close", "go", "changed", "item-sheets"]);
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
 const { confirm } = useConfirm();
+// A double-click on a take opens it in the Lightbox; Esc or Back comes here.
+const openInLightbox = useOpenInLightbox();
 
 const SHOTS = [
   { id: "wide", label: "Wide" },

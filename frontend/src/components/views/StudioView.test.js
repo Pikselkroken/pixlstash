@@ -78,6 +78,7 @@ vi.mock("../../api/characters", () => ({
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 import StudioView from "./StudioView.vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 
@@ -132,7 +133,10 @@ let router;
 async function mountAt(path) {
   router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/studio", name: "studio", component: { template: "<div />" } }],
+    routes: [
+      { path: "/studio", name: "studio", component: { template: "<div />" } },
+      { path: "/", name: "all-pictures", component: { template: "<div />" } },
+    ],
   });
   await router.push(path);
   await router.isReady();
@@ -469,6 +473,40 @@ describe("selecting Studio cards", () => {
     await flushPromises();
     expect(api.patchScene).toHaveBeenLastCalledWith(1, { project_id: null });
     expect(api.patchCharacter).toHaveBeenLastCalledWith(5, { project_ids: [] });
+  });
+});
+
+describe("a picture from the Studio in the Lightbox", () => {
+  // Opened over All Pictures, and closed back onto the Studio as it was.
+  async function opensAndComesBack(open) {
+    const here = router.currentRoute.value.fullPath;
+    await open();
+    await flushPromises();
+    const at = router.currentRoute.value;
+    expect(at.name).toBe("all-pictures");
+    await router.replace(lightboxCloseTarget(at.query));
+    expect(router.currentRoute.value.fullPath).toBe(here);
+    return at.query.overlay;
+  }
+
+  it("opens a location's picture on a double-click, and Esc comes back to the location", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    const overlay = await opensAndComesBack(() =>
+      wrapper.find('[data-testid="studio-pic-32"]').trigger("dblclick"),
+    );
+    expect(overlay).toBe("32");
+  });
+
+  it("opens a person's picture and a scene's take the same way", async () => {
+    const person = await mountAt("/studio?section=cast&open=cast:5");
+    expect(
+      await opensAndComesBack(() => person.find('[data-testid="studio-person-face"]').trigger("dblclick")),
+    ).toBe("50");
+    person.unmount();
+    const scene = await mountAt("/studio?section=scenes&open=scene:1");
+    expect(
+      await opensAndComesBack(() => scene.find('[data-testid="scene-take-900"]').trigger("dblclick")),
+    ).toBe("900");
   });
 });
 

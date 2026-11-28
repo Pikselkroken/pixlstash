@@ -8857,6 +8857,11 @@ inside its lightboxes, so the rail is empty on `/studio`.
   so adding one moves it; a person or a set gains it. A copy of a scene keeps
   its cast, props, setting and camera but not its takes; a copy of a set
   keeps its pictures and kind; a person is not duplicated.
+- **A double-click on a picture in the Studio opens it in the Lightbox**: an
+  item's pictures, a person's picture, a scene's takes (the strip and the
+  one shown). `composables/useOpenInLightbox` pushes All Pictures with
+  `?overlay=<id>&from=<the Studio's full path>`, so Esc or Back lands on the
+  item again, query and all (`utils/lightboxRoute.js`).
 - **An item's lightbox shows every picture** of an outfit, location or prop,
   the first four named as the sheet cuts them, and selects them with the
   grid's gestures (click, Ctrl, Shift, Esc clears before it closes). A bar

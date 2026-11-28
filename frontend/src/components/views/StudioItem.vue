@@ -70,6 +70,8 @@
               v-if="item.thumbnail_picture_id"
               class="studio-person__face"
               :src="pictureThumbnailUrl(item.thumbnail_picture_id)"
+              data-testid="studio-person-face"
+              @dblclick="openInLightbox(item.thumbnail_picture_id)"
               alt=""
             />
             <div class="studio-person__wardrobe">
@@ -150,6 +152,7 @@
                 :aria-label="`${item.name}, ${pictureName(i)}`"
                 :data-testid="`studio-pic-${pid}`"
                 @click="onPictureClick(pid, i, $event)"
+                @dblclick="openInLightbox(pid)"
                 @contextmenu.prevent="openPictureMenu(pid, $event)"
               >
                 <img :src="pictureThumbnailUrl(pid)" alt="" />
@@ -287,6 +290,7 @@ import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -311,6 +315,8 @@ const noticeStore = useNoticeStore();
 // More angles… opens the one location draw (App.vue), which goes on when it
 // closes; focus goes back to what opened it there.
 const locationDraw = useLocationDrawStore();
+// A double-click opens a picture in the Lightbox; Esc or Back comes here.
+const openInLightbox = useOpenInLightbox();
 
 function openAngles() {
   locationDraw.openFor(item.value);
