@@ -1,0 +1,10 @@
+{
+  "id": "2-pipeline-the-gpu-tasks-instead-of-runnin",
+  "number": 2,
+  "title": "Pipeline the GPU tasks instead of running them concurrently",
+  "body": "Release 1.2.0b1 changed the background tasks (face extraction, tagging, embedding, likeness) to run one after another as a pipeline, where before several GPU tasks ran at the same time.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.328Z",
+  "reopenings": []
+}

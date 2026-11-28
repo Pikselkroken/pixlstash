@@ -1,0 +1,10 @@
+{
+  "id": "1-rewrite-the-likeness-and-quality-tasks-w",
+  "number": 1,
+  "title": "Rewrite the likeness and quality tasks with NumPy and larger cycles",
+  "body": "Commit 636e39821 (2026-05-06, \"Improve speed of quality and likeness tasks\") replaced Python dictionary loops in the likeness sweep with NumPy array work. It raised the number of pictures handled per cycle (MAX_A_PER_CYCLE) from 256 to 2048, added a per-sweep cache of decoded candidate arrays, and pruned each picture's top pairs in one SQL statement.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.328Z",
+  "reopenings": []
+}

@@ -1,0 +1,10 @@
+{
+  "id": "5-find-likeness-candidates-with-a-gpu-near",
+  "number": 5,
+  "title": "Find likeness candidates with a GPU nearest-neighbour search over the CLIP embeddings",
+  "body": "Today the likeness sweep (`pixlstash/tasks/likeness_task.py`) finds candidates for each picture without comparing embeddings directly. It sorts every picture on each of 9 numeric keys, such as size, quality and date, and looks 60 places either side. It then keeps the pairs whose CLIP embeddings are close. That work runs on the CPU and is repeated for every 2048 pictures, so it grows close to the square of the library size. A direct search for each picture's nearest embeddings, done in blocks as one matrix multiply on the GPU, would be both simpler and more exact. The project already has a blocked top-k search of this kind in `pixlstash/utils/near_neighbor.py`, used for tag suggestions. For 20,000 pictures it is about 200 billion multiply-adds, under a second on a modern GPU. It might also find pairs the sliding window misses, for example two near-identical pictures whose quality scores differ. Compare the sweep's wall-clock time and the pairs it keeps against today's, on the fixed library from the timing idea. It counts as a success if the sweep is several times faster and keeps at least the duplicate groups found today.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

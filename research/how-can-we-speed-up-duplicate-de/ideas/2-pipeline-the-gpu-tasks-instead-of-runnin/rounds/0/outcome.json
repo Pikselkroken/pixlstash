@@ -1,0 +1,12 @@
+{
+  "idea": "2-pipeline-the-gpu-tasks-instead-of-runnin",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "inconclusive",
+  "finding": "The changelog claims the tasks became 3x to 50x faster, but no timings or data in the repository back the figure.",
+  "wouldSettle": "A test of it against the question; this was reconstructed, not run.",
+  "evidence": [],
+  "followUps": [],
+  "status": "superseded",
+  "concludedAt": null
+}

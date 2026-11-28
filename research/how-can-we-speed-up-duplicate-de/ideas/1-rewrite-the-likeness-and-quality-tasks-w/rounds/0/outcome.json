@@ -1,0 +1,12 @@
+{
+  "idea": "1-rewrite-the-likeness-and-quality-tasks-w",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "inconclusive",
+  "finding": "It shipped without any measurement, so how much faster the sweep became is not recorded anywhere.",
+  "wouldSettle": "A test of it against the question; this was reconstructed, not run.",
+  "evidence": [],
+  "followUps": [],
+  "status": "superseded",
+  "concludedAt": null
+}

@@ -1,0 +1,10 @@
+{
+  "id": "3-slice-the-duplicate-scan-so-it-stops-hol",
+  "number": 3,
+  "title": "Slice the duplicate scan so it stops holding the database writer",
+  "body": "The duplicate scan used to run as one database callback that committed after each bucket but never gave up the single writer thread. Commit 014ffb6f4 (2026-08-02, \"Fix dedup scan scheduling\") split it into many small low-priority callbacks, so grid reads and other writes can run between buckets. A related change rewrites only the groups a bucket touched, where before every group was rewritten after every bucket.",
+  "origin": "history",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

@@ -1,0 +1,10 @@
+{
+  "id": "4-time-each-stage-of-duplicate-detection-o",
+  "number": 4,
+  "title": "Time each stage of duplicate detection on one fixed library",
+  "body": "Duplicate detection in PixlStash is four background stages run in order. First the embedding stage: CLIP, an image model that turns each picture into 512 numbers, plus a 64-bit perceptual hash called dHash. Then the likeness parameters, then the likeness sweep that pairs similar pictures, and finally the duplicate scan that fills the Duplicates queue. Nobody has timed them, so any speed-up is a guess about where the time goes. The idea is to import one fixed copy of a library, of a few thousand pictures with known duplicates, into a fresh vault. Then log when each stage starts and finishes and how long its batches take, and save the duplicate groups that come out. Those groups become the reference that later ideas must match. The code suggests two suspects. The embedding stage spends about 4 of every 4.2 seconds decoding images on the CPU. The likeness sweep re-sorts the whole library on every cycle, which grows close to the square of the library size. The test worked if it produces a per-stage time table at two library sizes, for example 2,000 and 8,000 pictures. That shows which stage dominates and how each one grows with size.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

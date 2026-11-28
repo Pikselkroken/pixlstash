@@ -1,0 +1,10 @@
+{
+  "id": "6-decode-pictures-at-reduced-size-for-the",
+  "number": 6,
+  "title": "Decode pictures at reduced size for the embedding and perceptual hash",
+  "body": "The embedding stage decodes each full-resolution file on the CPU. It then shrinks the picture to 224 pixels for CLIP and to 9 by 8 pixels for the dHash. Its own docstring says this CPU work is about 4 seconds of every 4.2-second batch of 128 pictures, so the GPU mostly waits. Most of that decode is thrown away. JPEG files can be decoded straight to one half, a quarter or an eighth of their size; Pillow calls this draft mode. A 6000-pixel photo decoded at an eighth is 750 pixels, still more than CLIP needs. Measure pictures per second through the embedding stage before and after, on the same files. Also check how many pictures' CLIP embeddings and dHash values change, and by how much: dHash values should match exactly or almost exactly, and embeddings should have cosine above 0.99 to the old ones. It counts as a success if throughput at least doubles and the Duplicates queue shows the same groups. File types that cannot be decoded at reduced size, such as PNG, will gain little, so report the mix of file types.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

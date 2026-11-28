@@ -1,0 +1,10 @@
+{
+  "id": "7-stop-the-likeness-parameters-stage-from",
+  "number": 7,
+  "title": "Stop the likeness parameters stage from throwing away pairs it will rebuild",
+  "body": "Each batch of the likeness parameters stage (`pixlstash/tasks/likeness_parameters_task.py`) deletes every likeness pair its pictures already have and puts them back in the queue. The likeness sweep then redoes them. If parameters are recomputed for pictures whose numbers did not change, for example after a migration or a rescan, the sweep repeats work it had already finished. I am not sure how often this happens in practice: it depends on what triggers parameter recomputation. Part of the test is to find out. Count how many pictures go through the parameters stage, and how many of them actually change, during the timing run and during an ordinary restart. If a large share is unchanged, keep the pairs for unchanged pictures. Then measure the likeness sweep's total time and check the Duplicates queue is identical. It counts as a success if the sweep's work after a recomputation drops by roughly the share of unchanged pictures.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

@@ -1,0 +1,1 @@
+Which changes make PixlStash find duplicate pictures sooner, measured as the wall-clock time from a library's pictures being imported to their duplicate groups standing in the Duplicates queue, on one fixed copy of a library, while still finding the duplicate groups it finds today?

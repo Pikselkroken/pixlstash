@@ -1,0 +1,10 @@
+{
+  "id": "8-replace-the-scan-s-buckets-with-a-librar",
+  "number": 8,
+  "title": "Replace the scan's buckets with a library-wide perceptual-hash index",
+  "body": "Tier 2 of the duplicate scan compares the 64-bit dHash of pictures only inside buckets: same dimensions, same capture minute, same import folder, or same folder. Inside each bucket it compares every pair. That is quadratic per bucket and capped at 4000 members and 50,000 pairs, and the documentation admits the cap can drop members. Two near-identical pictures with different sizes in different folders are never compared at all. A standard trick, multi-index hashing, finds all pictures within a few bits of each other library-wide without comparing every pair. It splits each 64-bit hash into four 16-bit pieces. Any two hashes that differ in at most 3 bits must share at least one piece exactly, so only pictures sharing a piece are compared. Measure tier 2's time on the fixed library, and count the groups found that the buckets missed and any lost. It counts as a success if tier 2 is no slower and loses no group. It is a bigger win if it also runs faster on large buckets, or finds groups the buckets missed.",
+  "origin": "assistant",
+  "parent": null,
+  "createdAt": "2026-11-28T11:34:50.329Z",
+  "reopenings": []
+}

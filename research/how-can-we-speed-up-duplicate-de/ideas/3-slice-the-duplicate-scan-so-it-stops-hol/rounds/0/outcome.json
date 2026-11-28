@@ -1,0 +1,12 @@
+{
+  "idea": "3-slice-the-duplicate-scan-so-it-stops-hol",
+  "round": 0,
+  "questionRev": 1,
+  "verdict": "inconclusive",
+  "finding": "Before the fix, a 12,098-picture scan held the writer for 104 seconds. The fix improved responsiveness, but the scan's own total time was never measured before or after.",
+  "wouldSettle": "A test of it against the question; this was reconstructed, not run.",
+  "evidence": [],
+  "followUps": [],
+  "status": "superseded",
+  "concludedAt": null
+}
