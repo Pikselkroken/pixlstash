@@ -22,10 +22,12 @@ import io
 import os
 import tempfile
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import update
 from sqlmodel import select
 
 from pixlstash.db_models import (
@@ -36,8 +38,10 @@ from pixlstash.db_models import (
     PictureSetMember,
 )
 from pixlstash.server import Server
-from pixlstash.services import scrapheap_service
+from pixlstash.services import import_dedup_service, scrapheap_service
 from pixlstash.services.comfyui_service import _import_comfyui_outputs
+from pixlstash.services.import_dedup_service import _has_fine_timestamps
+from pixlstash.tasks import picture_import_task
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
@@ -822,3 +826,210 @@ def test_restore_announces_exactly_the_pictures_it_restored(owner_server):
         assert emitted == []
     finally:
         srv.vault.notify = real_notify
+
+
+# ---------------------------------------------------------------------------
+# The stored full hash: a re-import confirms without re-reading the library
+# ---------------------------------------------------------------------------
+
+# Windows never trusts a stored hash (its st_ctime is the creation time, so the
+# guard cannot see an in-place edit whose mtime was put back): every confirm
+# there reads the library file, exactly as before the column existed.
+_STORED_READS = 1 if os.name == "nt" else 0
+
+
+def _import_once(path, srv, client, data) -> str:
+    """Import *data* by *path* and return ``new`` or ``duplicate``."""
+    if path == "comfy":
+        new_ids, duplicate_ids = _import_comfyui_outputs(srv, [(data, ".png")])
+        return "new" if new_ids else "duplicate" if duplicate_ids else "neither"
+    run_import = _staging_import if path == "staging" else _one_shot_import
+    status = run_import(client, [("same.png", data)])
+    if status["imported_count"] == 1:
+        return "new"
+    return "duplicate" if status["duplicate_count"] == 1 else "neither"
+
+
+def _count_library_reads(monkeypatch, library_file):
+    """Count full-hash reads of *library_file* (not of staged/incoming files)."""
+    reads = []
+    real = ImageUtils.calculate_full_hash_from_file_path
+
+    def counting(file_path):
+        if os.path.realpath(file_path) == os.path.realpath(library_file):
+            reads.append(file_path)
+        return real(file_path)
+
+    monkeypatch.setattr(
+        ImageUtils, "calculate_full_hash_from_file_path", staticmethod(counting)
+    )
+    return reads
+
+
+def _library_file(srv, picture_id) -> str:
+    file_path = srv.vault.db.run_task(lambda s: s.get(Picture, picture_id).file_path)
+    return ImageUtils.resolve_picture_path(srv.vault.image_root, file_path)
+
+
+@pytest.mark.parametrize("path", ["staging", "one_shot", "comfy"])
+def test_reimport_confirms_from_the_stored_hash(owner_server, monkeypatch, path):
+    """New pictures store their hash; a confirm that had to read stores it too."""
+    srv, client = owner_server
+    data = _png_bytes(color=(17, 171, 71))
+
+    assert _import_once(path, srv, client, data) == "new"
+    (picture_id,) = _picture_ids(srv)
+    stored = srv.vault.db.run_task(lambda s: s.get(Picture, picture_id))
+    assert stored.full_sha == ImageUtils.calculate_full_hash_from_bytes(data)
+    assert stored.full_sha_stat
+
+    reads = _count_library_reads(monkeypatch, _library_file(srv, picture_id))
+    assert _import_once(path, srv, client, data) == "duplicate"
+    assert len(reads) == _STORED_READS, reads
+
+    # A picture from before the column: the confirm reads it once, stores what
+    # it learned, and the next re-import reads nothing.
+    def forget(session):
+        session.exec(update(Picture).values(full_sha=None, full_sha_stat=None))
+        session.commit()
+
+    srv.vault.db.run_task(forget)
+    reads.clear()
+    assert _import_once(path, srv, client, data) == "duplicate"
+    assert len(reads) == 1, reads
+    reads.clear()
+    assert _import_once(path, srv, client, data) == "duplicate"
+    assert len(reads) == _STORED_READS, reads
+    assert _row_count(srv) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stored hash is off on Windows")
+def test_library_file_edited_with_mtime_put_back_is_not_a_duplicate(owner_server):
+    """The guard sees an in-place edit that kept size, mtime and inode (ctime)."""
+    srv, client = owner_server
+    original = _bmp_bytes((120, 10, 10))
+    edited = _bmp_bytes((10, 10, 120))
+    assert len(original) == len(edited)
+
+    assert _one_shot_import(client, [("a.bmp", original)])["imported_count"] == 1
+    (picture_id,) = _picture_ids(srv)
+    library_file = _library_file(srv, picture_id)
+    stored = srv.vault.db.run_task(lambda s: s.get(Picture, picture_id))
+    assert stored.full_sha == ImageUtils.calculate_full_hash_from_bytes(original)
+
+    before = os.stat(library_file)
+    with open(library_file, "r+b") as handle:
+        handle.write(edited)
+    os.utime(library_file, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = os.stat(library_file)
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ino,
+    )
+    # ctime is the only field left to notice the edit; without this the test
+    # could pass on a clock that never ticked.
+    assert after.st_ctime_ns != before.st_ctime_ns
+
+    # The library no longer holds the original bytes, so they are new again.
+    status = _one_shot_import(client, [("a-again.bmp", original)])
+    assert status["imported_count"] == 1, status
+    assert status["duplicate_count"] == 0, status
+    assert _row_count(srv) == 2
+
+
+def test_missing_library_file_with_a_stored_hash_is_not_a_match(owner_server):
+    """A stored hash never stands in for a file that is gone."""
+    srv, client = owner_server
+    data = _png_bytes(color=(201, 13, 99))
+
+    assert _one_shot_import(client, [("a.png", data)])["imported_count"] == 1
+    (picture_id,) = _picture_ids(srv)
+    assert srv.vault.db.run_task(lambda s: s.get(Picture, picture_id).full_sha)
+    os.remove(_library_file(srv, picture_id))
+
+    status = _one_shot_import(client, [("a-again.png", data)])
+    assert status["imported_count"] == 1, status
+    assert status["duplicate_count"] == 0, status
+
+
+def test_coarse_timestamps_never_trust_a_stored_hash():
+    """FAT/exFAT-style whole-millisecond clocks fall back to reading the file."""
+    fine = 1_700_000_000_123_456_789
+    coarse = 1_700_000_000_120_000_000
+    assert _has_fine_timestamps(SimpleNamespace(st_mtime_ns=fine, st_ctime_ns=fine))
+    assert not _has_fine_timestamps(
+        SimpleNamespace(st_mtime_ns=coarse, st_ctime_ns=fine)
+    )
+    assert not _has_fine_timestamps(
+        SimpleNamespace(st_mtime_ns=fine, st_ctime_ns=coarse)
+    )
+
+
+# ---------------------------------------------------------------------------
+# The library scan indexes a written file before the import saves its row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["staging", "one_shot", "comfy"])
+def test_file_the_scan_indexed_first_keeps_one_row(owner_server, monkeypatch, path):
+    """An import writes the file, then saves the row; the root scan can land
+    in between. The import must adopt the scan's row, not add a second one."""
+    srv, client = owner_server
+    data = _png_bytes(color=(66, 133, 199))
+    real = ImageUtils.create_picture_from_bytes
+    scanned: list[int] = []
+
+    def scan_gets_there_first(*args, **kwargs):
+        picture = real(*args, **kwargs)
+
+        def index(session):
+            row = Picture(
+                file_path=picture.file_path,
+                pixel_sha=picture.pixel_sha,
+                size_bytes=picture.size_bytes,
+            )
+            session.add(row)
+            session.commit()
+            return row.id
+
+        scanned.append(srv.vault.db.run_task(index))
+        return picture
+
+    monkeypatch.setattr(
+        ImageUtils, "create_picture_from_bytes", staticmethod(scan_gets_there_first)
+    )
+
+    if path == "comfy":
+        new_ids, _duplicates = _import_comfyui_outputs(srv, [(data, ".png")])
+        assert new_ids == scanned
+    else:
+        run_import = _staging_import if path == "staging" else _one_shot_import
+        status = run_import(client, [("a.png", data)])
+        assert status["imported_count"] == 1, status
+
+    assert _picture_ids(srv) == scanned, "one file, one row: the scan's"
+    stored = srv.vault.db.run_task(lambda s: s.get(Picture, scanned[0]))
+    assert stored.full_sha == ImageUtils.calculate_full_hash_from_bytes(data)
+
+
+def test_staged_import_saves_its_rows_in_batches(owner_server, monkeypatch):
+    """Rows are saved while the import runs, so none waits out the scan's
+    settle window; the last partial batch is saved too."""
+    srv, client = owner_server
+    monkeypatch.setattr(picture_import_task, "_INSERT_BATCH", 2)
+    real = import_dedup_service.insert_or_adopt_in_session
+    batch_sizes: list[int] = []
+
+    def counting(session, pictures):
+        batch_sizes.append(len(pictures))
+        return real(session, pictures)
+
+    monkeypatch.setattr(import_dedup_service, "insert_or_adopt_in_session", counting)
+
+    files = [(f"{i}.png", _png_bytes(color=(i, 2 * i, 3 * i))) for i in range(1, 6)]
+    status = _staging_import(client, files)
+
+    assert status["imported_count"] == 5, status
+    assert batch_sizes == [2, 2, 1], batch_sizes
+    assert len(_picture_ids(srv)) == 5

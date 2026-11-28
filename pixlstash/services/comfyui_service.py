@@ -1666,9 +1666,11 @@ def _import_comfyui_outputs(
         [(sampled, size) for sampled, size, _full in fingerprints],
         False,
     )
+    learned: import_dedup_service.LearnedShas = {}
     existing_map, _scrapheaped_map = import_dedup_service.partition_confirmed_matches(
-        candidates, fingerprints, server.vault.image_root
+        candidates, fingerprints, server.vault.image_root, learned
     )
+    import_dedup_service.save_full_shas(server.vault.db, learned)
 
     # Placement on write (v1.11 Phase 4b). `None` whenever `output_dir` is set:
     # an edit written beside its original in a reference folder is already where
@@ -1695,16 +1697,22 @@ def _import_comfyui_outputs(
             reference_folder_id=reference_folder_id,
             subfolder=subfolder,
         )
+        import_dedup_service.stamp_full_sha(
+            new_picture_map[fingerprint], fingerprint, server.vault.image_root
+        )
     new_pictures = list(new_picture_map.values())
 
     def import_task(session):
         if new_pictures:
-            session.add_all(new_pictures)
-            session.flush()
-            for pic in new_pictures:
+            # A file the library scan indexed while this import was still
+            # writing keeps the scan's row (``insert_or_adopt_in_session``).
+            fresh = import_dedup_service.insert_or_adopt_in_session(
+                session, new_pictures
+            )
+            for pic in fresh:
                 session.add(Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id))
             session.commit()
-            for pic in new_pictures:
+            for pic in fresh:
                 session.refresh(pic)
         return new_pictures
 

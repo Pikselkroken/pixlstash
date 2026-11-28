@@ -198,9 +198,11 @@ def _create_picture_imports(
         import_dedup_service.load_match_candidates_in_session,
         [(sampled, size) for sampled, size, _full in fingerprints],
     )
+    learned: import_dedup_service.LearnedShas = {}
     existing_map, scrapheaped_map = import_dedup_service.partition_confirmed_matches(
-        candidates, fingerprints, server.vault.image_root
+        candidates, fingerprints, server.vault.image_root, learned
     )
+    import_dedup_service.save_full_shas(server.vault.db, learned)
 
     # Placement on write (v1.11 Phase 4b). Resolved once for the batch: every
     # file in it goes to the same folder, and `None` means this library has no
@@ -227,6 +229,9 @@ def _create_picture_imports(
                 pixel_sha=sampled_sha,
                 original_file_name=original_name,
                 subfolder=subfolder,
+            )
+            import_dedup_service.stamp_full_sha(
+                new_picture_map[fingerprint], fingerprint, dest_folder
             )
             if progress_callback is not None:
                 progress_callback()
