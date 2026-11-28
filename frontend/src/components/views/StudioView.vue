@@ -6,6 +6,8 @@
       :scene-id="openId"
       :scenes="store.overview.scenes"
       :back-label="backLabel"
+      :rename="route.query.rename === '1'"
+      @renaming="go({ rename: null }, { replace: true })"
       @close="closeLightbox"
       @go="openItem"
       @changed="store.refresh()"
@@ -16,6 +18,8 @@
       :key="`${openKind}-${openId}`"
       :kind="openKind"
       :item-id="openId"
+      :rename="route.query.rename === '1'"
+      @renaming="go({ rename: null }, { replace: true })"
       :back-label="backLabel"
       @close="closeLightbox"
       @go="openItem"
@@ -217,10 +221,28 @@
                 </span>
               </span>
               <span class="studio-card__name studio-card__line"
-                ><span class="studio-card__title">{{ card.name }}</span
+                ><span
+                  class="studio-card__title"
+                  :data-testid="`studio-title-${card.kind}-${card.id}`"
+                  @dblclick.stop="startRename(card)"
+                  >{{ card.name }}</span
                 ><span class="studio-card__meta">{{ card.meta }}</span></span
               >
             </button>
+            <!-- Rename in place, over the card's name line: a field cannot sit
+                 inside the card's button. -->
+            <input
+              v-if="renaming === cardKey(card)"
+              ref="renameEl"
+              v-model="renameText"
+              class="studio-rename tbm-input"
+              :aria-label="`New name for ${card.name}`"
+              maxlength="200"
+              data-testid="studio-rename"
+              @keydown.enter.prevent="commitRename(card)"
+              @keydown.esc.prevent.stop="renaming = null"
+              @blur="commitRename(card)"
+            />
             <span
               v-if="card.tile.prompt"
               class="studio-tile-prompt"
@@ -449,8 +471,10 @@ import {
   deleteWords,
   duplicateCard,
   duplicateReason,
+  renameCard,
   setCardProject,
 } from "../../utils/studioCardActions";
+import { nameFromDescription } from "../../utils/itemNames";
 import {
   ITEM_ANGLES,
   KIND_LIST,
@@ -858,6 +882,8 @@ function onBackgroundClick(event) {
 }
 
 function onGridKey(event) {
+  // Typing a name: Delete, Ctrl+A and Esc are the field's, not the grid's.
+  if (event.target?.closest?.("input, textarea")) return;
   if (event.key === "Escape" && selectedKeys.value.length && !cardMenu.value) {
     event.preventDefault();
     event.stopPropagation();
@@ -865,6 +891,9 @@ function onGridKey(event) {
   } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
     event.preventDefault();
     selectedKeys.value = cards.value.map(cardKey);
+  } else if (event.key === "F2" && selectedCards.value.length === 1) {
+    event.preventDefault();
+    startRename(selectedCards.value[0]);
   } else if (event.key === "Delete" && selectedCards.value.length) {
     event.preventDefault();
     removeCards(selectedCards.value);
@@ -921,7 +950,21 @@ const menuEntries = computed(() => {
   const allFavourite = picked.every((c) => c.favourite);
   const entries = [];
   if (one) {
-    entries.push({ key: "open", label: "Open", icon: "mdi-open-in-app", run: () => openItem(one.kind, one.id) });
+    entries.push(
+      { key: "open", label: "Open", icon: "mdi-open-in-app", run: () => openItem(one.kind, one.id) },
+      { key: "rename", label: "Rename…", icon: "mdi-rename-outline", run: () => startRename(one) },
+    );
+  }
+  // Named for want of a name ("New prop"): the words its sheets were drawn
+  // from name it, every one selected at once.
+  const nameable = picked.filter((c) => c.kind !== "scene" && c.kind !== "cast" && namedFromWords(c));
+  if (nameable.length) {
+    entries.push({
+      key: "name-from-description",
+      label: nameable.length === 1 ? "Name from description" : `Name ${nameable.length} from their descriptions`,
+      icon: "mdi-text-recognition",
+      run: () => nameFromWords(nameable),
+    });
   }
   entries.push(
     {
@@ -1011,6 +1054,40 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onOutside);
   document.removeEventListener("keydown", onEscape, true);
 });
+
+// ── Rename ────────────────────────────────────────────────────────────────
+const renaming = ref(null); // the key of the card being renamed
+const renameText = ref("");
+const renameEl = ref(null);
+
+async function startRename(card) {
+  closeMenu();
+  renaming.value = cardKey(card);
+  renameText.value = card.name;
+  await nextTick();
+  const el = Array.isArray(renameEl.value) ? renameEl.value[0] : renameEl.value;
+  el?.focus();
+  el?.select();
+}
+
+async function commitRename(card) {
+  if (renaming.value !== cardKey(card)) return;
+  renaming.value = null;
+  const name = renameText.value.trim();
+  if (!name || name === card.name) return;
+  await eachCard([card], (c) => renameCard(c, name), "rename.");
+}
+
+/** The name the words its sheets were drawn from give *card*, when that is
+ * another than it has. */
+function namedFromWords(card) {
+  const name = nameFromDescription(card.description);
+  return name && name !== card.name ? name : "";
+}
+
+function nameFromWords(picked) {
+  return eachCard(picked, (card) => renameCard(card, namedFromWords(card)), "rename.");
+}
 
 // ── What the menu does ────────────────────────────────────────────────────
 /** Run `act` on each card, then refresh; one notice names what failed. */
@@ -1192,6 +1269,15 @@ async function addSet() {
 .studio-cell {
   position: relative;
   min-width: 0;
+}
+
+/* The rename field over the card's name line. */
+.studio-rename {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-raised);
 }
 
 /* Selected: the workflow card's wash and ring, on the picture. */

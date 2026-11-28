@@ -275,6 +275,14 @@ function itemEntries(kind, id) {
   const entries = [
     { key: "open", label: "Open", icon: "mdi-open-in-app", run: () => openItem(kind, id) },
     {
+      // Opens it with its title ready to rename (`?rename=1`, a one-shot).
+      key: "rename",
+      label: "Rename…",
+      icon: "mdi-rename-outline",
+      run: () =>
+        go({ section: KIND_SECTION[kind], open: `${kind}:${id}`, via: "sidebar", rename: "1" }),
+    },
+    {
       key: "favourite",
       label: item.favourite ? "Remove from favourites" : "Add to favourites",
       icon: item.favourite ? "mdi-heart-off-outline" : "mdi-heart-outline",

@@ -110,12 +110,13 @@ describe("the Studio sidebar's row menus", () => {
   it("offers each kind's verbs on its item rows", async () => {
     const wrapper = await mountAt("/studio?project=7");
     await rightClick(wrapper, "studio-item-scene-1");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "delete"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "delete"]);
     await rightClick(wrapper, "studio-item-cast-5");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-outfit"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-outfit"]);
     await rightClick(wrapper, "studio-item-location-30");
     expect(verbs(wrapper)).toEqual([
       "open",
+      "rename",
       "favourite",
       "new-scene-here",
       "more-angles",
@@ -125,7 +126,7 @@ describe("the Studio sidebar's row menus", () => {
     // A location with no pictures has nothing to draw more angles from.
     expect(verb(wrapper, "more-angles").attributes("disabled")).toBeDefined();
     await rightClick(wrapper, "studio-item-prop-40");
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-sheets", "stop-using"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-sheets", "stop-using"]);
   });
 
   it("offers each section's toolbar on its row, with Any project too", async () => {
@@ -160,6 +161,14 @@ describe("the Studio sidebar's row menus", () => {
 
     const wrapper = await mountAt("/studio");
     expect(wrapper.find("[data-testid=studio-item-draw-progress-30]").exists()).toBe(true);
+  });
+
+  it("offers Rename on an item's row, opening it with its name ready", async () => {
+    const wrapper = await mountAt("/studio");
+    await rightClick(wrapper, "studio-item-location-30");
+    await verb(wrapper, "rename").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({ open: "location:30", rename: "1" });
   });
 
   it("opens More angles on the one draw of the whole app", async () => {
@@ -240,7 +249,7 @@ describe("the Studio sidebar's row menus", () => {
       shiftKey: true,
     });
     await flushPromises();
-    expect(verbs(wrapper)).toEqual(["open", "favourite", "new-sheets", "stop-using"]);
+    expect(verbs(wrapper)).toEqual(["open", "rename", "favourite", "new-sheets", "stop-using"]);
     // A lightbox listens for Esc on the window; the menu's Esc must not reach it.
     const lightboxEsc = vi.fn();
     window.addEventListener("keydown", lightboxEsc);

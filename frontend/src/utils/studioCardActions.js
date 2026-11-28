@@ -183,3 +183,11 @@ export async function addOutfitToWardrobe(outfit, person) {
   }
   return made.id;
 }
+
+/** Rename the card's item: a scene, a person, or the set that is the item. */
+export async function renameCard(card, name) {
+  const body = { name };
+  if (card.kind === "scene") return patchScene(card.id, body);
+  if (card.kind === "cast") return patchCharacter(card.id, body);
+  return patchPictureSet(card.id, body);
+}

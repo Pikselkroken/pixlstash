@@ -8866,6 +8866,14 @@ inside its lightboxes, so the rail is empty on `/studio`.
   one shown). `composables/useOpenInLightbox` pushes All Pictures with
   `?overlay=<id>&from=<the Studio's full path>`, so Esc or Back lands on the
   item again, query and all (`utils/lightboxRoute.js`).
+- **Every Studio item renames in place**: *Rename…* in the grid's and the
+  sidebar's menus, F2 on one selected card or in an item's lightbox, a
+  double-click on a card's name or the lightbox title (`renameCard`: a
+  scene's, a person's or the set's own route). The sidebar's opens the item
+  with `?rename=1`, a one-shot the lightbox (or a scene's name field) takes.
+  The grid ignores its keys while a field has them. *Name from description*
+  names the selected outfits, locations and props from their sets'
+  descriptions, every one whose name differs.
 - **A person's lightbox shows their reference pictures** (`GET
   /characters/{id}/reference_pictures`) above the wardrobe, each opening in
   the Lightbox on a double-click or Enter, or says where they are chosen.

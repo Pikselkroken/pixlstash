@@ -24,7 +24,27 @@
             @click="step(1)"
           />
         </template>
-        <span class="studio-title">{{ item?.name ?? "Not found" }}</span>
+        <!-- Double-click or F2 renames it in place. -->
+        <input
+          v-if="item && renamingTitle"
+          ref="titleEl"
+          v-model="titleText"
+          class="studio-title-input tbm-input"
+          :aria-label="`New name for ${item.name}`"
+          maxlength="200"
+          data-testid="studio-item-rename"
+          @keydown.enter.prevent="commitTitle"
+          @keydown.esc.prevent.stop="renamingTitle = false"
+          @blur="commitTitle"
+        />
+        <span
+          v-else
+          class="studio-title"
+          :title="item ? 'Double-click or F2 to rename' : undefined"
+          data-testid="studio-item-title"
+          @dblclick="startTitle"
+          >{{ item?.name ?? "Not found" }}</span
+        >
         <span class="studio-spacer"></span>
         <template v-if="item">
           <AppButton
@@ -349,7 +369,7 @@ import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
-import { addOutfitToWardrobe } from "../../utils/studioCardActions";
+import { addOutfitToWardrobe, renameCard } from "../../utils/studioCardActions";
 import {
   ITEM_ANGLES,
   KIND_LIST,
@@ -362,8 +382,10 @@ const props = defineProps({
   kind: { type: String, required: true },
   itemId: { type: Number, default: null },
   backLabel: { type: String, default: "Back" },
+  /** Open with the title ready to rename (a sidebar row's Rename…). */
+  rename: { type: Boolean, default: false },
 });
-const emit = defineEmits(["close", "go", "changed", "new-scene", "item-sheets"]);
+const emit = defineEmits(["close", "go", "changed", "new-scene", "item-sheets", "renaming"]);
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
@@ -566,6 +588,47 @@ function drawSheets() {
   });
 }
 
+// ── Rename, in the title ──────────────────────────────────────────────────
+const renamingTitle = ref(false);
+const titleText = ref("");
+const titleEl = ref(null);
+
+async function startTitle() {
+  if (!item.value) return;
+  titleText.value = item.value.name;
+  renamingTitle.value = true;
+  await nextTick();
+  titleEl.value?.focus();
+  titleEl.value?.select();
+}
+
+async function commitTitle() {
+  if (!renamingTitle.value) return;
+  renamingTitle.value = false;
+  const name = titleText.value.trim();
+  if (!name || name === item.value?.name) return;
+  try {
+    await renameCard({ kind: props.kind, id: props.itemId }, name);
+    emit("changed");
+  } catch (e) {
+    noticeStore.error(`Couldn't rename it. ${errorMessage(e, "Please try again.")}`, {
+      key: "studio-rename",
+    });
+  }
+}
+
+// Asked to open renaming: once the item is there, and said back so the route
+// drops the one-shot.
+watch(
+  () => props.rename && !!item.value,
+  (ready) => {
+    if (!ready) return;
+    startTitle();
+    emit("renaming");
+  },
+  { immediate: true },
+);
+
 // ── A person's reference pictures ─────────────────────────────────────────
 const references = ref([]);
 const referencesRead = ref(false);
@@ -649,6 +712,10 @@ function onKey(event) {
     closeMenu({ refocus: true });
   } else if (event.key === "Escape" && selected.value.length) selected.value = [];
   else if (event.key === "Delete" && selected.value.length) deleteSelected();
+  else if (event.key === "F2" && !selected.value.length) {
+    event.preventDefault();
+    startTitle();
+  }
   else if (event.key === "Escape") emit("close");
   else if (event.key === "ArrowLeft") step(-1);
   else if (event.key === "ArrowRight") step(1);
@@ -705,6 +772,10 @@ onBeforeUnmount(() => {
 .studio-ref:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--space-1);
+}
+
+.studio-title-input {
+  max-width: 360px;
 }
 
 .studio-person__wardrobe {

@@ -26,6 +26,7 @@
         </template>
         <input
           v-if="draft"
+          ref="nameEl"
           v-model="draft.name"
           class="scene-name"
           aria-label="Scene name"
@@ -513,11 +514,26 @@ const props = defineProps({
   sceneId: { type: Number, required: true },
   scenes: { type: Array, default: () => [] },
   backLabel: { type: String, default: "Back" },
+  /** Open with the name ready to rename (a sidebar row's Rename…). */
+  rename: { type: Boolean, default: false },
 });
-const emit = defineEmits(["close", "go", "changed", "item-sheets"]);
+const emit = defineEmits(["close", "go", "changed", "item-sheets", "renaming"]);
 
 const store = useStudioStore();
 const noticeStore = useNoticeStore();
+
+// The name is a field already: Rename… focuses it with the name selected.
+const nameEl = ref(null);
+watch(
+  () => props.rename && !!nameEl.value,
+  (ready) => {
+    if (!ready) return;
+    nameEl.value.focus();
+    nameEl.value.select();
+    emit("renaming");
+  },
+  { immediate: true },
+);
 const { confirm } = useConfirm();
 // A double-click on a take opens it in the Lightbox; Esc or Back comes here.
 const openInLightbox = useOpenInLightbox();

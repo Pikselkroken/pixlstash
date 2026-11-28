@@ -575,6 +575,90 @@ describe("adding existing outfits to a wardrobe", () => {
   });
 });
 
+describe("renaming Studio items", () => {
+  const field = (w) => w.find('[data-testid="studio-rename"]');
+
+  it("renames from the menu, with F2 and by double-clicking the title", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    api.patchScene.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    verb("rename").click();
+    await flushPromises();
+    expect(field(wrapper).element.value).toBe("Red umbrella");
+    // Typing Delete in the field deletes no card.
+    await field(wrapper).trigger("keydown", { key: "Delete" });
+    expect(api.confirm).not.toHaveBeenCalled();
+    await field(wrapper).setValue("Big red umbrella");
+    await field(wrapper).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(api.patchPictureSet).toHaveBeenCalledWith(40, { name: "Big red umbrella" });
+    wrapper.unmount();
+
+    const scenes = await mountAt("/studio?section=scenes");
+    await scenes.find('[data-key="scene:2"]').trigger("click");
+    await scenes.find('[data-key="scene:2"]').trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(field(scenes).element.value).toBe("Shoreline walk");
+    await field(scenes).trigger("keydown", { key: "Escape" });
+    expect(field(scenes).exists()).toBe(false);
+    // The title's double-click renames; it does not open the scene.
+    await scenes.find('[data-testid="studio-title-scene-1"]').trigger("dblclick");
+    await flushPromises();
+    expect(router.currentRoute.value.query.open).toBeUndefined();
+    await field(scenes).setValue("Rain at the rank");
+    await field(scenes).trigger("blur");
+    await flushPromises();
+    expect(api.patchScene).toHaveBeenCalledWith(1, { name: "Rain at the rank" });
+    expect(api.patchScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("names props called New prop from their descriptions, all at once", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    const overview = structuredClone(OVERVIEW);
+    overview.props = [
+      { id: 40, name: "New prop", description: "a red umbrella, open", picture_ids: [41], favourite: false, scene_count: 0 },
+      { id: 45, name: "New prop", description: "an old brass lantern", picture_ids: [46], favourite: false, scene_count: 0 },
+      { id: 47, name: "Teacup", description: "a teacup", picture_ids: [48], favourite: false, scene_count: 0 },
+    ];
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=props");
+    await wrapper.find('[data-key="prop:40"]').trigger("click");
+    await wrapper.find('[data-key="prop:45"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="prop:47"]').trigger("click", { ctrlKey: true });
+    await wrapper.find('[data-key="prop:40"]').trigger("contextmenu");
+    await flushPromises();
+    // The teacup is named so already: two to name.
+    expect(verb("name-from-description").textContent).toContain("Name 2 from their descriptions");
+    verb("name-from-description").click();
+    await flushPromises();
+    expect(api.patchPictureSet.mock.calls).toEqual([
+      [40, { name: "Red umbrella" }],
+      [45, { name: "Old brass lantern" }],
+    ]);
+  });
+
+  it("renames an item from its lightbox title, and opens renaming from a sidebar Rename", async () => {
+    api.patchCharacter.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    await wrapper.find('[data-testid="studio-item-title"]').trigger("dblclick");
+    await flushPromises();
+    const input = wrapper.find('[data-testid="studio-item-rename"]');
+    expect(input.element.value).toBe("Mira");
+    await input.setValue("Mira Holt");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(api.patchCharacter).toHaveBeenCalledWith(5, { name: "Mira Holt" });
+    wrapper.unmount();
+
+    const asked = await mountAt("/studio?section=locations&open=location:30&rename=1");
+    await flushPromises();
+    expect(asked.find('[data-testid="studio-item-rename"]').exists()).toBe(true);
+    expect(router.currentRoute.value.query.rename).toBeUndefined();
+  });
+});
+
 describe("a person's reference pictures", () => {
   it("shows them beside the wardrobe, and opens one in the Lightbox", async () => {
     api.getReferencePictures.mockImplementation(async (id) => ({
