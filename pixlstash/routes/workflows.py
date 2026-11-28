@@ -357,6 +357,12 @@ from pixlstash.services.workflow_library_service import (
     stack_for_picture,
 )
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
+from pixlstash.services.workflow_fan_out import (
+    FanOutError,
+    fan_out_capacity,
+    fan_out_picture_input,
+    picture_tag,
+)
 from pixlstash.utils.comfyui_utilities import (
     find_comfy_workflow,
     iter_model_fields_api,
@@ -1175,6 +1181,9 @@ MAX_VALUE_LENGTH = 2000
 MAX_DEFAULTS = 200
 MAX_PINS = 200
 MAX_INPUTS = 200
+# Extra pictures one picture input takes: the widest autogrow input ComfyUI
+# ships, so a longer list could never be wired (`workflow_fan_out.MAX_PICTURES`).
+MAX_MORE_PICTURES = 100
 
 # A run request's own ceilings. The picture list is capped at the same place
 # the shipped run route caps a selection, because it is the same gesture.
@@ -1683,9 +1692,26 @@ class RunInput(ParameterAddress):
     ``picture_id`` is the picture it gets on every submission of this run;
     ``null`` says "my selection goes here", which is how a caller picks the
     input a selection feeds when more than one is open.
+
+    ``more_picture_ids`` are further pictures for the same input, each wired
+    into the next free image slot of what the input feeds
+    (`services/workflow_fan_out.py`). They need a ``picture_id`` to fan out
+    from: a selection has no single picture to clone.
     """
 
     picture_id: int | None = Field(None, ge=1, le=MAX_PICTURE_ID)
+    more_picture_ids: list[Annotated[int, Field(ge=1, le=MAX_PICTURE_ID)]] = Field(
+        default_factory=list, max_length=MAX_MORE_PICTURES
+    )
+
+    @model_validator(mode="after")
+    def _more_needs_a_picture(self):
+        if self.more_picture_ids and self.picture_id is None:
+            raise ValueError(
+                "more_picture_ids needs a picture_id: extra pictures fan out from "
+                "one picture, not from a selection."
+            )
+        return self
 
 
 class RunDestination(BaseModel):
@@ -2553,6 +2579,14 @@ class RunPictureInput(ParameterAddress):
     picture_id: int | None = None
     picture_missing: bool = False
     fill: Literal["request", "fixed", "original", "selection", "graph"] | None = None
+    # How many extra pictures (`RunInput.more_picture_ids`) this input can take
+    # before its slots run out; 0 when it cannot fan out or ComfyUI's
+    # object_info is unavailable.
+    more_pictures: int = 0
+    # How a prompt names the n-th picture for what this input feeds: a template
+    # with `{n}`, `<Picture {n}>` for a MiniMax image conditioner, else
+    # `picture {n}`.
+    picture_tag: str = "picture {n}"
 
 
 class RunPromptAssist(BaseModel):
@@ -6975,6 +7009,32 @@ def create_router(server) -> APIRouter:
             for row in stored
         ]
 
+    def _fan_out_feeds(
+        graph: dict,
+        item: CardInput,
+        targets: list[dict],
+        picture_ids: list[int],
+        object_info: dict | None,
+    ) -> list[Feed]:
+        """Clone *item*'s loaders for *picture_ids*, one feed per picture.
+
+        Refused as a 400 with the capacity when the input cannot take them all:
+        nothing is dropped, and nothing is cloned for a request that fails.
+        """
+        try:
+            fanned = fan_out_picture_input(
+                graph,
+                list(zip(item.node_ids, targets)),
+                picture_ids,
+                object_info,
+            )
+        except FanOutError as exc:
+            raise HTTPException(status_code=400, detail=f"{item.title}: {exc}") from exc
+        by_id = item.class_type == PIXLSTASH_PICTURE_LOADER
+        return [
+            Feed(picture.targets, picture.picture_id, by_id=by_id) for picture in fanned
+        ]
+
     def _fill_inputs(
         graph: dict,
         card_inputs: list[CardInput],
@@ -6982,6 +7042,8 @@ def create_router(server) -> APIRouter:
         selection: list[int],
         preflight: dict,
         made_from: dict[tuple[str, str], int] | None = None,
+        more_requested: dict[tuple[str, str], list[int]] | None = None,
+        object_info: dict | None = None,
     ) -> tuple[list[RunPictureInput], list[Feed], list[run_service.Reason]]:
         """Answer every picture input, and refuse the ones nothing answers.
 
@@ -6991,11 +7053,23 @@ def create_router(server) -> APIRouter:
         ``judge`` itself never reads. A loader naming a mask or a reference
         the owner keeps in ComfyUI's input folder runs as it always did.
 
+        A request's ``more_picture_ids`` for an input are cloned into *graph*
+        here, after its own feed, so they are fed and checked like it.
+
         Returns:
             ``(described, feeds, reasons)``: every input as the response shows
             it, where each filled one goes, and ``picture_input_unfilled``
             naming the open ones, if any.
         """
+        more_requested = more_requested or {}
+        # Each input's capacity is read off the card as it stands, before any
+        # input's clones are wired into it.
+        capacity = {
+            (item.slot_label, item.input_name): fan_out_capacity(
+                graph, list(item.node_ids), object_info
+            )
+            for item in card_inputs
+        }
         pinned = read_oldest_kept_by_pixel_sha(
             server.vault,
             sorted(
@@ -7022,13 +7096,23 @@ def create_router(server) -> APIRouter:
                     for node_id in item.node_ids
                 ]
                 if all(targets):
-                    feeds.append(
-                        Feed(
-                            targets,
-                            fill.picture_id,
-                            by_id=item.class_type == PIXLSTASH_PICTURE_LOADER,
+                    by_id = item.class_type == PIXLSTASH_PICTURE_LOADER
+                    feeds.append(Feed(targets, fill.picture_id, by_id=by_id))
+                    more = more_requested.get((item.slot_label, item.input_name))
+                    if more:
+                        # Fans out from the requested picture only; a selection
+                        # or a graph's own file has no one picture to clone.
+                        if how != "request":
+                            raise HTTPException(
+                                status_code=400,
+                                detail=(
+                                    f"{item.title} is not filled by a picture "
+                                    "request, so more pictures cannot fan out from it."
+                                ),
+                            )
+                        feeds.extend(
+                            _fan_out_feeds(graph, item, targets, more, object_info)
                         )
-                    )
                 else:
                     # A loader PixlStash cannot hand an uploaded file to. Named
                     # rather than filled somewhere else, which would be a run
@@ -7079,6 +7163,8 @@ def create_router(server) -> APIRouter:
                     ),
                     picture_missing=pin_gone,
                     fill=how,
+                    more_pictures=capacity[(item.slot_label, item.input_name)],
+                    picture_tag=picture_tag(graph, list(item.node_ids)),
                 )
             )
         reasons = (
@@ -7850,6 +7936,11 @@ def create_router(server) -> APIRouter:
             (entry.slot_label, entry.input_name): entry.picture_id
             for entry in body.inputs
         }
+        more_requested = {
+            (entry.slot_label, entry.input_name): entry.more_picture_ids
+            for entry in body.inputs
+            if entry.more_picture_ids
+        }
         # Addresses some resolved card actually has; see the check after the loop.
         addressed: set[tuple[str, str]] = set()
         reached_inputs = False
@@ -8417,6 +8508,8 @@ def create_router(server) -> APIRouter:
                 _made_from(picture_ids[0], object_info)
                 if body.replay and len(body.picture_ids) == 1 and picture_ids
                 else None,
+                more_requested=more_requested,
+                object_info=object_info,
             )
             group.picture_inputs = described
             found += unfilled

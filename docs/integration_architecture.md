@@ -834,6 +834,20 @@ kept, or whose file is gone, is a 404. At most one entry may take the selection
 refusal is decided**, once per distinct picture per request; the pre-flight
 uploads nothing.
 
+**`inputs[].more_picture_ids` fans one input out over more pictures** (a
+Studio scene's references, one per person or prop). Each is a further picture
+for the same input as its `picture_id`, which it needs: a selection (`picture_id:
+null`) is a 422. The server wires one clone of the input's loader (and of any
+IMAGE-to-IMAGE node on its path to the slot, such as a resize) per extra
+picture into the next image slot each node the input feeds accepts, by
+ComfyUI's `object_info` (`services/workflow_fan_out.py`; backend architecture, "Fanning one picture input out over several pictures"). More than
+the input can take is a 400 naming the capacity, before anything is uploaded;
+nothing is truncated. Each `RunGroup.picture_inputs` entry gains `more_pictures`
+(the capacity, 0 when it cannot fan out) and `picture_tag` (a template with
+`{n}`: `<Picture {n}>` for a MiniMax image conditioner, else `picture {n}`), so
+a client can say how many it may send and how a prompt names them. The extra
+pictures are not listed in `picture_inputs`; they show in the submitted graph.
+
 **`replay: true` says the one picture named is the workflow's own output**
 ("Run recipe"), not a picture to run it over. A picture input then takes what
 that picture's run loaded, where the library still holds it (`fill:
