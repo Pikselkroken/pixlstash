@@ -864,7 +864,7 @@ Thin multi-pane settings shell. It owns only the rail and routing; every pane's 
   - **ComfyUI** (id `comfyui`) → `<ComfyuiHostSection first>`. Every "connect ComfyUI" deep link (`RunDialog`, `MakeMoreDialog`, the empty-library and Workflows empty states) opens this id.
   - **GPU & compute** (id `compute`) → `<ComputeSection view="compute">`: its GPU picker and VRAM sharing work on every install; the runtime list inside it is desktop only. Each of its three lists is one bordered card with dividers (`.compute-list`) rather than a box per row, and *Apply & restart* sits on the GPU section's heading.
 - **Access**
-  - **Server** (id `backend`) → `<ComputeSection view="backend">` (desktop only, `isDesktop`): remote access, hide to tray, the shell command, the library folder and the logs.
+  - **Server** (id `backend`) → `<ComputeSection view="backend">`: the *API* section (an *API reference* link that opens the server's `/scalar` page in a new window; on the desktop that is an app window on the loopback origin) on every install; remote access, hide to tray, the shell command, the library folder and the logs only on the desktop (`window.pixlstashDesktop`).
   - **Account & tokens** (id `account`) → `<AccountSection>`: password and API tokens.
 
 Everything but Appearance is `!isReadOnly`.

@@ -5,7 +5,7 @@
 // be changed afterwards. Switching the runtime restarts the local server, which
 // reloads this page - so a successful action ends with the app reloading.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { login } from "../../utils/apiClient";
+import { API_BASE_URL, login } from "../../utils/apiClient";
 import { getAuthState } from "../../api/users";
 import { getComputeGpus, setComputeGpu } from "../../api/compute";
 import { getUserConfig, patchUserConfig } from "../../api/config";
@@ -24,11 +24,20 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   // Two panes share this component: 'compute' (GPU & compute: the GPU,
   // sharing it, and acceleration) and 'backend' (Server: remote access and
-  // desktop). Each instance loads and renders only its own half.
+  // desktop, which need the desktop bridge, and the API reference link, which
+  // shows on every install). Each instance loads and renders only its own half.
   view: { type: String, default: "compute" },
 });
 
 const isBackend = computed(() => props.view === "backend");
+
+// The server's own Scalar page: the API base without its /api/v1 prefix. On
+// the desktop that origin is the loopback listener, which the main process
+// opens in an app window, so the port never leaves the app.
+const apiReferenceUrl = `${API_BASE_URL.replace(/\/api\/v1$/, "")}/scalar`;
+function openApiReference() {
+  window.open(apiReferenceUrl, "_blank", "noopener");
+}
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 
@@ -601,6 +610,7 @@ watch(
   <!-- ── Server pane: remote access + desktop ───────────────────────────── -->
   <div v-if="isBackend" class="compute-backend">
     <SettingsSection
+      v-if="desktop"
       title="Remote access"
       desc="Let other devices on your network open this library in a browser. The app window always uses a private local connection. Changing this restarts the local server."
       first
@@ -750,7 +760,7 @@ watch(
     </SettingsSection>
 
     <!-- "Check for updates" is not here: it lives once, under Privacy. -->
-    <SettingsSection title="Desktop">
+    <SettingsSection v-if="desktop" title="Desktop">
       <SettingsRow
         label="Hide to tray on close"
         sub="Keeps PixlStash and any remote server running; reopen it from the tray icon."
@@ -783,8 +793,26 @@ watch(
       <div v-if="error" class="settings-error">{{ error }}</div>
     </SettingsSection>
 
+    <!-- The one Server section a browser session sees too. -->
+    <SettingsSection title="API" :first="!desktop">
+      <SettingsRow
+        label="API reference"
+        sub="Every endpoint, with examples. Call them with a token from Account & tokens."
+      >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="open-in-new"
+          data-guide="api.reference"
+          @click="openApiReference"
+        >
+          Open
+        </AppButton>
+      </SettingsRow>
+    </SettingsSection>
+
     <!-- Pinned to the bottom of the Server pane. -->
-    <div class="compute-links">
+    <div v-if="desktop" class="compute-links">
       <AppButton
         variant="ghost"
         size="sm"
