@@ -76,6 +76,7 @@ describe("useImportArrivalsStore (#2512)", () => {
       scrapheaped: 1,
       unsupported: 0,
       failed: 0,
+      cancelled: 0,
     });
 
     // A file the server could not read is not "not supported".

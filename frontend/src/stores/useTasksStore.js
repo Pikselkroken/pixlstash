@@ -407,11 +407,9 @@ export const useTasksStore = defineStore("tasks", () => {
   // current, total, abortable }.
   //
   // `abortable` is the honest gate for the Tasks-tab cancel affordance: it is
-  // true ONLY while a client-side abort can genuinely act (the pre-commit upload
-  // window, where aborting the in-flight request stops sending remaining bytes).
-  // Once the staging session is committed the import is a background server task
-  // that the client cannot stop without a backend cancel endpoint, so the run is
-  // marked non-abortable and no cancel control is offered. See ImageImporter.vue.
+  // true while a cancel can still act. Before the commit that aborts the upload;
+  // after it the importer asks the server to stop, keeping what arrived. Once a
+  // stop is sent the row is no longer abortable. See ImageImporter.vue.
   const importRuns = reactive({});
   const importAbortHandlers = new Map();
 

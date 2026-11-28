@@ -32,6 +32,8 @@ const tasksStore = useTasksStore();
 const expanded = ref({});
 /** runId → the receipt chip whose tiles are shown ("duplicate", …). */
 const receiptFilter = ref({});
+/** runId → true once its caret folded the group down to its band. */
+const folded = ref({});
 
 const LEAVES_AT_LANDING = new Set([
   "duplicate",
@@ -61,7 +63,9 @@ function bytesPair(sent, total) {
 
 function stageText(run) {
   if (run.stage === "uploading") return "Uploading";
-  if (run.stage === "checking") return "Checking for duplicates";
+  if (run.stage === "checking") {
+    return run.stopping ? "Stopping" : "Checking for duplicates";
+  }
   if (run.stage === "error") return "Import failed";
   return run.counts.added
     ? plural(run.counts.added, "picture", "pictures")
@@ -119,6 +123,13 @@ function chips(run) {
       text: `${count(c.failed)} could not be read`,
       action: "List",
       n: c.failed,
+    },
+    // A stopped import: the files it never reached are not in the library.
+    landed && {
+      id: "cancelled",
+      icon: "mdi-cancel",
+      text: `${plural(c.cancelled, "file", "files")} not imported, stopped`,
+      n: c.cancelled,
     },
   ].filter((chip) => chip && (chip.id === "added" || chip.n > 0));
 }
@@ -263,6 +274,10 @@ function toggleFilter(run, chip) {
   };
 }
 
+function toggleFold(run) {
+  folded.value = { ...folded.value, [run.id]: !folded.value[run.id] };
+}
+
 function expand(run) {
   expanded.value = { ...expanded.value, [run.id]: true };
 }
@@ -313,6 +328,7 @@ watch(
       Object.fromEntries(Object.entries(map).filter(([id]) => ids.includes(id)));
     expanded.value = keep(expanded.value);
     receiptFilter.value = keep(receiptFilter.value);
+    folded.value = keep(folded.value);
     for (const id of beingRead.keys()) {
       if (!ids.includes(id)) beingRead.delete(id);
     }
@@ -351,9 +367,27 @@ onBeforeUnmount(() => {
       @focusout="onFocusOut(run, $event)"
     >
       <div class="arr-band">
-        <span class="arr-label">{{
-          run.stage === "error" ? "Arriving" : sectionLabel(run)
-        }}</span>
+        <!-- Folds the group to this band: the stage, progress and actions
+             stay, the note and the tiles go. -->
+        <button
+          type="button"
+          class="arr-disclose"
+          :aria-expanded="String(!folded[run.id])"
+          :aria-controls="`arr-body-${run.id}`"
+          data-testid="arriving-fold"
+          @click="toggleFold(run)"
+        >
+          <VIcon
+            class="arr-chev"
+            :class="{ 'arr-chev--open': !folded[run.id] }"
+            size="16"
+            aria-hidden="true"
+            >mdi-chevron-right</VIcon
+          >
+          <span class="arr-label">{{
+            run.stage === "error" ? "Arriving" : sectionLabel(run)
+          }}</span>
+        </button>
         <!-- Only the stage words are live: the counts change every poll, and
              a 2,000-file import would never stop talking. -->
         <span class="arr-what" role="status" aria-live="polite">{{
@@ -397,8 +431,13 @@ onBeforeUnmount(() => {
             >
           </component>
         </div>
-        <AppBarButton v-if="run.stage === 'uploading'" @click="cancel(run)">
-          Cancel
+        <!-- While checking, Cancel stops the server: what arrived stays. -->
+        <AppBarButton
+          v-if="run.stage === 'uploading' || run.stage === 'checking'"
+          :disabled="run.stopping"
+          @click="cancel(run)"
+        >
+          {{ run.stopping ? "Stopping…" : "Cancel" }}
         </AppBarButton>
         <AppBarButton
           v-if="run.stage === 'landed' || run.stage === 'error'"
@@ -416,109 +455,115 @@ onBeforeUnmount(() => {
           ><i :style="countdownStyle(run.id)"></i
         ></span>
       </div>
-      <div v-if="run.stage === 'uploading'" class="arr-note">
-        <VIcon size="14">mdi-tray-arrow-up</VIcon>
-        Keep this tab open until the upload finishes
-      </div>
       <div
-        v-if="run.stage !== 'error' && shownTiles(run).length"
-        class="arr-tiles"
-        :style="{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }"
+        v-show="!folded[run.id]"
+        :id="`arr-body-${run.id}`"
+        data-testid="arriving-body"
       >
-        <div
-          v-for="tile in visibleTiles(run)"
-          :key="tile.key"
-          class="arr-tile"
-          :class="`arr-tile--${tile.state}`"
-          :data-arriving-state="tile.state"
-        >
-          <img
-            v-if="tile.previewUrl && !broken.has(tile.key)"
-            :src="tile.previewUrl"
-            :alt="tileLabel(tile)"
-            loading="lazy"
-            decoding="async"
-            draggable="false"
-            @error="markBroken(tile)"
-          />
-          <div
-            v-else
-            class="arr-named"
-            role="img"
-            :aria-label="tileLabel(tile)"
-          >
-            <VIcon size="28">{{
-              tile.state === "unsupported"
-                ? "mdi-file-cancel-outline"
-                : tile.kind === "video"
-                  ? "mdi-filmstrip"
-                  : tile.kind === "archive"
-                    ? "mdi-folder-zip-outline"
-                    : "mdi-image-outline"
-            }}</VIcon>
-            <span class="arr-fn">{{ tile.name }}</span>
-            <span v-if="tile.state === 'unsupported'">Not a supported format</span>
-            <span v-else-if="tile.state === 'failed'">Could not be read</span>
-          </div>
-          <span
-            v-if="tile.state === 'checking' || tile.state === 'new'"
-            class="arr-mark"
-            aria-hidden="true"
-          >
-            <VIcon size="14" class="mdi-spin">mdi-loading</VIcon>
-          </span>
-          <span
-            v-else-if="markIcon(tile)"
-            class="arr-mark"
-            :class="{ 'arr-mark--beat': tile.state === 'landed' }"
-            aria-hidden="true"
-          >
-            <VIcon size="14">{{ markIcon(tile) }}</VIcon>
-          </span>
-          <div
-            v-if="
-              tile.state === 'duplicate' ||
-              tile.state === 'scrapheaped' ||
-              (tile.state === 'failed' && tile.previewUrl)
-            "
-            class="arr-strip"
-          >
-            <VIcon size="14">{{
-              tile.state === "duplicate"
-                ? "mdi-content-copy"
-                : tile.state === "failed"
-                  ? "mdi-alert-circle-outline"
-                  : "mdi-delete-restore"
-            }}</VIcon>
-            {{
-              tile.state === "duplicate"
-                ? "In library"
-                : tile.state === "failed"
-                  ? "Could not be read"
-                  : "Restored"
-            }}
-            <button
-              v-if="tile.state !== 'failed' && tile.pictureId"
-              type="button"
-              class="arr-strip-link"
-              @click="emit('show-picture', tile.pictureId)"
-            >
-              Show
-            </button>
-          </div>
+        <div v-if="run.stage === 'uploading'" class="arr-note">
+          <VIcon size="14">mdi-tray-arrow-up</VIcon>
+          Keep this tab open until the upload finishes
         </div>
-        <button
-          v-if="hiddenCount(run) > 0"
-          type="button"
-          class="arr-tile arr-more"
-          :aria-label="`Show ${count(hiddenCount(run))} more`"
-          @click="expand(run)"
+        <div
+          v-if="run.stage !== 'error' && shownTiles(run).length"
+          class="arr-tiles"
+          :style="{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }"
         >
-          <span class="arr-more-n">+{{ count(hiddenCount(run)) }}</span>
-          <span class="arr-more-sub">{{
-            run.stage === "landed" ? "more" : "still arriving"
-          }}</span>
-        </button>
+          <div
+            v-for="tile in visibleTiles(run)"
+            :key="tile.key"
+            class="arr-tile"
+            :class="`arr-tile--${tile.state}`"
+            :data-arriving-state="tile.state"
+          >
+            <img
+              v-if="tile.previewUrl && !broken.has(tile.key)"
+              :src="tile.previewUrl"
+              :alt="tileLabel(tile)"
+              loading="lazy"
+              decoding="async"
+              draggable="false"
+              @error="markBroken(tile)"
+            />
+            <div
+              v-else
+              class="arr-named"
+              role="img"
+              :aria-label="tileLabel(tile)"
+            >
+              <VIcon size="28">{{
+                tile.state === "unsupported"
+                  ? "mdi-file-cancel-outline"
+                  : tile.kind === "video"
+                    ? "mdi-filmstrip"
+                    : tile.kind === "archive"
+                      ? "mdi-folder-zip-outline"
+                      : "mdi-image-outline"
+              }}</VIcon>
+              <span class="arr-fn">{{ tile.name }}</span>
+              <span v-if="tile.state === 'unsupported'">Not a supported format</span>
+              <span v-else-if="tile.state === 'failed'">Could not be read</span>
+            </div>
+            <span
+              v-if="tile.state === 'checking' || tile.state === 'new'"
+              class="arr-mark"
+              aria-hidden="true"
+            >
+              <VIcon size="14" class="mdi-spin">mdi-loading</VIcon>
+            </span>
+            <span
+              v-else-if="markIcon(tile)"
+              class="arr-mark"
+              :class="{ 'arr-mark--beat': tile.state === 'landed' }"
+              aria-hidden="true"
+            >
+              <VIcon size="14">{{ markIcon(tile) }}</VIcon>
+            </span>
+            <div
+              v-if="
+                tile.state === 'duplicate' ||
+                tile.state === 'scrapheaped' ||
+                (tile.state === 'failed' && tile.previewUrl)
+              "
+              class="arr-strip"
+            >
+              <VIcon size="14">{{
+                tile.state === "duplicate"
+                  ? "mdi-content-copy"
+                  : tile.state === "failed"
+                    ? "mdi-alert-circle-outline"
+                    : "mdi-delete-restore"
+              }}</VIcon>
+              {{
+                tile.state === "duplicate"
+                  ? "In library"
+                  : tile.state === "failed"
+                    ? "Could not be read"
+                    : "Restored"
+              }}
+              <button
+                v-if="tile.state !== 'failed' && tile.pictureId"
+                type="button"
+                class="arr-strip-link"
+                @click="emit('show-picture', tile.pictureId)"
+              >
+                Show
+              </button>
+            </div>
+          </div>
+          <button
+            v-if="hiddenCount(run) > 0"
+            type="button"
+            class="arr-tile arr-more"
+            :aria-label="`Show ${count(hiddenCount(run))} more`"
+            @click="expand(run)"
+          >
+            <span class="arr-more-n">+{{ count(hiddenCount(run)) }}</span>
+            <span class="arr-more-sub">{{
+              run.stage === "landed" ? "more" : "still arriving"
+            }}</span>
+          </button>
+        </div>
       </div>
     </section>
     <div class="arr-sep"><span class="arr-label">Earlier</span></div>
@@ -546,6 +591,34 @@ onBeforeUnmount(() => {
   gap: var(--space-2) var(--space-4);
   min-height: var(--control-h-bar);
   margin-bottom: var(--space-3);
+}
+
+.arr-disclose {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.arr-disclose:hover {
+  background: var(--hover-wash);
+}
+
+.arr-chev {
+  flex: none;
+  color: rgba(var(--v-theme-on-background), var(--opacity-text-secondary));
+  transition: transform var(--dur-2) var(--ease-standard);
+}
+
+.arr-chev--open {
+  transform: rotate(90deg);
 }
 
 .arr-label {

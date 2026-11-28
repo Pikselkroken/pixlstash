@@ -11,9 +11,11 @@ scoped token is denied (403) and the owner is allowed (200 / works) - over-block
 the owner would be its own regression.
 """
 
+import asyncio
 import io
 import os
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -23,7 +25,9 @@ from PIL import Image
 from sqlmodel import select
 
 from pixlstash.db_models import Character, Picture, PictureSet, PictureSetMember, Tag
+from pixlstash.routes.pictures import _import as import_routes
 from pixlstash.server import Server
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -259,6 +263,110 @@ def test_staging_cancel_discards_without_importing(owner_server):
     assert client.get(f"{API}/pictures").json() == []
 
 
+def test_staging_cancel_after_commit_keeps_what_already_arrived(
+    owner_server, monkeypatch
+):
+    """Cancelling a committed import stops it; what it brought in stays."""
+    srv, client = owner_server
+    reached = threading.Event()
+    release = threading.Event()
+    real_hash = ImageUtils.calculate_hash_from_file_path
+    calls = []
+
+    def held_hash(file_path):
+        # Hold the task on its second file until the test has cancelled.
+        calls.append(file_path)
+        if len(calls) == 2:
+            reached.set()
+            assert release.wait(10), "the test never released the import"
+        return real_hash(file_path)
+
+    monkeypatch.setattr(
+        ImageUtils, "calculate_hash_from_file_path", staticmethod(held_hash)
+    )
+
+    r = client.post(f"{API}/pictures/import/staging", json={})
+    staging_id = r.json()["staging_id"]
+    colors = [(200, 10, 10), (10, 200, 10), (10, 10, 200), (200, 200, 10)]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[
+            ("file", (f"p{i}.png", _png_bytes(color), "image/png"))
+            for i, color in enumerate(colors)
+        ],
+    )
+    assert r.json()["staged"] == 4, r.text
+    r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 200, r.text
+    assert reached.wait(10), "the import never reached its second file"
+
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["stage"] == "importing"
+    release.set()
+
+    status = _wait_for_stage(client, staging_id, target=("completed", "failed"))
+    assert status["stage"] == "completed", status
+    # The file being hashed when the cancel came finishes; the rest never start.
+    assert status["imported_count"] == 2, status
+    assert status["cancelled_count"] == 2, status
+    assert len(client.get(f"{API}/pictures").json()) == 2
+    staging_dir = os.path.join(srv.vault.image_root, ".staging", staging_id)
+    assert not os.path.isdir(staging_dir), "the dropped files must not linger"
+
+    # A finished import has nothing left to cancel.
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 409, r.text
+
+
+def test_staging_cancel_after_the_import_ended_is_refused_unpolled(owner_server):
+    """An import that already ended has nothing to stop, even before a poll."""
+    srv, client = owner_server
+    r = client.post(f"{API}/pictures/import/staging", json={})
+    staging_id = r.json()["staging_id"]
+    client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("x.png", _png_bytes(), "image/png"))],
+    )
+    r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 200, r.text
+    task = srv.staging_sessions[staging_id]["task"]
+    assert task._done_event.wait(30), "the import never finished"
+
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.status_code == 409, r.text
+    assert _wait_for_stage(client, staging_id)["imported_count"] == 1
+
+
+def test_commit_that_fails_to_submit_leaves_the_session_staging(
+    owner_server, monkeypatch
+):
+    """A submit that raises puts the session back, so it can be cancelled."""
+    srv, client = owner_server
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("x.png", _png_bytes(), "image/png"))],
+    )
+
+    def broken_submit(task):
+        raise RuntimeError("test-runner refused the task")
+
+    monkeypatch.setattr(srv.vault, "submit_task", broken_submit)
+    failing = TestClient(srv.api, raise_server_exceptions=False)
+    failing.cookies = client.cookies
+    r = failing.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 500, r.text
+
+    session = srv.staging_sessions[staging_id]
+    assert session["stage"] == "staging"
+    assert session["task"] is None
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.json()["stage"] == "cancelled", r.text
+
+
 def test_staging_status_unknown_session_404(owner_server):
     _srv, client = owner_server
     r = client.get(f"{API}/pictures/import/staging/does-not-exist/status")
@@ -478,6 +586,69 @@ def test_staging_zip_imports_all_images(owner_server):
     status = _wait_for_stage(client, staging_id, target=("completed",))
     assert status["imported_count"] == 3, status
     assert srv.vault.db.run_task(lambda s: s.query(Picture).count()) == 3
+
+
+def _loop_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_staging_zip_unpacks_off_the_event_loop(owner_server, monkeypatch):
+    """A multi-GB zip takes minutes to unpack; on the loop it froze the app."""
+    _srv, client = owner_server
+    zip_data = _zip_bytes({"a.png": _png_bytes()})
+    on_loop = []
+    real_zipfile = zipfile.ZipFile
+
+    def recording_zipfile(*args, **kwargs):
+        on_loop.append(_loop_running())
+        return real_zipfile(*args, **kwargs)
+
+    monkeypatch.setattr(import_routes.zipfile, "ZipFile", recording_zipfile)
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("bundle.zip", zip_data))],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["staged"] == 1, r.json()
+    assert on_loop == [False]
+
+
+def test_staging_zip_stops_unpacking_when_cancelled(owner_server, monkeypatch):
+    """A cancel during extraction stops it instead of filling a removed dir."""
+    srv, client = owner_server
+    zip_data = _zip_bytes(
+        {"one.png": _png_bytes((1, 2, 3)), "two.png": _png_bytes((4, 5, 6))}
+    )
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    real_zipfile = zipfile.ZipFile
+
+    def cancelling_zipfile(*args, **kwargs):
+        srv.staging_sessions[staging_id]["stage"] = "cancelled"
+        return real_zipfile(*args, **kwargs)
+
+    monkeypatch.setattr(import_routes.zipfile, "ZipFile", cancelling_zipfile)
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[
+            ("file", ("bundle.zip", zip_data)),
+            ("file", ("after.png", _png_bytes((7, 8, 9)), "image/png")),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["staged"] == 0, r.json()
+    # The upload after the zip is not tried against the removed dir either.
+    assert r.json()["skipped"] == ["bundle.zip"], r.json()
+    assert r.json()["received"] == [], r.json()
+    assert not os.path.isdir(srv.staging_sessions[staging_id]["staging_dir"])
 
 
 def test_staging_txt_sidecar_sets_tags(owner_server):

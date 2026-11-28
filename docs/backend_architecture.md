@@ -371,7 +371,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/import/staging` | Open an async streaming-import session (#459) |
 | POST | `/pictures/import/staging/{staging_id}/files` | Stream files into a staging session (unsafe window) |
 | POST | `/pictures/import/staging/{staging_id}/commit` | Safe handoff → background `PictureImportTask` |
-| DELETE | `/pictures/import/staging/{staging_id}` | Cancel an uncommitted staging session |
+| DELETE | `/pictures/import/staging/{staging_id}` | Cancel a staging session; after commit, stop its import and keep what arrived |
 | GET | `/pictures/import/staging/{staging_id}/status` | Staging + background-import progress |
 | GET | `/pictures/export` | Start async ZIP export |
 | GET | `/pictures/export/status?task_id=…` | Export progress |

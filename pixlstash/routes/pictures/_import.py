@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import threading
@@ -1268,7 +1269,100 @@ def register_routes(router, server):
             )
             return True
 
+        def _stage_zip_entries(upload_file, zip_name: str) -> bool:
+            """Extract a zip's media and sidecar entries into the staging dir.
+
+            Runs on a worker thread. Stops early when the session is cancelled
+            meanwhile, and removes the staging dir itself: the cancel's own
+            rmtree can lose the race with a file written as it ran.
+
+            Returns:
+                True when at least one media entry was staged.
+            """
+            with zipfile.ZipFile(upload_file) as zip_file:
+                entries = [i for i in zip_file.infolist() if not i.is_dir()]
+                if len(entries) > _STAGING_MAX_ZIP_ENTRIES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Zip '{zip_name}' contains too many "
+                            f"files (max {_STAGING_MAX_ZIP_ENTRIES:,})."
+                        ),
+                    )
+                if (
+                    sum(i.file_size for i in entries)
+                    > _STAGING_MAX_ZIP_DECOMPRESSED_BYTES
+                ):
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Zip '{zip_name}' decompressed size "
+                            f"exceeds the "
+                            f"{_STAGING_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3}"
+                            " GB limit."
+                        ),
+                    )
+                added = 0
+                for info in entries:
+                    if session["stage"] != "staging":
+                        logger.info(
+                            "Staging %s: stopped extracting %s after %d entries "
+                            "(stage=%s)",
+                            staging_id,
+                            zip_name,
+                            added,
+                            session["stage"],
+                        )
+                        if os.path.isdir(staging_dir):
+                            try:
+                                shutil.rmtree(staging_dir)
+                            except OSError as exc:
+                                logger.warning(
+                                    "Staging %s: failed to remove %s after the "
+                                    "session stopped; its files stay on disk: %s",
+                                    staging_id,
+                                    staging_dir,
+                                    exc,
+                                )
+                        return False
+                    # Still busy: an hour-long unpack must not read as idle to
+                    # the reaper.
+                    session["last_update_epoch_ms"] = int(time.time() * 1000)
+                    inner_ext = os.path.splitext(info.filename)[1].lower()
+                    base_name = os.path.basename(info.filename)
+                    if inner_ext in STAGING_ALLOWED_CAPTION_EXTS:
+                        with zip_file.open(info) as handle:
+                            data = handle.read()
+                        if data:
+                            sidecar_text_by_stem.setdefault(
+                                _normalise_sidecar_stem(base_name),
+                                data.decode("utf-8", errors="ignore"),
+                            )
+                        continue
+                    if inner_ext not in STAGING_ALLOWED_MEDIA_EXTS:
+                        continue
+                    with zip_file.open(info) as handle:
+                        data = handle.read()
+                    if _stage_media_bytes(data, inner_ext, base_name):
+                        added += 1
+            if not added:
+                logger.warning(
+                    "Staging %s: no valid media in zip %s", staging_id, zip_name
+                )
+            return added > 0
+
         for upload_index, upload in enumerate(file):
+            if session["stage"] != "staging":
+                # Cancelled meanwhile (a zip's unpack noticed and removed the
+                # dir): the rest of this request has nowhere to go.
+                logger.info(
+                    "Staging %s: session stopped (stage=%s); skipping the "
+                    "request's remaining %d upload(s)",
+                    staging_id,
+                    session["stage"],
+                    len(file) - upload_index,
+                )
+                break
             current_key = keys[upload_index] if upload_index < len(keys) else None
             if not upload.filename:
                 continue
@@ -1316,57 +1410,15 @@ def register_routes(router, server):
                                 f"{_STAGING_MAX_FILE_BYTES // 1024**3} GB limit"
                             ),
                         )
-                    with zipfile.ZipFile(upload_file) as zip_file:
-                        entries = [i for i in zip_file.infolist() if not i.is_dir()]
-                        if len(entries) > _STAGING_MAX_ZIP_ENTRIES:
-                            raise HTTPException(
-                                status_code=413,
-                                detail=(
-                                    f"Zip '{upload.filename}' contains too many "
-                                    f"files (max {_STAGING_MAX_ZIP_ENTRIES:,})."
-                                ),
-                            )
-                        if (
-                            sum(i.file_size for i in entries)
-                            > _STAGING_MAX_ZIP_DECOMPRESSED_BYTES
-                        ):
-                            raise HTTPException(
-                                status_code=413,
-                                detail=(
-                                    f"Zip '{upload.filename}' decompressed size "
-                                    f"exceeds the "
-                                    f"{_STAGING_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3}"
-                                    " GB limit."
-                                ),
-                            )
-                        added = 0
-                        for info in entries:
-                            inner_ext = os.path.splitext(info.filename)[1].lower()
-                            base_name = os.path.basename(info.filename)
-                            if inner_ext in STAGING_ALLOWED_CAPTION_EXTS:
-                                with zip_file.open(info) as handle:
-                                    data = handle.read()
-                                if data:
-                                    sidecar_text_by_stem.setdefault(
-                                        _normalise_sidecar_stem(base_name),
-                                        data.decode("utf-8", errors="ignore"),
-                                    )
-                                continue
-                            if inner_ext not in STAGING_ALLOWED_MEDIA_EXTS:
-                                continue
-                            with zip_file.open(info) as handle:
-                                data = handle.read()
-                            if _stage_media_bytes(data, inner_ext, base_name):
-                                added += 1
-                        if added:
-                            received.append(upload.filename)
-                        else:
-                            logger.warning(
-                                "Staging %s: no valid media in zip %s",
-                                staging_id,
-                                upload.filename,
-                            )
-                            skipped.append(upload.filename)
+                    # Unpacking a multi-GB archive takes minutes. Run it off the
+                    # event loop, or every other request (the grid, the status
+                    # poll, the WebSocket) freezes until it is done.
+                    if await asyncio.to_thread(
+                        _stage_zip_entries, upload_file, upload.filename
+                    ):
+                        received.append(upload.filename)
+                    else:
+                        skipped.append(upload.filename)
                 except HTTPException:
                     raise
                 except zipfile.BadZipFile:
@@ -1586,12 +1638,24 @@ def register_routes(router, server):
             origin_client_id=session["origin_client_id"],
             restore_context=operation_log_service.request_context(request),
         )
-        task_id = server.vault.submit_task(task)
-        if task_id is None:
-            raise HTTPException(status_code=503, detail="Task runner is not available")
+        # Handed off before the submit: a cancel landing meanwhile must stop
+        # this task, not discard the staging dir it is about to read.
         session["task"] = task
-        session["task_id"] = task_id
         session["stage"] = "importing"
+        try:
+            task_id = server.vault.submit_task(task)
+        except Exception:
+            # Never submitted: put the session back, or it reads as importing
+            # for ever and a cancel stops a task nobody runs.
+            session["task"] = None
+            session["stage"] = "staging"
+            logger.exception("Staging %s: submitting the import failed", staging_id)
+            raise
+        if task_id is None:
+            session["task"] = None
+            session["stage"] = "staging"
+            raise HTTPException(status_code=503, detail="Task runner is not available")
+        session["task_id"] = task_id
         session["last_update_epoch_ms"] = int(time.time() * 1000)
         logger.info(
             "Staging session committed: staging_id=%s task_id=%s staged_count=%d",
@@ -1609,19 +1673,46 @@ def register_routes(router, server):
         "/pictures/import/staging/{staging_id}",
         summary="Cancel a staging session",
         description=(
-            "Cancels an async import staging session that has not yet been "
-            "committed, discarding its streamed files. After commit the import "
-            "runs to completion in the background and cannot be cancelled here."
+            "Before commit, discards the session and its streamed files. After "
+            "commit, stops the background import at the next file: the pictures "
+            "it already brought in are kept, the rest are dropped with the "
+            "staging dir, and the import completes with them in "
+            "``cancelled_count``. Poll the status for the outcome."
         ),
         response_model=StagingStatusResponse,
     )
     def cancel_staging_session(request: Request, staging_id: str):
         session = _get_session_or_404(request, staging_id)
+        task = session.get("task")
+        task_status = getattr(getattr(task, "status", None), "value", None)
+        # A task that already ended has nothing to stop, polled or not.
+        if (
+            session["stage"] == "importing"
+            and task is not None
+            and task_status not in ("completed", "failed", "cancelled")
+        ):
+            # The task checks this between files and still inserts what it had
+            # already copied in, so the import ends as ``completed``.
+            task.on_cancel()
+            session["last_update_epoch_ms"] = int(time.time() * 1000)
+            logger.info(
+                "Staging session import stopping: staging_id=%s task_id=%s",
+                staging_id,
+                session.get("task_id"),
+            )
+            return {
+                "staging_id": staging_id,
+                "stage": "importing",
+                "staged": len(session.get("staged_files") or []),
+                "total": int(getattr(task, "_total_count", 0) or 0),
+                "processed": int(getattr(task, "_processed_count", 0) or 0),
+                "task_id": session.get("task_id"),
+            }
         if session["stage"] not in ("staging",):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Cannot cancel a committed staging session "
+                    "Cannot cancel a finished staging session "
                     f"(stage={session['stage']})"
                 ),
             )

@@ -95,8 +95,11 @@ const currentImportController = ref(null);
 let importRunId = null;
 // The current staging session id (Phase A/B backend handle), or null when idle.
 let currentStagingId = null;
-// True from the commit request on: the bytes are handed over, cancel is over.
+// True from the commit request on: the bytes are handed over, and a cancel
+// asks the server to stop instead of aborting an upload.
 let committing = false;
+// The committed session (Phase B), which a cancel stops server-side.
+let importingStagingId = null;
 let hideTimerId = null;
 
 // ── beforeunload guard (the hard backstop for the unsafe upload window) ───────
@@ -190,13 +193,18 @@ function finalizeError(message) {
 // the Tasks-tab cancel affordance (via tasksStore.abortImportRun → this handler,
 // registered in startImport). It stops the in-flight upload by aborting the
 // active request controller; the batch loop's cancel checks then unwind cleanly
-// through finalizeCancelled (no error toast). This can only stop the PRE-COMMIT
-// upload - once committed, the import is a background server task the client
-// cannot stop (see the abortable notes in startImport / useTasksStore).
+// through finalizeCancelled (no error toast). Once committed, the import is a
+// background server task: Cancel asks the server to stop it at its next file,
+// it keeps the pictures already brought in, and the poll lands the run with the
+// rest dropped. A cancel during the commit request is sent once it returns.
 function handleCancelImport() {
-  // Once the commit is sent there is nothing a client abort can stop.
-  if (!importActive.value || committing) return;
+  if (!importActive.value || cancelImport.value) return;
   cancelImport.value = true;
+  if (committing) {
+    arrivals.markStopping(importRunId);
+    if (importingStagingId) stopCommittedImport(importingStagingId);
+    return;
+  }
   if (currentImportController.value) {
     try {
       currentImportController.value.abort();
@@ -204,6 +212,24 @@ function handleCancelImport() {
       console.warn("Failed to abort current import", err);
     }
   }
+}
+
+function stopCommittedImport(stagingId) {
+  tasksStore.setImportRun(importRunId, {
+    status: "running",
+    percent: importTotal.value
+      ? Math.min(100, (importProgress.value / importTotal.value) * 100)
+      : 0,
+    current: importProgress.value,
+    total: importTotal.value,
+    message: "Stopping - keeping what has arrived…",
+    label: "Importing pictures",
+  });
+  // A refusal (409: it had already finished) changes nothing: the poll still
+  // lands the run with whatever the server reports.
+  cancelStaging({ backendUrl: props.backendUrl, stagingId }).catch((err) => {
+    console.warn("Failed to stop the committed import", stagingId, err);
+  });
 }
 
 function logImportTrace(message, details = null) {
@@ -239,6 +265,7 @@ async function startImport(files, options = {}) {
   cancelImport.value = false;
   currentStagingId = null;
   committing = false;
+  importingStagingId = null;
   // Drop any lingering handler from a previous run before minting a new id.
   if (importRunId) tasksStore.unregisterImportAbort(importRunId);
   importRunId = `import-${crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
@@ -365,8 +392,14 @@ async function startImport(files, options = {}) {
         let firstProgressLogged = false;
         let lastProgressAt = Date.now();
         let noProgressAbortFired = false;
+        // True once the browser has sent the batch's last byte. From then on
+        // the server is working (unpacking a 12 GB zip takes minutes) and no
+        // progress events come, so silence is not a stall. Nor is a failure
+        // worth a retry: the server may already have staged the files, and
+        // sending them again stages every one twice.
+        let bodySent = false;
         const noProgressTimer = setInterval(() => {
-          if (cancelImport.value) return;
+          if (cancelImport.value || bodySent) return;
           const elapsed = Date.now() - lastProgressAt;
           if (elapsed < NO_PROGRESS_ABORT_MS) return;
           noProgressAbortFired = true;
@@ -379,12 +412,13 @@ async function startImport(files, options = {}) {
             controller.abort();
           }
         }, 1000);
-        const timeout = setTimeout(() => {
+        const abortOnTimeout = () => {
           console.warn(
-            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}).`,
+            `[IMPORT] Aborting batch ${batchIndex} after ${batchTimeoutMs}ms timeout (attempt ${attempt}, bodySent=${bodySent}).`,
           );
           controller.abort();
-        }, batchTimeoutMs);
+        };
+        let timeout = setTimeout(abortOnTimeout, batchTimeoutMs);
         try {
           const stagedBatch = await stageFiles({
             backendUrl: props.backendUrl,
@@ -392,11 +426,22 @@ async function startImport(files, options = {}) {
             files: batch,
             keys: batchKeys,
             signal: controller.signal,
-            timeoutMs: batchTimeoutMs,
+            // 0 = no axios timeout: the timer above is the only deadline, so
+            // it can restart for the server's share of the work.
+            timeoutMs: 0,
             onUploadProgress: (progressEvent) => {
               const loaded = progressEvent.loaded ?? 0;
               lastProgressAt = Date.now();
               if (!firstProgressLogged) firstProgressLogged = true;
+              // Without a total, the files' own bytes stand in for it (the
+              // multipart framing past them is a few hundred bytes).
+              const total =
+                progressEvent.total > 0 ? progressEvent.total : batchBytes;
+              if (!bodySent && loaded >= total) {
+                bodySent = true;
+                clearTimeout(timeout);
+                timeout = setTimeout(abortOnTimeout, batchTimeoutMs);
+              }
               uploadBytesUploaded.value = Math.min(
                 uploadBytesTotal.value,
                 uploadedBytesAccum + loaded,
@@ -435,7 +480,9 @@ async function startImport(files, options = {}) {
             lastError = new Error(
               noProgressAbortFired
                 ? "Upload stalled (no progress)"
-                : "Upload timed out",
+                : bodySent
+                  ? "The server received the upload but did not finish saving it in time"
+                  : "Upload timed out",
             );
             console.warn(
               `[IMPORT] Batch ${batchIndex} aborted (attempt ${attempt}). reason=${
@@ -453,6 +500,7 @@ async function startImport(files, options = {}) {
               err,
             );
           }
+          if (bodySent) break;
           if (attempt < MAX_RETRIES) {
             await sleep(1000);
           }
@@ -460,6 +508,13 @@ async function startImport(files, options = {}) {
       }
 
       if (!ok) {
+        // Discard the session, or a server still unpacking this batch would
+        // go on filling it for nobody.
+        const stagingId = currentStagingId;
+        currentStagingId = null;
+        cancelStaging({ backendUrl: props.backendUrl, stagingId }).catch((e) =>
+          console.warn("Failed to cancel staging after upload error", e),
+        );
         finalizeError(lastError ? lastError.message : "Upload failed.");
         return;
       }
@@ -477,8 +532,8 @@ async function startImport(files, options = {}) {
     }
 
     // All bytes are staged - commit the SAFE HANDOFF to the background import.
-    // From here Cancel has nothing to stop, so neither the band nor the Tasks
-    // row offers it. The leave guard stays armed until the commit returns:
+    // From here Cancel stops the server's import (handleCancelImport). The
+    // leave guard stays armed until the commit returns:
     // closing the tab mid-commit would strand the staged session.
     uploadBytesUploaded.value = uploadBytesTotal.value;
     committing = true;
@@ -490,6 +545,7 @@ async function startImport(files, options = {}) {
       total: importTotal.value,
       message: "Handing over to the server…",
       label: "Importing pictures",
+      abortable: true,
     });
 
     let commit;
@@ -516,10 +572,12 @@ async function startImport(files, options = {}) {
       return;
     }
 
-    // The session is committed; it can no longer be cancelled from the client.
+    // The session is committed: a cancel now stops the server's import.
     disarmGuard();
     const stagingId = currentStagingId;
     currentStagingId = null;
+    importingStagingId = stagingId;
+    if (cancelImport.value) stopCommittedImport(stagingId);
     importTotal.value = commit.stagedCount || files.length;
     importProgress.value = 0;
 
@@ -532,16 +590,19 @@ async function startImport(files, options = {}) {
       total: importTotal.value,
       message: "Queued on the server…",
       label: "Importing pictures",
+      abortable: !cancelImport.value,
     });
 
     // ── Phase B: poll the staging session by id until the import is done. ──
-    const maxAttempts = 600;
+    // No attempt cap: the server never reaps a session whose import is still
+    // running, so "importing" is the truth however long it takes (a 3,000-file
+    // zip runs well past ten minutes). A server that went away answers 404 or
+    // not at all, and the poll throws.
     const intervalMs = 1000;
-    let attempts = 0;
     let finalStatus = null;
     let outcomesSeen = 0;
 
-    while (attempts < maxAttempts) {
+    for (;;) {
       const st = await fetchStagingStatus({
         backendUrl: props.backendUrl,
         stagingId,
@@ -559,16 +620,19 @@ async function startImport(files, options = {}) {
       const pct = importTotal.value
         ? Math.min(100, (processed / importTotal.value) * 100)
         : 0;
+      const stopping = cancelImport.value;
       tasksStore.setImportRun(importRunId, {
         status: "running",
         percent: pct,
         current: processed,
         total: importTotal.value,
-        message:
-          st.stage === "importing"
+        message: stopping
+          ? "Stopping - keeping what has arrived…"
+          : st.stage === "importing"
             ? "Checking for duplicates…"
             : "Queued on the server…",
         label: "Importing pictures",
+        abortable: !stopping,
       });
 
       if (st.stage === "completed") {
@@ -579,18 +643,13 @@ async function startImport(files, options = {}) {
         throw new Error(st.error || "Import failed");
       }
       if (st.stage === "cancelled") {
-        // Committed imports don't cancel client-side; treat an external cancel
-        // as a terminal, non-error exit.
+        // A cancel from here lands as "completed" with what arrived; this is
+        // the task cancelled some other way (the runner stopping).
         finalizeCancelled();
         return;
       }
 
       await sleep(intervalMs);
-      attempts++;
-    }
-
-    if (!finalStatus) {
-      throw new Error("Import timed out");
     }
 
     // Summarise from the terminal status. There is no per-file results[] - the
@@ -604,8 +663,11 @@ async function startImport(files, options = {}) {
     const scrapheapedCount = finalStatus.scrapheapedCount ?? 0;
     const scrapheapedPictureIds = finalStatus.scrapheapedPictureIds ?? [];
 
+    // Files a stopped import never reached: not in the library, so dropped.
+    const cancelledCount = finalStatus.cancelledCount ?? 0;
+
     importPhase.value = importedCount === 0 ? "duplicates" : "done";
-    arrivals.land(importRunId);
+    arrivals.land(importRunId, { cancelled: cancelledCount });
     importTotal.value = Math.max(importTotal.value, files.length);
     importProgress.value = importTotal.value;
     currentImportController.value = null;
@@ -618,12 +680,12 @@ async function startImport(files, options = {}) {
       percent: 100,
       current: importTotal.value,
       total: importTotal.value,
-      message: summariseImport({
+      message: `${cancelledCount ? "Stopped. " : ""}${summariseImport({
         imported: importedCount,
         duplicate: duplicateCount,
         // Per picture, and only what the server actually restored.
         scrapheaped: scrapheapedPictureIds.length,
-      }),
+      })}`,
       label: "Importing pictures",
     });
     const finishedRunId = importRunId;
