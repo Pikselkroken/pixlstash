@@ -94,8 +94,8 @@ describe("UserSettingsDialog library navigation", () => {
 
     // The whole order, headings included, not an adjacency: an index
     // comparison between two entries also holds when one of them is missing.
-    // Server is desktop-only and absent under jsdom; GPU & compute and
-    // ComfyUI stay, because a browser has a GPU picker and connects ComfyUI.
+    // Server, GPU & compute and ComfyUI all show under jsdom: a browser has
+    // the API reference link, a GPU picker, and connects ComfyUI.
     // No Library layout item: the layout belongs to whichever library is
     // open, so it is a dialog off the active library's overflow menu.
     expect(
@@ -118,6 +118,7 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-comfyui",
       "settings-nav-compute",
       "Access",
+      "settings-nav-backend",
       "settings-nav-account",
     ]);
   });

@@ -471,3 +471,42 @@ describe("Which GPU PixlStash uses", () => {
   });
 });
 
+
+// The Server pane's API reference link: the one section a browser session
+// sees, and the Guide's way to the API reference.
+describe("Server › API reference", () => {
+  beforeEach(() => {
+    delete window.pixlstashDesktop;
+  });
+
+  const titles = (wrapper) =>
+    wrapper.findAll(".s-section__title").map((t) => t.text());
+
+  it("is the whole pane in a browser, and opens the server's /scalar", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      const wrapper = mount(ComputeSection, { props: { view: "backend" } });
+      await flushPromises();
+      expect(titles(wrapper)).toEqual(["API"]);
+      expect(wrapper.find(".compute-links").exists()).toBe(false);
+      await wrapper.find('[data-guide="api.reference"]').trigger("click");
+      expect(open).toHaveBeenCalledWith("/scalar", "_blank", "noopener");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("sits below remote access and desktop on the desktop", async () => {
+    const desktop = installDesktop({ runtime: null, accelerators: [] });
+    desktop.getServerSettings = vi
+      .fn()
+      .mockResolvedValue({ enabled: false, port: 9537, ssl: false, urls: [] });
+    desktop.getDesktopPrefs = vi
+      .fn()
+      .mockResolvedValue({ hideToTrayOnClose: true, shellCommand: null });
+    const wrapper = mount(ComputeSection, { props: { view: "backend" } });
+    await flushPromises();
+    expect(titles(wrapper)).toEqual(["Remote access", "Desktop", "API"]);
+    expect(wrapper.find('[data-guide="api.reference"]').exists()).toBe(true);
+  });
+});

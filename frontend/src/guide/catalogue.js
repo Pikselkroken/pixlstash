@@ -1942,11 +1942,11 @@ export const CONCEPTS = [
         id: "read-the-api-reference",
         name: "Read the API reference",
         sentence: "Open the API reference in your browser to see every endpoint.",
-        entry: "the server's /scalar (or /docs) page; no in-app link yet",
+        entry: "Settings › Server › API › API reference",
         needs: [],
         unstable: false,
         steps: [
-          { say: "On the PixlStash server's address, open /scalar (or /docs) in your browser." },
+          { go: "settings:backend", target: '[data-guide="api.reference"]', say: "Under API, click Open beside API reference." },
         ],
       },
       {

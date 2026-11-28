@@ -531,7 +531,7 @@ Script PixlStash from your own tools with a token and the REST API.
 | Task | Entry point | File | Needs | Illustration |
 |---|---|---|---|---|
 | Create an API token | Settings › Account & tokens › *API Tokens* › *New token* | `frontend/src/components/settings/AccountSection.vue` | none | the New token dialog choosing read-only or full access |
-| Read the API reference | the server's `/scalar` (or `/docs`) page; **no in-app link yet** | `pixlstash/server.py` | none | the reference open on `GET /pictures` |
+| Read the API reference | Settings › Server › *API* › *API reference* › *Open* (the server's `/scalar` page) | `frontend/src/components/settings/ComputeSection.vue` | none | the reference open on `GET /pictures` |
 | Call the API | any HTTP client with `Authorization: Bearer <token>` | `pixlstash/openapi_custom.py` (the quick start) | none | a terminal fetching the first 50 pictures with `curl` |
 | Revoke a token | *API Tokens* › a token row › delete | `frontend/src/components/settings/AccountSection.vue` | none | the *Delete token?* confirm |
 

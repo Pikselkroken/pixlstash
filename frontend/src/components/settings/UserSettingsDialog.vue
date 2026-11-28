@@ -34,7 +34,7 @@ function openWhatsNew() {
 }
 
 // The desktop app injects this bridge (Electron preload); a plain browser does
-// not, so the Server pane is desktop-only.
+// not, so it keeps Log out and sees only the API section of the Server pane.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
@@ -173,11 +173,12 @@ const navGroups = computed(() =>
       heading: "Access",
       items: [
         {
-          // Remote access, hide to tray, the library folder and the logs.
+          // The API reference on every install; remote access, hide to tray,
+          // the library folder and the logs on the desktop.
           id: "backend",
           icon: "server-outline",
           label: "Server",
-          show: isDesktop && !isReadOnly.value,
+          show: !isReadOnly.value,
         },
         {
           id: "account",
@@ -452,7 +453,7 @@ watch(
         <ComputeSection :open="dialogOpen" view="compute" />
       </div>
       <div
-        v-if="isDesktop && !isReadOnly"
+        v-if="!isReadOnly"
         v-show="settingsTab === 'backend'"
         id="settings-pane-backend"
         class="settings-pane"
