@@ -735,22 +735,33 @@ function close() {
   discard();
 }
 
-/** Stop the draw under way: its runs end, the frames it took out of its
- * video go to the Scrapheap (they are pictures of the library until a Use
- * deletes them), and the dialog is back where it was. */
+/** Stop the draw under way: its runs end, what it made goes to the
+ * Scrapheap, and the dialog is back where it was. */
 function stop() {
   drawing += 1;
   for (const key of liveKeys) {
     stopRun(key).catch((e) => console.warn("Couldn't stop a More angles run", key, e));
   }
   liveKeys = [];
-  if (frameIds.length) {
-    const frames = frameIds;
-    deletePictures(frames).catch((e) =>
-      console.warn("Couldn't send a stopped draw's frames to the Scrapheap", frames, e),
-    );
-    frameIds = [];
-  }
+  dropMade();
+  backFromStop();
+}
+
+/** The video and the frames a draw made that no Use took: library pictures
+ * from the moment their runs ended (only the restored views are held), so
+ * to the Scrapheap, not left behind. */
+function dropMade() {
+  const made = [...(videoId != null ? [videoId] : []), ...frameIds];
+  videoId = null;
+  frameIds = [];
+  if (!made.length) return;
+  deletePictures(made).catch((e) =>
+    console.warn("Couldn't send an unused draw's video and frames to the Scrapheap", made, e),
+  );
+}
+
+/** Back where the dialog was before the stopped draw. */
+function backFromStop() {
   working.value = false;
   error.value = "";
   phase.value = isNew.value && !candidates.value.length ? "place" : "describe";
@@ -769,6 +780,7 @@ watch(
     // What it made is let go first, so the stop has nothing to report back
     // into the store the reset has just emptied, nor frames to delete in a
     // library they are not of.
+    videoId = null;
     frameIds = [];
     candidates.value = [];
     views.value = [];
@@ -1126,6 +1138,8 @@ async function draw() {
     liveKeys = [];
     if (!alive || e?.message === "Stopped.") return;
     console.warn("More angles failed", props.location?.id, e);
+    // What the failed draw made is no use: to the Scrapheap with it.
+    dropMade();
     error.value = `Couldn't draw more angles. ${errorMessage(e, "Please try again.")}`;
     phase.value = "describe";
     drawStore.report(
@@ -1220,6 +1234,9 @@ async function useNew() {
     console.warn("Couldn't list the new location in the Studio", set.id, e);
   }
   if (frameIds.length) await deletePictures(frameIds);
+  // The video is the location's now: no Discard may take it.
+  videoId = null;
+  frameIds = [];
   sendBack([...broughtBack]);
   candidates.value = [];
   views.value = [];
@@ -1244,6 +1261,9 @@ async function use() {
     await bulkAddPicturesToSet(props.location.id, [videoId, ...kept.value]);
     for (const id of kept.value) broughtBack.delete(id);
     if (frameIds.length) await deletePictures(frameIds);
+    // The video is the location's now: no Discard may take it.
+    videoId = null;
+    frameIds = [];
     // A view kept by a Use that failed, then dropped before this one.
     sendBack([...broughtBack]);
     views.value = [];

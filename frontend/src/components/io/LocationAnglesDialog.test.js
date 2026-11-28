@@ -615,15 +615,48 @@ describe("More angles", () => {
     await flushPromises();
     await wrapper.find('[data-testid="la-discard"]').trigger("click");
     await flushPromises();
-    expect(api.deletePictures).toHaveBeenCalledWith([701, 702, 703]);
+    // The video and the frames: library pictures no Use took.
+    expect(api.deletePictures).toHaveBeenCalledWith([500, 701, 702, 703]);
 
     api.deletePictures.mockClear();
+    // A second draw whose every restore makes a view, so it reaches the pick.
+    api.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "run-video" ? [500] : [601],
+    }));
+    wrapper.unmount();
     const again = mountDialog();
     await again.find('[data-testid="la-draw"]').trigger("click");
     await flushPromises();
     useLocationDrawStore().reset();
     await flushPromises();
     expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
+  it("never takes a used draw's video, and drops a failed draw's", async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    api.deletePictures.mockClear();
+    // Open again, then Cancel: nothing of the used draw goes anywhere.
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await wrapper.findAll("button").find((b) => b.text() === "Cancel").trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).not.toHaveBeenCalled();
+
+    // A restore that makes nothing fails the draw: its video and frames go.
+    api.getRunOutcome.mockImplementation(async (key) => ({
+      status: "completed",
+      picture_ids: key === "run-video" ? [500] : [],
+    }));
+    const failing = mountDialog();
+    await failing.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(failing.find(".la-error").exists()).toBe(true);
+    expect(api.deletePictures).toHaveBeenCalledWith([500, 701, 702, 703]);
   });
 
   it("starts from the zoomed picture alone, never the end picture twice", async () => {
