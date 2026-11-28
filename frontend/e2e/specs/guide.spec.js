@@ -134,3 +134,22 @@ test('the welcome shows once, and Not now records it as seen', async ({
     })
   }
 })
+
+test('a step with nothing to ring moves on when its action opens the next control', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.goto('/guide/studio')
+  await page.getByTestId('guide-show-locations').click()
+  const say = page.getByTestId('guide-wizard-say')
+  await expect(say).toContainText('Right-click the Sets heading')
+  // The menu it opens holds step 2's control: that is the step being done.
+  await page
+    .locator('.sidebar-section-header')
+    .filter({ hasText: 'Sets' })
+    .first()
+    .click({ button: 'right' })
+  await expect(say).toContainText('Draw location sheets')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('guide-wizard')).toBeHidden()
+})

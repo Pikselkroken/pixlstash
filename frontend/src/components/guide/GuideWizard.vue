@@ -165,6 +165,65 @@ function onKeydown(event) {
   guide.endWizard();
 }
 
+// ── Or the next step's control appearing moves it on ──
+// A step with nothing to ring ("Right-click the Sets heading") has no other
+// way to notice it was done, and one with a ring can be done another way (a
+// shortcut). "Appearing" means absent at some point during this step, so a
+// control already on screen never skips one; and only after the user acted on
+// the app, so a route the step itself opened does not either.
+let followFrame = 0;
+// The store replaces `wizard` on every step and every task: one object, one step.
+let followedWizard = null;
+let nextWasAbsent = false;
+let userActed = false;
+
+function nextTargetShown(selector) {
+  try {
+    return [...document.querySelectorAll(selector)].some((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 && !el.closest(".gwz");
+    });
+  } catch (e) {
+    console.error("Guide: a step's target is not a valid selector:", selector, e);
+    return false;
+  }
+}
+
+function followNextTarget() {
+  const at = index.value;
+  if (followedWizard !== guide.wizard) {
+    followedWizard = guide.wizard;
+    nextWasAbsent = false;
+    userActed = false;
+  }
+  const next = task.value?.steps[at + 1]?.target;
+  if (next) {
+    if (!nextTargetShown(next)) {
+      // Only an act from here on can be what brings it up.
+      if (!nextWasAbsent) userActed = false;
+      nextWasAbsent = true;
+    } else if (nextWasAbsent && userActed) guide.nextStep();
+  }
+  followFrame = requestAnimationFrame(followNextTarget);
+}
+
+/** Anything done on the app counts; the card's own Back and Skip do not. */
+function noteUserActed(event) {
+  const t = event.target;
+  const el = t instanceof Element ? t : t?.parentElement;
+  if (!el?.closest(".gwz")) userActed = true;
+}
+
+const ACT_EVENTS = ["click", "contextmenu", "dblclick", "keydown"];
+onMounted(() => {
+  for (const type of ACT_EVENTS) window.addEventListener(type, noteUserActed, true);
+  followFrame = requestAnimationFrame(followNextTarget);
+});
+onBeforeUnmount(() => {
+  for (const type of ACT_EVENTS) window.removeEventListener(type, noteUserActed, true);
+  cancelAnimationFrame(followFrame);
+});
+
 const cardRef = ref(null);
 watch(index, () => nextTick(() => cardRef.value?.focus?.()));
 
