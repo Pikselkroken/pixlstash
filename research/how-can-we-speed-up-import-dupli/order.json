@@ -1,0 +1,76 @@
+{
+  "at": "2026-11-28T11:52:50.635Z",
+  "cause": "after the question was approved and ideas 1-6 filed",
+  "order": [
+    "1-time-each-step-of-the-import-duplicate-c",
+    "4-compute-the-full-file-hash-only-when-ano",
+    "2-read-each-incoming-file-once-for-the-sam",
+    "5-store-each-picture-s-full-file-hash-so-a",
+    "3-look-up-all-of-a-batch-s-files-in-one-da",
+    "6-hash-the-staged-import-s-files-in-parall"
+  ],
+  "notes": {
+    "1-time-each-step-of-the-import-duplicate-c": {
+      "impact": 3,
+      "odds": 3,
+      "line": "The baseline every other idea is judged against, and it says which step is worth attacking.",
+      "why": {
+        "impact": "Without per-step times none of the speed-ups can be judged.",
+        "odds": "Timing a fixed import is straightforward and almost certain to produce a table.",
+        "path": "Ideas 2 to 6 all wait for its numbers."
+      }
+    },
+    "4-compute-the-full-file-hash-only-when-ano": {
+      "impact": 3,
+      "odds": 3,
+      "line": "Skips a whole read of every new file, which is most of a typical import, with a small change.",
+      "why": {
+        "impact": "Removes one of the roughly three full reads per new file.",
+        "odds": "Most incoming files have no sampled-hash match, so the saving is almost guaranteed to show.",
+        "path": "Changes what idea 2 can still save, so it goes before it."
+      }
+    },
+    "2-read-each-incoming-file-once-for-the-sam": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Folds the remaining repeat reads into one, but much of its saving overlaps idea 4.",
+      "why": {
+        "impact": "Worth most on large files and cold disks.",
+        "odds": "A warm page cache may make the repeat reads nearly free.",
+        "path": "Best judged after idea 4 shows what reads are left."
+      }
+    },
+    "5-store-each-picture-s-full-file-hash-so-a": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Big win for re-importing folders already in the library, but it needs a migration and a staleness guard.",
+      "why": {
+        "impact": "Halves the reads for every duplicate file.",
+        "odds": "The design was rejected once for the scan, and keeping a stored hash honest when a file changes is the hard part.",
+        "path": "Nothing else depends on it."
+      }
+    },
+    "3-look-up-all-of-a-batch-s-files-in-one-da": {
+      "impact": 2,
+      "odds": 2,
+      "line": "Only matters if the timing shows the per-file writer round trips are slow.",
+      "why": {
+        "impact": "Large only when the writer thread is busy with background work.",
+        "odds": "A single indexed lookup is usually under a millisecond, so it may be negligible.",
+        "path": "Nothing else depends on it."
+      }
+    },
+    "6-hash-the-staged-import-s-files-in-parall": {
+      "impact": 1,
+      "odds": 2,
+      "line": "Overlaps idea 4 and depends on the disk, so it comes last.",
+      "why": {
+        "impact": "Shrinks hashing time only, which ideas 4 and 2 already cut.",
+        "odds": "Helps on SSDs and may hurt on a spinning disk.",
+        "path": "Nothing else depends on it."
+      }
+    }
+  },
+  "pinned": {},
+  "moved": {}
+}
