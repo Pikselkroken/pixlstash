@@ -471,6 +471,19 @@ describe("More angles", () => {
     expect(wrapper.find('[data-testid="la-source-0"]').attributes("aria-checked")).toBe("true");
   });
 
+  it("finds the LLM again after a session change, never the last library's", async () => {
+    const wrapper = newLocation();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="la-embellish"]').exists()).toBe(true);
+    // The new library's wide workflow encodes with no LLM.
+    api.exportWorkflow.mockResolvedValue({ workflow: {} });
+    useLocationDrawStore().reset();
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="la-embellish"]').exists()).toBe(false);
+  });
+
   it("embellishes the prompt with the LLM the wide workflow encodes with, and only with one", async () => {
     api.embellishPrompt.mockResolvedValue({ prompt: "A richer pub." });
     const wrapper = newLocation();

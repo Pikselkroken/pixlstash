@@ -773,6 +773,8 @@ watch(
     candidates.value = [];
     views.value = [];
     kept.value = [];
+    // The LLM is another library's workflow's: found again on the next open.
+    llm.value = null;
     broughtBack = new Set();
     madeSet = null;
     stop();
