@@ -32,6 +32,7 @@ const api = vi.hoisted(() => ({
   listPicturesByIds: vi.fn(),
   embellishPrompt: vi.fn(),
   exportWorkflow: vi.fn(),
+  getWorkflowFormInputs: vi.fn(),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildLocationShotsPrompt: api.buildLocationShotsPrompt,
@@ -56,6 +57,7 @@ vi.mock("../../api/pictures", () => ({
 vi.mock("../../api/workflows", () => ({
   exportWorkflow: api.exportWorkflow,
   getRunOutcome: api.getRunOutcome,
+  getWorkflowFormInputs: api.getWorkflowFormInputs,
   getWorkflowCard: api.getWorkflowCard,
   listWorkflowCards: api.listWorkflowCards,
   preflightWorkflowRun: api.preflightWorkflowRun,
@@ -100,6 +102,17 @@ beforeEach(() => {
     ],
   }));
   api.stopRun.mockResolvedValue({ stopped: 1 });
+  api.getWorkflowFormInputs.mockResolvedValue({
+    nodes: [
+      // Another primitive first: only the duration's is the video's length.
+      { node_id: "105_120", title: "Float (strength)", class_type: "PrimitiveFloat",
+        inputs: [{ slot_label: "core:str", input_name: "value", value: 0.5 }] },
+      { node_id: "105_111", title: "Float (duration)", class_type: "PrimitiveFloat",
+        inputs: [{ slot_label: "core:dur", input_name: "value", value: 8 }] },
+      { node_id: "105_91", title: "Create Video", class_type: "CreateVideo",
+        inputs: [{ slot_label: "core:fps", input_name: "fps", value: 24 }] },
+    ],
+  });
   api.locationPictureThings.mockImplementation(async (id) => ({
     things: [`the fireplace of ${id} on the left`],
   }));
@@ -493,6 +506,44 @@ describe("More angles", () => {
     await wrapper.find('[data-testid="la-use"]').trigger("click");
     await flushPromises();
     expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(30, [500, 603]);
+  });
+
+  it("asks for as many new views as picked, in a video two seconds longer a view", async () => {
+    api.buildLocationShotsPrompt.mockResolvedValue({ prompt: "SHOTS PROMPT", seconds: 10 });
+    api.takeLocationShots.mockResolvedValue({ picture_ids: [701, 702, 703, 704] });
+    const wrapper = mountDialog();
+    const count = wrapper.findComponent('[data-testid="la-view-count"]');
+    const presets = () =>
+      wrapper.findAllComponents({ name: "AppSelect" })
+        .filter((c) => /la-preset-/.test(c.attributes("data-testid") ?? ""))
+        .map((c) => c.props("modelValue"));
+    expect(presets()).toEqual(["closer", "opposite", "reverse"]);
+    expect(wrapper.text()).toContain("8 s of video");
+
+    // One row: the first keeps its words; then four: a fourth preset is added.
+    await wrapper.findAll(".la-shot input.tbm-input")[0].setValue("the fireplace");
+    await count.vm.$emit("update:modelValue", 1);
+    expect(presets()).toEqual(["closer"]);
+    await count.vm.$emit("update:modelValue", 4);
+    expect(presets()).toEqual(["closer", "opposite", "reverse", "left"]);
+    expect(wrapper.text()).toContain("10 s of video");
+
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    const asked = api.buildLocationShotsPrompt.mock.calls[0][0].shots;
+    expect(asked).toHaveLength(4);
+    expect(asked[0].words).toBe("the fireplace");
+    const video = api.runWorkflowCard.mock.calls[0][0];
+    expect(video.values).toEqual([{ slot_label: "core:dur", input_name: "value", value: 10 }]);
+    expect(api.takeLocationShots).toHaveBeenCalledWith(500, 4);
+  });
+
+  it("films at the workflow's own length when it has no duration to set", async () => {
+    api.getWorkflowFormInputs.mockResolvedValue({ nodes: [] });
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    expect(api.runWorkflowCard.mock.calls[0][0].values).toBeUndefined();
   });
 
   it("offers the 2×2 sheet instead of a new location's video", async () => {

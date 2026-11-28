@@ -134,7 +134,17 @@
           not drawn twice.
         </p>
         <section class="la-section">
-          <FieldLabel>New views</FieldLabel>
+          <div class="la-count-row">
+            <FieldLabel>New views</FieldLabel>
+            <Segmented
+              :model-value="shots.length"
+              :options="COUNT_OPTIONS"
+              aria-label="How many new views"
+              data-testid="la-view-count"
+              @update:model-value="setViewCount"
+            />
+            <span class="la-hint">{{ videoSeconds }} s of video, two seconds a view</span>
+          </div>
           <div v-for="(shot, i) in shots" :key="i" class="la-shot">
             <AppSelect
               v-model="shot.preset"
@@ -358,6 +368,7 @@ import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+import Segmented from "../widgets/Segmented.vue";
 import ZoomPopout from "../widgets/ZoomPopout.vue";
 import { useZoomPopout } from "../../composables/useZoomPopout.js";
 import {
@@ -381,6 +392,7 @@ import {
   exportWorkflow,
   getRunOutcome,
   getWorkflowCard,
+  getWorkflowFormInputs,
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
@@ -411,6 +423,15 @@ const PRESETS = [
   { label: "Right", value: "right" },
 ];
 const PRESET_NAMES = Object.fromEntries(PRESETS.map((p) => [p.value, p.label]));
+// New views asked of one video: the server's limit, and the video grows two
+// seconds a view (the picture's own shot included), as does its VRAM.
+const MAX_VIEWS = 4;
+const SHOT_SECONDS = 2;
+const COUNT_OPTIONS = Array.from({ length: MAX_VIEWS }, (_, i) => ({
+  id: i + 1,
+  label: String(i + 1),
+  testid: `la-view-count-${i + 1}`,
+}));
 const PLACEHOLDERS = {
   closer: "the fireplace",
   opposite: "the bar along the far wall",
@@ -481,6 +502,19 @@ let alive = true;
 let drawing = 0;
 
 const ready = computed(() => shots.value.length > 0);
+const videoSeconds = computed(() => SHOT_SECONDS * (shots.value.length + 1));
+
+/** As many view rows as *n*: kept rows keep their words; a new one takes the
+ * first preset no row has yet. */
+function setViewCount(n) {
+  const rows = shots.value.slice(0, n);
+  while (rows.length < n) {
+    const used = new Set(rows.map((r) => r.preset));
+    const preset = PRESETS.find((p) => !used.has(p.value))?.value ?? "closer";
+    rows.push({ preset, words: "" });
+  }
+  shots.value = rows;
+}
 const isNew = computed(() => !props.location);
 const sources = computed(() => props.location?.picture_ids ?? candidates.value);
 const placeName = computed(
@@ -824,9 +858,10 @@ async function draw() {
     const { cards } = await listWorkflowCards();
     const shotsCard = builtIn(cards, SHOTS_WORKFLOW);
     const restoreCard = builtIn(cards, RESTORE_WORKFLOW);
-    const [shotInputs, restoreInputs] = await Promise.all([
+    const [shotInputs, restoreInputs, length] = await Promise.all([
       inputsOf(shotsCard.id),
       inputsOf(restoreCard.id),
+      durationOf(shotsCard.id),
     ]);
     if (!shotInputs.length || restoreInputs.length < 2) {
       throw new Error("The More angles workflows have lost their picture inputs. Restore them from the built-in workflows.");
@@ -835,7 +870,7 @@ async function draw() {
       await restoreScrapheap([source.value]);
       broughtBack.add(source.value);
     }
-    const { prompt } = await buildLocationShotsPrompt({
+    const { prompt, seconds } = await buildLocationShotsPrompt({
       description: placeDescription.value,
       layout: layout.value,
       light: light.value,
@@ -847,6 +882,8 @@ async function draw() {
       workflow_id: shotsCard.id,
       prompt,
       inputs: [{ ...pick(shotInputs[0]), picture_id: source.value }],
+      // Two seconds a shot: more views, a longer video, not shorter shots.
+      ...(length ? { values: [{ ...pick(length), value: seconds }] } : {}),
       count: 1,
       label: `More angles · ${placeName.value}`,
     });
@@ -909,6 +946,23 @@ async function draw() {
 }
 
 const pick = (input) => ({ slot_label: input.slot_label, input_name: input.input_name });
+
+/** The shots workflow's duration in seconds, by its node's title, or null
+ * when it has none to set (the video then keeps the length it ships with). */
+async function durationOf(workflowId) {
+  try {
+    const { nodes } = await getWorkflowFormInputs(workflowId);
+    for (const node of nodes || []) {
+      if (!/duration/i.test(node.title || "")) continue;
+      const value = (node.inputs || []).find((i) => i.input_name === "value");
+      if (value) return value;
+    }
+    console.warn("The shots workflow has no duration to set; its video keeps its length", workflowId);
+  } catch (e) {
+    console.warn("Couldn't read the shots workflow's inputs; its video keeps its length", workflowId, e);
+  }
+  return null;
+}
 
 /** A new location's set: the picture started from, the kept views and the
  * video. Made first, so a name already taken stops before anything moves;
@@ -1081,6 +1135,12 @@ async function use() {
 .la-shot {
   display: flex;
   gap: var(--space-2);
+}
+
+.la-count-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .la-shot__preset {
