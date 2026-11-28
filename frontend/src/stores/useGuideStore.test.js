@@ -114,7 +114,18 @@ describe("the welcome", () => {
     readNeeds.mockReturnValueOnce(new Promise(() => {}));
     store.evaluateWelcome({ libraryEmpty: false });
     sessionResets.at(-1)();
+    store.hydrate({ guide_welcome_seen: null });
     readNeeds.mockResolvedValue(PICTURES);
+    await store.evaluateWelcome({ libraryEmpty: false });
+    expect(store.welcome?.concepts).toHaveLength(6);
+  });
+
+  it("after a session change it waits for the new session's config", async () => {
+    const store = storeWith({ guide_welcome_seen: WELCOME_EDITION });
+    sessionResets.at(-1)();
+    await store.evaluateWelcome({ libraryEmpty: false });
+    expect(store.welcome).toBe(null);
+    store.hydrate({ guide_welcome_seen: null });
     await store.evaluateWelcome({ libraryEmpty: false });
     expect(store.welcome?.concepts).toHaveLength(6);
   });

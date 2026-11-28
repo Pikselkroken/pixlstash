@@ -72,6 +72,9 @@ export const useGuideStore = defineStore("guide", () => {
     readAt.value = 0;
     wizard.value = null;
     welcome.value = null;
+    // "Seen" may be another user's (a login, a full restore): wait for the
+    // new session's config before deciding.
+    configLoaded.value = false;
     // The new session makes its own decision; a welcome already closed stays
     // closed, since "seen" is the user's.
     evaluated = false;
