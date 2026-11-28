@@ -637,6 +637,8 @@ function onSheetsCut({ kind, character, pictureIds, set }) {
     });
     return;
   }
+  // The person's Studio card shows the new panels.
+  if (isStudioView.value) studioStore.refresh();
   noticeStore.push({
     level: "success",
     text: `Added ${n} ${n === 1 ? "picture" : "pictures"} to ${character.name}.`,

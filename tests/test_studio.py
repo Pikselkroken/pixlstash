@@ -17,7 +17,15 @@ from pixlstash.db_models import Picture
 from pixlstash.db_models.studio import Scene
 from pixlstash.server import Server
 from pixlstash.services import comfyui_service, location_angles
-from pixlstash.services.studio import Item, Person, compose_shot, place_words
+from pixlstash.services.studio import (
+    Item,
+    Person,
+    TilePicture,
+    compose_shot,
+    place_words,
+    sheet_tile,
+    sheet_tiles,
+)
 from tests.utils import (
     API_PREFIX,
     bearer_client,
@@ -646,3 +654,91 @@ def test_a_run_sent_twice_in_one_request_is_one_run(env):
         json={"runs": [{"key": key}, {"key": key}]},
     )
     assert [r["key"] for r in resp.json()["runs"]] == [key]
+
+
+# ── a person's sheet tile ───────────────────────────────────────────────────
+
+
+def _tile(pid, framing=None, **fields):
+    return TilePicture(picture_id=pid, framing=framing, **fields)
+
+
+def test_headshots_and_body_shots_go_by_framing_with_the_thumbnail_first():
+    pictures = [
+        _tile(1, "close-up", rating=5),
+        _tile(2, "portrait", rating=4),
+        _tile(3, "full body", rating=5),
+        _tile(4, "upper body", rating=3),
+        _tile(5, "full body", rating=1),
+        # Pinned as the thumbnail though full length: still the first headshot.
+        _tile(6, "full body", rating=1),
+    ]
+    heads, bodies = sheet_tile(pictures, thumbnail_id=6)
+    # The best body shots take the body slots; the one left over fills the
+    # empty headshot rather than leave a hole.
+    assert heads == [6, 1, 2, 5]
+    assert bodies == [3, 4]
+
+
+def test_a_drawn_sheet_s_panels_fill_the_slots_in_sheet_order():
+    # Panels 10-13 are passport photos, 14-15 body photos, whatever their
+    # measured framing; a better-rated close-up waits behind them.
+    panels = [_tile(10 + i, "upper body", source_picture_id=99) for i in range(6)]
+    older = [_tile(20 + i, "close-up", source_picture_id=98) for i in range(5)]
+    heads, bodies = sheet_tile([_tile(1, "close-up", rating=5), *panels, *older])
+    assert heads == [10, 11, 12, 13]
+    assert bodies == [14, 15]
+
+
+def test_the_newest_of_two_sheets_wins():
+    old = [_tile(10 + i, source_picture_id=90) for i in range(6)]
+    new = [_tile(30 + i, source_picture_id=80) for i in range(6)]
+    assert sheet_tile(old + new) == ([30, 31, 32, 33], [34, 35])
+
+
+def test_unknown_framings_and_one_stack_member_fill_what_is_left():
+    pictures = [
+        _tile(1, "close-up", stack_id=7, rating=5),
+        _tile(2, "close-up", stack_id=7, rating=1),
+        _tile(3, None, rating=2),
+        _tile(4, "full body", rating=1),
+        _tile(5, "close-up", rating=0),
+    ]
+    heads, bodies = sheet_tile(pictures)
+    assert heads == [1, 5, 3]
+    assert bodies == [4]
+
+
+def test_a_stacked_sheet_panel_still_marks_its_sheet():
+    panels = [_tile(10 + i, source_picture_id=99) for i in range(6)]
+    panels[1].stack_id = panels[2].stack_id = 3
+    heads, bodies = sheet_tile(panels)
+    assert heads[0] == 10 and bodies == [14, 15]
+
+
+def test_tiles_read_the_largest_face_and_survive_a_bad_box():
+    person = SimpleNamespace(id=5, thumbnail_picture_id=None)
+    face = [100, 100, 300, 400]
+    rows = [
+        # Picture 1: a big face high in a tall frame reads as a close-up; a
+        # second, smaller face of the same person on it does not change that.
+        (5, json.dumps(face), 1, 600, 400, None, None, None, 3, None),
+        (5, json.dumps([10, 10, 20, 20]), 1, 600, 400, None, None, None, 3, None),
+        # Picture 2: a small face over a tall frame reads as full body.
+        (5, json.dumps([100, 10, 130, 40]), 2, 600, 2000, None, None, None, 1, None),
+        # Picture 3: an unreadable box costs its framing, not the overview.
+        (5, json.dumps([None, "a", 1, 2]), 3, 600, 400, None, None, None, 0, None),
+    ]
+    session = SimpleNamespace(exec=lambda _query: SimpleNamespace(all=lambda: rows))
+    assert sheet_tiles(session, [person]) == {5: ([1, 3], [2], 3)}
+
+
+def test_a_person_s_card_carries_their_slots_in_the_overview(env):
+    client = env.client
+    person = _person(client)
+    resp = client.get(f"{API_PREFIX}/studio/overview")
+    assert resp.status_code == 200, resp.text
+    (row,) = [c for c in resp.json()["cast"] if c["id"] == person]
+    assert row["headshot_ids"] == []
+    assert row["body_ids"] == []
+    assert row["picture_count"] == 0

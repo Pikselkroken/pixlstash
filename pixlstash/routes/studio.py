@@ -369,7 +369,10 @@ def create_router(server) -> APIRouter:
             "the Studio's sidebar and grids. `project_id` is a project's id, "
             "`none` (in no project) or absent (any project). Outfits follow the person "
             "who wears them; a person's `outfit_ids` are theirs. Each item's "
-            "`picture_ids` are its angles in order."
+            "`picture_ids` are its angles in order. A person's `headshot_ids` "
+            "(up to four) and `body_ids` (up to two) fill their card as a "
+            "character sheet does, and `picture_count` is how many pictures "
+            "they are in."
         ),
         response_model=Overview,
     )
@@ -428,6 +431,7 @@ def create_router(server) -> APIRouter:
                 if (c.name or "").strip()
             ]
             people_ids = {c.id for c in people}
+            tiles = studio.sheet_tiles(session, people)
 
             item_rows = session.exec(
                 select(StudioItem, PictureSet)
@@ -508,6 +512,9 @@ def create_router(server) -> APIRouter:
                         "name": c.name,
                         "description": c.description or "",
                         "thumbnail_picture_id": c.thumbnail_picture_id,
+                        "headshot_ids": tiles[c.id][0],
+                        "body_ids": tiles[c.id][1],
+                        "picture_count": tiles[c.id][2],
                         "outfit_ids": outfit_ids.get(c.id, []),
                         "scene_count": used.get(("cast", c.id), 0),
                         "favourite": ("cast", c.id) in favourites,
