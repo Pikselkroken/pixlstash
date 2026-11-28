@@ -791,7 +791,14 @@ describe("More angles", () => {
     const wrapper = mountDialog();
     await wrapper.find('[data-testid="la-draw"]').trigger("click");
     await vi.advanceTimersByTimeAsync(10);
-    expect(draws.job).toMatchObject({ locationId: 30, name: "The pub", status: "Filming the place…" });
+    expect(draws.job).toMatchObject({
+      locationId: 30,
+      name: "The pub",
+      status: "Filming the place…",
+      // How many placeholders the location's lightbox shows.
+      count: 3,
+      making: "views",
+    });
     await wrapper.find('[data-testid="la-background"]').trigger("click");
     expect(wrapper.emitted("close")).toHaveLength(1);
     await wrapper.setProps({ open: false });

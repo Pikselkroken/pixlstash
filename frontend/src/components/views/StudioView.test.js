@@ -78,6 +78,8 @@ vi.mock("../../api/characters", () => ({
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 import StudioView from "./StudioView.vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
@@ -580,6 +582,60 @@ describe("a picture from the Studio in the Lightbox", () => {
     expect(
       await opensAndComesBack(() => scene.find('[data-testid="scene-take-900"]').trigger("dblclick")),
     ).toBe("900");
+  });
+});
+
+describe("placeholders for what is drawing in the background", () => {
+  const drawing = (keys) => ({ phase: "drawing", runs: keys.map((key) => ({ key, status: "running" })) });
+
+  it("puts a placeholder where outfit sheets will land, in the Wardrobe and the wearer's lightbox", async () => {
+    // Still running, as Tasks lists them.
+    useTasksStore().comfyuiRuns = [{ run_id: "r1", percent: 40 }, { run_id: "r2", percent: 0 }];
+    useSheetDrawsStore().keep("outfit:5", {
+      kind: "outfit",
+      character: { id: 5, name: "Mira" },
+      label: "Raincoat",
+      snapshot: drawing(["r1", "r2"]),
+    });
+    const wardrobe = await mountAt("/studio?section=wardrobe");
+    const placeholder = wardrobe.find('[data-testid="studio-sheet-placeholder-outfit"]');
+    expect(placeholder.text()).toContain("Raincoat");
+    expect(placeholder.text()).toContain("Drawing 2 sheets…");
+    await placeholder.find(".draw-placeholder__frame").trigger("click");
+    expect(wardrobe.emitted("item-sheets").at(-1)).toEqual([
+      { kind: "outfit", character: { id: 5, name: "Mira" }, sheet: true },
+    ]);
+    wardrobe.unmount();
+
+    const person = await mountAt("/studio?section=cast&open=cast:5");
+    expect(person.find('[data-testid="studio-outfit-placeholder"]').exists()).toBe(true);
+    person.unmount();
+    const other = await mountAt("/studio?section=cast&open=cast:6");
+    expect(other.find('[data-testid="studio-outfit-placeholder"]').exists()).toBe(false);
+  });
+
+  it("puts a bar under a person whose sheets are drawing, and placeholders in Locations", async () => {
+    const draws = useSheetDrawsStore();
+    draws.keep("5", { kind: "character", character: { id: 5, name: "Mira" }, label: "Mira's sheets", snapshot: drawing(["c1"]) });
+    draws.keep("location:", { kind: "location", character: null, label: "Pub", snapshot: drawing(["l1"]) });
+    const cast = await mountAt("/studio?section=cast");
+    expect(cast.find('[data-testid="studio-sheets-progress-5"]').exists()).toBe(true);
+    expect(cast.find('[data-testid="studio-sheets-progress-6"]').exists()).toBe(false);
+    cast.unmount();
+    const places = await mountAt("/studio?section=locations");
+    expect(places.find('[data-testid="studio-sheet-placeholder-location"]').text()).toContain("Pub");
+  });
+
+  it("puts a placeholder for each view More angles is drawing in the location's lightbox", async () => {
+    useLocationDrawStore().report({
+      locationId: 30, name: "Neon rain street", status: "Filming the place…",
+      fraction: 0.3, ready: false, count: 3, making: "views",
+    });
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    const tiles = wrapper.findAll('[data-testid^="studio-view-placeholder-"]');
+    expect(tiles).toHaveLength(3);
+    expect(tiles[0].text()).toContain("Filming the place…");
+    expect(tiles[0].find(".draw-progress__track span").attributes("style")).toContain("width: 30%");
   });
 });
 

@@ -100,7 +100,10 @@
         @pointerdown="onBackgroundPress"
         @click="onBackgroundClick"
       >
-        <div v-if="store.loaded && !cards.length && !newLocationDraw" class="studio-empty">
+        <div
+          v-if="store.loaded && !cards.length && !newLocationDraw && !sectionDraws.length"
+          class="studio-empty"
+        >
           <v-icon size="32">{{ emptyIcon }}</v-icon>
           <span>{{ emptyText }}</span>
         </div>
@@ -130,6 +133,24 @@
               >
             </button>
             <DrawProgress :job="newLocationDraw" @open="locationDraw.reopen()" />
+          </div>
+          <!-- Sheets drawing in the background for an item of this section:
+               where it will land, with the draw's bar. -->
+          <div v-for="draw in sectionDraws" :key="draw.key" role="listitem" class="studio-cell">
+            <DrawPlaceholder
+              :job="draw"
+              :label="draw.name"
+              :icon="STUDIO_KINDS[draw.kind].icon"
+              :aspect="draw.kind === 'outfit' ? 4 / 5 : 5 / 3"
+              :testid="`studio-sheet-placeholder-${draw.kind}`"
+              @open="reopenSheets(draw)"
+            />
+            <span class="studio-card__name studio-card__line"
+              ><span class="studio-card__title">{{ draw.name }}</span
+              ><span class="studio-card__meta">{{
+                draw.character ? `${draw.character.name}'s, drawing` : "Drawing"
+              }}</span></span
+            >
           </div>
           <div
             v-for="(card, index) in cards"
@@ -215,6 +236,13 @@
                 >Draw a character sheet…</AppButton
               >
             </span>
+            <!-- A person's sheets drawing in the background. -->
+            <DrawProgress
+              v-if="card.kind === 'cast' && sheetDraws.of('character', card.id).length"
+              :job="sheetDraws.of('character', card.id)[0]"
+              :data-testid="`studio-sheets-progress-${card.id}`"
+              @open="reopenSheets(sheetDraws.of('character', card.id)[0])"
+            />
             <DrawProgress
               v-if="card.kind === 'location' && locationDraw.jobFor(card.id)"
               :job="locationDraw.jobFor(card.id)"
@@ -397,6 +425,7 @@ import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
 import DrawProgress from "../widgets/DrawProgress.vue";
+import DrawPlaceholder from "../widgets/DrawPlaceholder.vue";
 import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import StudioScene from "./StudioScene.vue";
 import { characterThumbnailUrl } from "../../api/characters";
@@ -409,6 +438,7 @@ import {
 } from "../../api/studio";
 import { useConfirm } from "../../composables/useConfirm";
 import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
@@ -442,6 +472,19 @@ const store = useStudioStore();
 const noticeStore = useNoticeStore();
 const { confirm } = useConfirm();
 const locationDraw = useLocationDrawStore();
+// Sheets drawing in the background: a placeholder card in the section their
+// item will land in, a bar under the person whose sheets they are.
+const sheetDraws = useSheetDrawsStore();
+const SECTION_DRAW_KIND = { wardrobe: "outfit", locations: "location", props: "prop" };
+const sectionDraws = computed(() =>
+  SECTION_DRAW_KIND[section.value] ? sheetDraws.of(SECTION_DRAW_KIND[section.value]) : [],
+);
+
+/** Open the sheet dialog on a draw kept while it runs. */
+function reopenSheets(draw) {
+  emit("item-sheets", { kind: draw.kind, character: draw.character, sheet: true });
+}
+
 // A new location still being drawn shows in Locations before its set exists.
 const newLocationDraw = computed(() =>
   section.value === "locations" && locationDraw.job && locationDraw.job.locationId == null

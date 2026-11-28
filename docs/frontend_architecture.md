@@ -8900,6 +8900,15 @@ inside its lightboxes, so the rail is empty on `/studio`.
   row, and a new location not made yet gets a card of its own in Locations.
   A draw that ends with the dialog shut says so in a notice. One draw at a
   time: opening for another location opens the one under way.
+- **What draws in the background has a placeholder where it will land**
+  (`widgets/DrawPlaceholder.vue`: a dashed frame, what it is, and the draw's
+  `DrawProgress` inside). More angles reports how many views it makes
+  (`count`, `making`), and the location's lightbox shows a tile per view.
+  Sheet draws closed mid-way are kept in `useSheetDrawsStore` (it holds what
+  the sheet dialog's module map did): a placeholder card in Wardrobe,
+  Locations or Props and in the wearer's lightbox, a bar under the person
+  whose sheets they are, progress from each run's percent in Tasks, ready
+  once none is left. A click opens the dialog on the draw.
 - **More angles…** on a location's lightbox opens `io/LocationAnglesDialog`:
   a source picture from the location, a layout sentence, three views (a
   preset and words each) and the light. It runs the shots video, asks the

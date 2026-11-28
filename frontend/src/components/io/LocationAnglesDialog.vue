@@ -923,7 +923,7 @@ async function drawWide() {
   error.value = "";
   phase.value = "working";
   try {
-    report("Getting the workflow ready…", 0);
+    report("Getting the workflow ready…", 0, { count: WIDE_COUNT, making: "wide" });
     const { cards } = await listWorkflowCards();
     const card = builtIn(cards, WIDE_WORKFLOW);
     const [{ card: full }, wide] = await Promise.all([
@@ -1027,7 +1027,7 @@ async function draw() {
   error.value = "";
   phase.value = "working";
   try {
-    report("Getting the workflows ready…", 0);
+    report("Getting the workflows ready…", 0, { count: shots.value.length, making: "views" });
     const { cards } = await listWorkflowCards();
     const endsOnPicture = lastSource.value != null;
     const shotsCard = builtIn(cards, endsOnPicture ? SHOTS_FIRST_LAST_WORKFLOW : SHOTS_WORKFLOW);

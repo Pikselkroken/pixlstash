@@ -84,7 +84,18 @@
             />
             <div class="studio-person__wardrobe">
               <h3 class="studio-heading">Wardrobe</h3>
-              <div v-if="wardrobe.length" class="studio-grid">
+              <div v-if="wardrobe.length || outfitDraws.length" class="studio-grid">
+                <!-- Outfit sheets drawing for them in the background. -->
+                <DrawPlaceholder
+                  v-for="draw in outfitDraws"
+                  :key="draw.key"
+                  :job="draw"
+                  :label="draw.name"
+                  icon="mdi-hanger"
+                  :aspect="4 / 5"
+                  testid="studio-outfit-placeholder"
+                  @open="reopenSheets(draw)"
+                />
                 <button
                   v-for="outfit in wardrobe"
                   :key="outfit.id"
@@ -141,7 +152,21 @@
               </button>
               <figcaption>{{ pictureName(i) }}</figcaption>
             </figure>
-            <p v-if="!item.picture_ids.length" class="studio-hint">
+            <!-- The views More angles is drawing in the background, each
+                 where it will land, with the draw's bar. -->
+            <template v-if="angleDraw?.making === 'views'">
+              <figure v-for="n in angleDraw.count" :key="`drawing-${n}`" class="studio-angle">
+                <DrawPlaceholder
+                  :job="angleDraw"
+                  :label="`New view ${n}`"
+                  icon="mdi-rotate-orbit"
+                  :aspect="16 / 9"
+                  :testid="`studio-view-placeholder-${n}`"
+                  @open="locationDraw.reopen()"
+                />
+              </figure>
+            </template>
+            <p v-if="!item.picture_ids.length && !angleDraw" class="studio-hint">
               No pictures yet. New sheets… draws them.
             </p>
           </div>
@@ -292,6 +317,7 @@ import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import OutfitPicker from "../widgets/OutfitPicker.vue";
+import DrawPlaceholder from "../widgets/DrawPlaceholder.vue";
 import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
@@ -299,6 +325,7 @@ import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOpenInLightbox } from "../../composables/useOpenInLightbox";
 import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
+import { useSheetDrawsStore } from "../../stores/useSheetDrawsStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
@@ -328,6 +355,21 @@ const openInLightbox = useOpenInLightbox();
 
 function openAngles() {
   locationDraw.openFor(item.value);
+}
+
+// What is being drawn for this item in the background: More angles' views
+// of a location, a person's outfit sheets. Each gets a placeholder.
+const sheetDraws = useSheetDrawsStore();
+const angleDraw = computed(() =>
+  props.kind === "location" ? locationDraw.jobFor(props.itemId) : null,
+);
+const outfitDraws = computed(() =>
+  props.kind === "cast" ? sheetDraws.of("outfit", props.itemId) : [],
+);
+
+/** Open the sheet dialog on a draw kept while it runs. */
+function reopenSheets(draw) {
+  emit("item-sheets", { kind: draw.kind, character: draw.character, sheet: true });
 }
 
 const item = computed(() => store.byKey.get(`${props.kind}:${props.itemId}`) || null);

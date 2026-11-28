@@ -74,12 +74,23 @@ import { useNewBatchStore } from "./useNewBatchStore";
 import { useTagClipboardStore } from "./useTagClipboardStore";
 import { useTagGroupsStore } from "./useTagGroupsStore";
 import { useLocationDrawStore } from "./useLocationDrawStore";
+import { useSheetDrawsStore } from "./useSheetDrawsStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
  * with a previous credential's rows, and what "dropped" means for it.
  */
 const STORES = [
+  {
+    // Sheet draws closed mid-way (#2819): their runs and sheets are the
+    // library's, and a person's id means another person in another one.
+    name: "useSheetDrawsStore",
+    use: useSheetDrawsStore,
+    seed: (s) => {
+      s.keep("5", { name: "Mira", kind: "character", snapshot: { phase: "drawing", runs: [] } });
+    },
+    isEmpty: (s) => s.saved.size === 0,
+  },
   {
     // The location draw under way (#2819): it names a location of the
     // library, and its pictures and runs are that library's.
