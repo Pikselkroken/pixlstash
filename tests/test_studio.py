@@ -331,6 +331,27 @@ def test_a_scene_is_made_cast_and_listed_in_its_project(env):
     assert "waving" in shot["prompt"] and "held by" in shot["prompt"]
 
 
+def test_the_studio_reads_the_library_open_now_not_the_one_it_started_with(env):
+    # A library switch puts a new vault on the server and closes the old
+    # one's database; the Studio must follow it (VaultDatabase is closed).
+    vault = env.server.vault
+    real = vault.db
+    used = []
+
+    class OpenNow:
+        def __getattr__(self, name):
+            used.append(name)
+            return getattr(real, name)
+
+    # As the switch does: the vault's database and auth's, one object.
+    vault.db = env.server.auth.vault_db = OpenNow()
+    try:
+        assert env.client.get(f"{API_PREFIX}/studio/overview").status_code == 200
+    finally:
+        vault.db = env.server.auth.vault_db = real
+    assert "run_immediate_read_task" in used
+
+
 def test_a_prop_is_held_only_by_someone_in_the_cast(env):
     client = env.client
     scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Alone"}).json()

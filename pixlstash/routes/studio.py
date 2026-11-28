@@ -210,7 +210,6 @@ def _parse_scope(project: Optional[str]) -> Union[None, str, int]:
 
 def create_router(server) -> APIRouter:
     router = APIRouter()
-    db = server.vault.db
 
     def _favourites(session: Session) -> set[tuple[str, int]]:
         return {
@@ -553,7 +552,7 @@ def create_router(server) -> APIRouter:
                 "props": lists["prop"],
             }
 
-        return db.run_immediate_read_task(fetch)
+        return server.vault.db.run_immediate_read_task(fetch)
 
     @router.post(
         "/studio/scenes",
@@ -576,7 +575,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(insert, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
 
     @router.get(
         "/studio/scenes/{scene_id}",
@@ -598,7 +597,7 @@ def create_router(server) -> APIRouter:
             ended = _file_ended_runs(session, scene, library_uuid)
             return _scene_body(session, scene, ended)
 
-        return db.run_task(read, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(read, priority=DBPriority.IMMEDIATE)
 
     @router.patch(
         "/studio/scenes/{scene_id}",
@@ -654,7 +653,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/scenes/{scene_id}",
@@ -678,7 +677,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return {"status": "deleted", "id": scene_id}
 
-        return db.run_task(remove, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(remove, priority=DBPriority.IMMEDIATE)
 
     @router.post(
         "/studio/scenes/{scene_id}/shot",
@@ -718,7 +717,7 @@ def create_router(server) -> APIRouter:
                 max_references=payload.max_references,
             )
 
-        return db.run_immediate_read_task(read)
+        return server.vault.db.run_immediate_read_task(read)
 
     @router.post(
         "/studio/scenes/{scene_id}/runs",
@@ -747,7 +746,7 @@ def create_router(server) -> APIRouter:
             session.refresh(scene)
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/scenes/{scene_id}/takes/{picture_id}",
@@ -770,7 +769,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return _scene_body(session, scene)
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.put(
         "/studio/items/{set_id}",
@@ -796,7 +795,7 @@ def create_router(server) -> APIRouter:
             session.commit()
             return {"set_id": set_id, "kind": payload.kind}
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.delete(
         "/studio/items/{set_id}",
@@ -812,7 +811,7 @@ def create_router(server) -> APIRouter:
                 session.commit()
             return {"set_id": set_id, "removed": row is not None}
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     @router.put(
         "/studio/favourites",
@@ -843,6 +842,6 @@ def create_router(server) -> APIRouter:
                 "favourite": payload.favourite,
             }
 
-        return db.run_task(update, priority=DBPriority.IMMEDIATE)
+        return server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
 
     return router
