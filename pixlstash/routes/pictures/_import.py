@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import threading
@@ -1268,6 +1269,88 @@ def register_routes(router, server):
             )
             return True
 
+        def _stage_zip_entries(upload_file, zip_name: str) -> bool:
+            """Extract a zip's media and sidecar entries into the staging dir.
+
+            Runs on a worker thread. Stops early when the session is cancelled
+            meanwhile, and removes the staging dir itself: the cancel's own
+            rmtree can lose the race with a file written as it ran.
+
+            Returns:
+                True when at least one media entry was staged.
+            """
+            with zipfile.ZipFile(upload_file) as zip_file:
+                entries = [i for i in zip_file.infolist() if not i.is_dir()]
+                if len(entries) > _STAGING_MAX_ZIP_ENTRIES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Zip '{zip_name}' contains too many "
+                            f"files (max {_STAGING_MAX_ZIP_ENTRIES:,})."
+                        ),
+                    )
+                if (
+                    sum(i.file_size for i in entries)
+                    > _STAGING_MAX_ZIP_DECOMPRESSED_BYTES
+                ):
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Zip '{zip_name}' decompressed size "
+                            f"exceeds the "
+                            f"{_STAGING_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3}"
+                            " GB limit."
+                        ),
+                    )
+                added = 0
+                for info in entries:
+                    if session["stage"] != "staging":
+                        logger.info(
+                            "Staging %s: stopped extracting %s after %d entries "
+                            "(stage=%s)",
+                            staging_id,
+                            zip_name,
+                            added,
+                            session["stage"],
+                        )
+                        if os.path.isdir(staging_dir):
+                            try:
+                                shutil.rmtree(staging_dir)
+                            except OSError as exc:
+                                logger.warning(
+                                    "Staging %s: failed to remove %s after the "
+                                    "session stopped; its files stay on disk: %s",
+                                    staging_id,
+                                    staging_dir,
+                                    exc,
+                                )
+                        return False
+                    # Still busy: an hour-long unpack must not read as idle to
+                    # the reaper.
+                    session["last_update_epoch_ms"] = int(time.time() * 1000)
+                    inner_ext = os.path.splitext(info.filename)[1].lower()
+                    base_name = os.path.basename(info.filename)
+                    if inner_ext in STAGING_ALLOWED_CAPTION_EXTS:
+                        with zip_file.open(info) as handle:
+                            data = handle.read()
+                        if data:
+                            sidecar_text_by_stem.setdefault(
+                                _normalise_sidecar_stem(base_name),
+                                data.decode("utf-8", errors="ignore"),
+                            )
+                        continue
+                    if inner_ext not in STAGING_ALLOWED_MEDIA_EXTS:
+                        continue
+                    with zip_file.open(info) as handle:
+                        data = handle.read()
+                    if _stage_media_bytes(data, inner_ext, base_name):
+                        added += 1
+            if not added:
+                logger.warning(
+                    "Staging %s: no valid media in zip %s", staging_id, zip_name
+                )
+            return added > 0
+
         for upload_index, upload in enumerate(file):
             current_key = keys[upload_index] if upload_index < len(keys) else None
             if not upload.filename:
@@ -1316,57 +1399,15 @@ def register_routes(router, server):
                                 f"{_STAGING_MAX_FILE_BYTES // 1024**3} GB limit"
                             ),
                         )
-                    with zipfile.ZipFile(upload_file) as zip_file:
-                        entries = [i for i in zip_file.infolist() if not i.is_dir()]
-                        if len(entries) > _STAGING_MAX_ZIP_ENTRIES:
-                            raise HTTPException(
-                                status_code=413,
-                                detail=(
-                                    f"Zip '{upload.filename}' contains too many "
-                                    f"files (max {_STAGING_MAX_ZIP_ENTRIES:,})."
-                                ),
-                            )
-                        if (
-                            sum(i.file_size for i in entries)
-                            > _STAGING_MAX_ZIP_DECOMPRESSED_BYTES
-                        ):
-                            raise HTTPException(
-                                status_code=413,
-                                detail=(
-                                    f"Zip '{upload.filename}' decompressed size "
-                                    f"exceeds the "
-                                    f"{_STAGING_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3}"
-                                    " GB limit."
-                                ),
-                            )
-                        added = 0
-                        for info in entries:
-                            inner_ext = os.path.splitext(info.filename)[1].lower()
-                            base_name = os.path.basename(info.filename)
-                            if inner_ext in STAGING_ALLOWED_CAPTION_EXTS:
-                                with zip_file.open(info) as handle:
-                                    data = handle.read()
-                                if data:
-                                    sidecar_text_by_stem.setdefault(
-                                        _normalise_sidecar_stem(base_name),
-                                        data.decode("utf-8", errors="ignore"),
-                                    )
-                                continue
-                            if inner_ext not in STAGING_ALLOWED_MEDIA_EXTS:
-                                continue
-                            with zip_file.open(info) as handle:
-                                data = handle.read()
-                            if _stage_media_bytes(data, inner_ext, base_name):
-                                added += 1
-                        if added:
-                            received.append(upload.filename)
-                        else:
-                            logger.warning(
-                                "Staging %s: no valid media in zip %s",
-                                staging_id,
-                                upload.filename,
-                            )
-                            skipped.append(upload.filename)
+                    # Unpacking a multi-GB archive takes minutes. Run it off the
+                    # event loop, or every other request (the grid, the status
+                    # poll, the WebSocket) freezes until it is done.
+                    if await asyncio.to_thread(
+                        _stage_zip_entries, upload_file, upload.filename
+                    ):
+                        received.append(upload.filename)
+                    else:
+                        skipped.append(upload.filename)
                 except HTTPException:
                     raise
                 except zipfile.BadZipFile:

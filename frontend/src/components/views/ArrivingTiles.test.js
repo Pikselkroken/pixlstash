@@ -183,3 +183,29 @@ describe("ArrivingTiles receipt countdown", () => {
     expect(ids(store)).toEqual(["r1"]);
   });
 });
+
+describe("ArrivingTiles fold caret", () => {
+  it("folds a run to its band and back", async () => {
+    const store = useImportArrivalsStore();
+    store.begin("r1", [new File(["x"], "a.png")], { bytesTotal: 10 });
+    await mountTiles();
+
+    const caret = wrapper.find('[data-testid="arriving-fold"]');
+    const shown = () =>
+      wrapper.find('[data-testid="arriving-body"]').element.style.display !==
+      "none";
+    expect(caret.attributes("aria-expanded")).toBe("true");
+    expect(shown()).toBe(true);
+
+    await caret.trigger("click");
+    expect(caret.attributes("aria-expanded")).toBe("false");
+    expect(shown()).toBe(false);
+    // The band keeps the stage, the progress bar and Cancel.
+    expect(wrapper.find(".arr-what").text()).toBe("Uploading");
+    expect(wrapper.find(".arr-track").exists()).toBe(true);
+    expect(wrapper.text()).toContain("Cancel");
+
+    await caret.trigger("click");
+    expect(shown()).toBe(true);
+  });
+});
