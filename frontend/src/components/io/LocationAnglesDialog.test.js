@@ -104,6 +104,8 @@ beforeEach(() => {
     ],
   }));
   api.stopRun.mockResolvedValue({ stopped: 1 });
+  // The real call answers a promise; one reset to nothing would throw on .catch.
+  api.deletePictures.mockResolvedValue({});
   api.getWorkflowFormInputs.mockResolvedValue({
     nodes: [
       // Another primitive first: only the duration's is the video's length.
@@ -592,6 +594,35 @@ describe("More angles", () => {
     ]);
     expect(api.takeLocationShots).toHaveBeenCalledWith(500, 3, true);
     expect(wrapper.find('[data-testid="la-original-end"] img').attributes("src")).toBe("/thumb/33.webp");
+  });
+
+  it("sends the frames of a discarded draw to the Scrapheap, and none on a session change", async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-discard"]').trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([701, 702, 703]);
+
+    api.deletePictures.mockClear();
+    const again = mountDialog();
+    await again.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    useLocationDrawStore().reset();
+    await flushPromises();
+    expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
+  it("starts from the zoomed picture alone, never the end picture twice", async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-source-2"]').trigger("click", { ctrlKey: true });
+    await wrapper.findAll('[data-testid="la-zoom-open"]')[2].trigger("click");
+    await flushPromises();
+    document.body.querySelector('[data-testid="la-zoom-choose"]').click();
+    await flushPromises();
+    expect(wrapper.findAll(".la-source__end")).toHaveLength(0);
+    expect(wrapper.find('[data-testid="la-source-2"]').attributes("aria-checked")).toBe("true");
+    expect(wrapper.find('[data-testid="la-source-0"]').attributes("aria-checked")).toBe("false");
   });
 
   it("films from one picture again after a plain click", async () => {

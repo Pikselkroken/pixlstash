@@ -680,6 +680,22 @@ describe("a location's pictures", () => {
     expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
   });
 
+  it("closes only the picture menu on Esc, keeping the selection and the lightbox", async () => {
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 31).trigger("contextmenu");
+    await flushPromises();
+    // Any other Esc handler, as an overlay further out would have.
+    const heard = vi.fn();
+    window.addEventListener("keydown", heard);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    window.removeEventListener("keydown", heard);
+    await flushPromises();
+    expect(heard).not.toHaveBeenCalled();
+    expect(document.body.querySelector('[data-testid="studio-pics-menu"]')).toBeNull();
+    expect(chosen(wrapper)).toEqual(["studio-pic-31"]);
+    expect(router.currentRoute.value.query.open).toBe("location:30");
+  });
+
   it("keeps the lightbox's keys off while the picture menu is open", async () => {
     const wrapper = await mountAt("/studio?section=locations&open=location:30");
     await pic(wrapper, 31).trigger("contextmenu");

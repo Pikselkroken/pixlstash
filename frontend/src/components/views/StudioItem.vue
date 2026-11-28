@@ -256,7 +256,7 @@
         data-testid="studio-pics-menu"
         @contextmenu.prevent
         @mousedown.stop
-        @keydown="onMenuKeydown"
+        @keydown="onMenuKey"
       >
         <button type="button" role="menuitem" class="ctx-item" data-verb="remove" @click="runMenu(removeSelected)">
           <v-icon class="ctx-icon" aria-hidden="true">mdi-playlist-remove</v-icon>
@@ -453,6 +453,16 @@ function runMenu(verb) {
   verb();
 }
 
+// Tab leaves the menu for the picture it was opened on, as the card menu's.
+function onMenuKey(event) {
+  if (event.key === "Tab") {
+    event.preventDefault();
+    closeMenu({ refocus: true });
+    return;
+  }
+  onMenuKeydown(event);
+}
+
 function onOutside() {
   closeMenu();
 }
@@ -548,8 +558,12 @@ function onKey(event) {
   // Esc closes the menu, then clears the selection, and only then the lightbox.
   // With the menu open its keys are its own: no stepping or deleting under it.
   if (menu.value && event.key !== "Escape") return;
-  if (event.key === "Escape" && menu.value) closeMenu({ refocus: true });
-  else if (event.key === "Escape" && selected.value.length) selected.value = [];
+  if (event.key === "Escape" && menu.value) {
+    // The menu's alone: no other Esc handler closes what is under it.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeMenu({ refocus: true });
+  } else if (event.key === "Escape" && selected.value.length) selected.value = [];
   else if (event.key === "Delete" && selected.value.length) deleteSelected();
   else if (event.key === "Escape") emit("close");
   else if (event.key === "ArrowLeft") step(-1);

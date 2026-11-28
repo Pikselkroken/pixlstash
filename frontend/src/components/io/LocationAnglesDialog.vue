@@ -338,7 +338,7 @@
           :variant="source === zoomedId ? 'secondary' : 'primary'"
           :disabled="source === zoomedId"
           data-testid="la-zoom-choose"
-          @click="source = zoomedId"
+          @click="pickSource(zoomedId)"
           >{{ source === zoomedId ? "Chosen" : "Start from this one" }}</AppButton
         >
       </template>
@@ -735,13 +735,22 @@ function close() {
   discard();
 }
 
-/** Stop the draw under way: its runs end, and the dialog is back where it was. */
+/** Stop the draw under way: its runs end, the frames it took out of its
+ * video go to the Scrapheap (they are pictures of the library until a Use
+ * deletes them), and the dialog is back where it was. */
 function stop() {
   drawing += 1;
   for (const key of liveKeys) {
     stopRun(key).catch((e) => console.warn("Couldn't stop a More angles run", key, e));
   }
   liveKeys = [];
+  if (frameIds.length) {
+    const frames = frameIds;
+    deletePictures(frames).catch((e) =>
+      console.warn("Couldn't send a stopped draw's frames to the Scrapheap", frames, e),
+    );
+    frameIds = [];
+  }
   working.value = false;
   error.value = "";
   phase.value = isNew.value && !candidates.value.length ? "place" : "describe";
@@ -758,7 +767,9 @@ watch(
   () => drawStore.epoch,
   () => {
     // What it made is let go first, so the stop has nothing to report back
-    // into the store the reset has just emptied.
+    // into the store the reset has just emptied, nor frames to delete in a
+    // library they are not of.
+    frameIds = [];
     candidates.value = [];
     views.value = [];
     kept.value = [];
