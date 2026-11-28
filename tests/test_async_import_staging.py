@@ -11,6 +11,7 @@ scoped token is denied (403) and the owner is allowed (200 / works) - over-block
 the owner would be its own regression.
 """
 
+import asyncio
 import io
 import os
 import tempfile
@@ -23,6 +24,7 @@ from PIL import Image
 from sqlmodel import select
 
 from pixlstash.db_models import Character, Picture, PictureSet, PictureSetMember, Tag
+from pixlstash.routes.pictures import _import as import_routes
 from pixlstash.server import Server
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
@@ -478,6 +480,64 @@ def test_staging_zip_imports_all_images(owner_server):
     status = _wait_for_stage(client, staging_id, target=("completed",))
     assert status["imported_count"] == 3, status
     assert srv.vault.db.run_task(lambda s: s.query(Picture).count()) == 3
+
+
+def _loop_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_staging_zip_unpacks_off_the_event_loop(owner_server, monkeypatch):
+    """A multi-GB zip takes minutes to unpack; on the loop it froze the app."""
+    _srv, client = owner_server
+    zip_data = _zip_bytes({"a.png": _png_bytes()})
+    on_loop = []
+    real_zipfile = zipfile.ZipFile
+
+    def recording_zipfile(*args, **kwargs):
+        on_loop.append(_loop_running())
+        return real_zipfile(*args, **kwargs)
+
+    monkeypatch.setattr(import_routes.zipfile, "ZipFile", recording_zipfile)
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("bundle.zip", zip_data))],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["staged"] == 1, r.json()
+    assert on_loop == [False]
+
+
+def test_staging_zip_stops_unpacking_when_cancelled(owner_server, monkeypatch):
+    """A cancel during extraction stops it instead of filling a removed dir."""
+    srv, client = owner_server
+    zip_data = _zip_bytes(
+        {"one.png": _png_bytes((1, 2, 3)), "two.png": _png_bytes((4, 5, 6))}
+    )
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    real_zipfile = zipfile.ZipFile
+
+    def cancelling_zipfile(*args, **kwargs):
+        srv.staging_sessions[staging_id]["stage"] = "cancelled"
+        return real_zipfile(*args, **kwargs)
+
+    monkeypatch.setattr(import_routes.zipfile, "ZipFile", cancelling_zipfile)
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("bundle.zip", zip_data))],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["staged"] == 0, r.json()
+    assert r.json()["skipped"] == ["bundle.zip"]
+    assert not os.path.isdir(srv.staging_sessions[staging_id]["staging_dir"])
 
 
 def test_staging_txt_sidecar_sets_tags(owner_server):
