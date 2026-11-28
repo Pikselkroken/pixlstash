@@ -685,6 +685,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                        |
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
+| POST   | /api/v1/item-sheets/prompt/embellish                                          | characters      | Rewrite a prompt richer with a workflow's own LLM             |
 | POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
 | POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
 | POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
@@ -13920,7 +13921,14 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   /item-sheets/shots/things` offers what each view could show: Florence-2's
   `<DENSE_REGION_CAPTION>` over the chosen picture (`thing_phrases`: biggest
   box first, each label once, with its side, none filling most of the
-  picture), run in the request.
+  picture), run in the request. `POST /item-sheets/prompt/embellish`
+  rewrites a prompt richer with the LLM a workflow already loads as its text
+  encoder (`services/prompt_llm.py`): the client sends that workflow's
+  CLIPLoader node, and the server submits it with ComfyUI's Generate Text
+  (`TextGenerateV2`, the rewrite instruction as its system prompt) and
+  *Preview as Text*, waits on the history and answers with the preview's
+  text. Only `CLIPLoader`/`CLIPLoaderGGUF` and their own string inputs
+  reach the graph.
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
   design proposes): a shot is one run of one workflow.
 

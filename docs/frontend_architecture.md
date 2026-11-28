@@ -8885,6 +8885,13 @@ inside its lightboxes, so the rail is empty on `/studio`.
   true})`). The video model may film fewer shots than asked; the server
   returns the ones it made and the dialog numbers them rather than guess
   which preset went missing.
+  The wide pictures' prompt is a field: *Write it from the place* fills it
+  from the server, the owner may change it, and *Draw 4 again* on the picture
+  step draws four new ones from it in place of those shown. *Embellish*
+  appears when the wide workflow's text encoder is a chat LLM (its exported
+  CLIPLoader's `type` is in `LLM_TYPES`) and rewrites the field with it. At
+  the end the picture started from leads the row of views, and the zoom
+  steps from it through them, with Keep in the pop-out.
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always

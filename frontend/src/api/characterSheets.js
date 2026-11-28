@@ -149,3 +149,17 @@ export async function locationPictureThings(pictureId) {
     apiClient.post("/item-sheets/shots/things", { picture_id: pictureId }),
   );
 }
+
+/**
+ * A prompt rewritten richer by the LLM a workflow already loads as its text
+ * encoder (its CLIPLoader node), run on ComfyUI's Generate Text node.
+ *
+ * @param {{class_type: string, inputs: Object<string, string>}} loader
+ * @param {string} prompt
+ * @returns {Promise<{prompt: string}>}
+ */
+export async function embellishPrompt(loader, prompt) {
+  return unwrap(
+    apiClient.post("/item-sheets/prompt/embellish", { loader, prompt }, { timeout: 0 }),
+  );
+}

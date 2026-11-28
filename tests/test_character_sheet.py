@@ -18,7 +18,7 @@ from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
-from pixlstash.services import workflow_run_service
+from pixlstash.services import prompt_llm, workflow_run_service
 from pixlstash.services.comfyui_recipe_service import plan_lora_insertion
 from pixlstash.services.prompt_assist import assemble
 from pixlstash.services.workflow_hash import reduce_api_graph
@@ -1649,6 +1649,61 @@ def test_prompt_route_hands_out_the_canvas(client):
         json={"description": "x", "proportions": "giant"},
     )
     assert giant.status_code == 422
+
+
+def test_a_workflow_llm_rewrites_a_prompt_through_generate_text(client, monkeypatch):
+    sent = {}
+
+    def submit(base_url, graph, client_id=None):
+        sent["graph"] = graph
+        return {"prompt_id": "p1"}
+
+    answers = iter(
+        [
+            {},  # still queued
+            {
+                "p1": {
+                    "status": {"status_str": "success"},
+                    "outputs": {"3": {"text": ["  A richer pub.  "]}},
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(prompt_llm, "_submit_comfyui_prompt", submit)
+    monkeypatch.setattr(prompt_llm, "_fetch_comfyui_history", lambda *_: next(answers))
+    monkeypatch.setattr(prompt_llm, "POLL_SECONDS", 0)
+    loader = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen3vl.safetensors", "type": "minimax", "evil": "x"},
+    }
+    resp = client.post(
+        f"{API_PREFIX}/item-sheets/prompt/embellish",
+        json={"loader": loader, "prompt": "a pub"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"prompt": "A richer pub."}
+    graph = sent["graph"]
+    # Only the loader's own inputs travel; the words go to Generate Text with
+    # the rewrite instruction as its system prompt, read back from a preview.
+    assert graph["1"] == {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen3vl.safetensors", "type": "minimax"},
+    }
+    assert graph["2"]["class_type"] == "TextGenerateV2"
+    assert graph["2"]["inputs"]["clip"] == ["1", 0]
+    assert graph["2"]["inputs"]["prompt"] == "a pub"
+    assert graph["2"]["inputs"]["system_prompt"] == prompt_llm.EMBELLISH_INSTRUCTION
+    assert graph["3"] == {"class_type": "PreviewAny", "inputs": {"source": ["2", 0]}}
+
+    for bad in (
+        {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+        {"class_type": "CLIPLoader", "inputs": {"type": "minimax"}},
+    ):
+        refused = client.post(
+            f"{API_PREFIX}/item-sheets/prompt/embellish",
+            json={"loader": bad, "prompt": "a pub"},
+        )
+        assert refused.status_code == 409, (bad, refused.text)
 
 
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):

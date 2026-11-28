@@ -26,7 +26,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from pixlstash.event_types import EventType
-from pixlstash.services import character_sheet, location_angles
+from pixlstash.routes.comfyui import _comfyui_url
+from pixlstash.services import character_sheet, location_angles, prompt_llm
 
 # A run draws at most a handful of sheets; "Draw more" adds to them.
 MAX_SHEETS = 32
@@ -292,6 +293,20 @@ class LocationShotsRequest(BaseModel):
     shots: int = Field(ge=1, le=4, description="New shots, the picture's own left out.")
 
 
+class LlmLoader(BaseModel):
+    class_type: str = Field(max_length=100)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+class EmbellishRequest(BaseModel):
+    loader: LlmLoader
+    prompt: str = Field(min_length=1, max_length=4000)
+
+
+class Embellished(BaseModel):
+    prompt: str
+
+
 class PictureThingsRequest(BaseModel):
     picture_id: int
 
@@ -538,6 +553,29 @@ def create_router(server) -> APIRouter:
             },
         )
         return UsedSheets(picture_ids=frame_ids)
+
+    @router.post(
+        "/item-sheets/prompt/embellish",
+        summary="Rewrite a prompt richer with a workflow's own LLM",
+        description=(
+            "Runs the text encoder *loader* loads (a workflow's CLIPLoader whose "
+            "encoder is a chat LLM, such as MiniMax H3's Qwen3-VL) through "
+            "ComfyUI's Generate Text node, asked to rewrite *prompt* richer "
+            "while keeping every fact it gives, and answers with the rewrite. "
+            "409 when the loader cannot run as an LLM or ComfyUI wrote "
+            "nothing; 502 when ComfyUI refused or stopped answering."
+        ),
+        response_model=Embellished,
+    )
+    def embellish_prompt(request: Request, payload: EmbellishRequest):
+        base_url = _comfyui_url(server.auth.get_user_for_request(request))
+        try:
+            text = prompt_llm.embellish(
+                base_url, payload.loader.model_dump(), payload.prompt
+            )
+        except prompt_llm.PromptLlmUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Embellished(prompt=text)
 
     @router.post(
         "/item-sheets/shots/things",

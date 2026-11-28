@@ -30,6 +30,8 @@ const api = vi.hoisted(() => ({
   stopRun: vi.fn(),
   locationPictureThings: vi.fn(),
   listPicturesByIds: vi.fn(),
+  embellishPrompt: vi.fn(),
+  exportWorkflow: vi.fn(),
 }));
 vi.mock("../../api/characterSheets", () => ({
   buildLocationShotsPrompt: api.buildLocationShotsPrompt,
@@ -37,6 +39,7 @@ vi.mock("../../api/characterSheets", () => ({
   takeLocationShots: api.takeLocationShots,
   checkLocationShots: api.checkLocationShots,
   locationPictureThings: api.locationPictureThings,
+  embellishPrompt: api.embellishPrompt,
 }));
 vi.mock("../../api/pictureSets", () => ({
   bulkAddPicturesToSet: api.bulkAddPicturesToSet,
@@ -51,6 +54,7 @@ vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumb/${id}.webp`,
 }));
 vi.mock("../../api/workflows", () => ({
+  exportWorkflow: api.exportWorkflow,
   getRunOutcome: api.getRunOutcome,
   getWorkflowCard: api.getWorkflowCard,
   listWorkflowCards: api.listWorkflowCards,
@@ -379,6 +383,118 @@ describe("More angles", () => {
     expect(api.deletePictures).toHaveBeenCalledWith([41]);
   });
 
+  /** A new location's dialog with the wide workflow ready; `llmType` is its
+   * text encoder loader's type. */
+  function newLocation({ llmType = "minimax" } = {}) {
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:wide", name: "MiniMax H3 Image T2I (PixlStash)" },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" },
+        { id: "manual:restore", name: "MiniMax H3 Restore a Frame (PixlStash)" },
+      ],
+    });
+    api.exportWorkflow.mockResolvedValue({
+      workflow: {
+        4: { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl.safetensors", type: llmType, junk: "x" } },
+        5: { class_type: "VAELoader", inputs: { vae_name: "vae.safetensors" } },
+      },
+    });
+    api.getWorkflowCard.mockResolvedValue({
+      card: { defaults: [{ slot_label: "core:w", input_name: "width" }] },
+    });
+    api.buildSheetPrompt.mockResolvedValue({ prompt: "WIDE", negative: "NEG", width: 2560, height: 1440 });
+    const shotRuns = api.runWorkflowCard.getMockImplementation();
+    let round = 0;
+    api.runWorkflowCard.mockImplementation(async (body) => {
+      if (body.workflow_id !== "manual:wide") return shotRuns(body);
+      round += 1;
+      return { prompts: [1, 2].map((n) => ({ run_id: `run-w${round}-${n}` })) };
+    });
+    Object.assign(OUTPUTS, {
+      "run-w1-1": [41], "run-w1-2": [42], "run-w2-1": [51], "run-w2-2": [52],
+    });
+    return mount(LocationAnglesDialog, { props: { open: true, location: null } });
+  }
+
+  it("shows the wide pictures' prompt to change, and draws with the changed one", async () => {
+    const wrapper = newLocation();
+    await flushPromises();
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a pub");
+    await wrapper.find('[data-testid="la-write"]').trigger("click");
+    await flushPromises();
+    const field = wrapper.find('[data-testid="la-prompt"] textarea');
+    expect(field.element.value).toBe("WIDE");
+    await field.setValue("WIDE, with green leather booths");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+    expect(api.runWorkflowCard.mock.calls[0][0].prompt).toBe("WIDE, with green leather booths");
+  });
+
+  it("draws four new wide pictures in place of the four shown, from the prompt as changed", async () => {
+    const wrapper = newLocation();
+    await flushPromises();
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a pub");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+    const ids = () => wrapper.findAll(".la-source img").map((i) => i.attributes("src"));
+    expect(ids()).toEqual(["/thumb/41.webp", "/thumb/42.webp"]);
+    // The prompt it drew with is the one shown.
+    const again = wrapper.find('[data-testid="la-prompt-again"] textarea');
+    expect(again.element.value).toBe("WIDE");
+    await again.setValue("WIDE at dusk");
+    await wrapper.find('[data-testid="la-wide-again"]').trigger("click");
+    await flushPromises();
+    expect(api.runWorkflowCard.mock.calls[1][0]).toMatchObject({ prompt: "WIDE at dusk", count: 4, hold: true });
+    expect(ids()).toEqual(["/thumb/51.webp", "/thumb/52.webp"]);
+    expect(wrapper.find('[data-testid="la-source-0"]').attributes("aria-checked")).toBe("true");
+  });
+
+  it("embellishes the prompt with the LLM the wide workflow encodes with, and only with one", async () => {
+    api.embellishPrompt.mockResolvedValue({ prompt: "A richer pub." });
+    const wrapper = newLocation();
+    await flushPromises();
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a pub");
+    await wrapper.find('[data-testid="la-embellish"]').trigger("click");
+    await flushPromises();
+    // Nothing written yet: the place's prompt first, then its rewrite.
+    expect(api.embellishPrompt).toHaveBeenCalledWith(
+      { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl.safetensors", type: "minimax" } },
+      "WIDE",
+    );
+    expect(wrapper.find('[data-testid="la-prompt"] textarea').element.value).toBe("A richer pub.");
+    wrapper.unmount();
+
+    const plain = newLocation({ llmType: "sd3" });
+    await flushPromises();
+    expect(plain.find('[data-testid="la-embellish"]').exists()).toBe(false);
+  });
+
+  it("shows the picture it started from beside the views, and zooms through them from it", async () => {
+    const wrapper = mountDialog();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    const original = wrapper.find('[data-testid="la-original"]');
+    expect(original.find("img").attributes("src")).toBe("/thumb/31.webp");
+    expect(original.text()).toContain("Started from");
+
+    await original.find('[data-testid="la-zoom-open"]').trigger("click");
+    await flushPromises();
+    const zoom = wrapper.findComponent(ZoomPopout);
+    expect(zoom.props("caption")).toBe("The picture you started from");
+    expect(zoom.props("hasNext")).toBe(true);
+    zoom.vm.$emit("next");
+    await flushPromises();
+    expect(zoom.props("src")).toBe("/media/601.png");
+    // Kept from the zoom, without leaving it.
+    document.body.querySelector('[data-testid="la-zoom-keep"]').click();
+    await flushPromises();
+    zoom.vm.$emit("close");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(30, [500, 603]);
+  });
+
   it("offers the 2×2 sheet instead of a new location's video", async () => {
     const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
     await wrapper.find('[data-testid="la-sheet"]').trigger("click");
@@ -400,7 +516,7 @@ describe("More angles", () => {
 
     expect(api.runWorkflowCard.mock.calls).toHaveLength(3); // the video and two restores
     expect(wrapper.find('[data-testid="la-count"]').text()).toContain("2 of the 3 views");
-    const names = wrapper.findAll(".la-view__foot").map((foot) => foot.text());
+    const names = wrapper.findAll(".la-view:not(.la-view--original) .la-view__foot").map((foot) => foot.text());
     expect(names).toEqual(["View 1", "View 2"]);
   });
 

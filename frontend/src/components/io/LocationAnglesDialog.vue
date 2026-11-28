@@ -26,6 +26,33 @@
           are filmed from the one you choose, so they all show the same place. Always
           empty, in plain daylight.
         </p>
+        <AppTextarea
+          v-model="widePrompt"
+          label="Prompt for the wide pictures"
+          :rows="4"
+          placeholder="Written from the place when you draw. Write it now to change it first."
+          data-testid="la-prompt"
+        />
+        <div class="la-prompt-tools">
+          <AppButton
+            size="sm"
+            :disabled="!description.trim() || embellishing"
+            data-testid="la-write"
+            @click="writePrompt"
+            >Write it from the place</AppButton
+          >
+          <AppButton
+            v-if="llm"
+            size="sm"
+            icon-left="auto-fix"
+            :loading="embellishing"
+            :disabled="!description.trim() && !widePrompt.trim()"
+            :tooltip="llmTip"
+            data-testid="la-embellish"
+            @click="embellish"
+            >Embellish</AppButton
+          >
+        </div>
       </template>
 
       <template v-else-if="phase === 'describe'">
@@ -66,6 +93,36 @@
             </div>
           </div>
         </section>
+        <details v-if="isNew" class="la-redo" data-testid="la-redo">
+          <summary>None looks right? Change the prompt and draw them again</summary>
+          <AppTextarea
+            v-model="widePrompt"
+            label="Prompt for the wide pictures"
+            :rows="4"
+            data-testid="la-prompt-again"
+          />
+          <div class="la-prompt-tools">
+            <AppButton
+              v-if="llm"
+              size="sm"
+              icon-left="auto-fix"
+              :loading="embellishing"
+              :disabled="!widePrompt.trim()"
+              :tooltip="llmTip"
+              data-testid="la-embellish-again"
+              @click="embellish"
+              >Embellish</AppButton
+            >
+            <AppButton
+              size="sm"
+              icon-left="refresh"
+              :disabled="!widePrompt.trim() || embellishing"
+              data-testid="la-wide-again"
+              @click="drawWide"
+              >Draw {{ WIDE_COUNT }} again</AppButton
+            >
+          </div>
+        </details>
         <AppTextarea
           v-model="layout"
           label="Where things are, seen from this picture"
@@ -149,19 +206,53 @@
           The video made {{ views.length }} of the {{ shots.length }} views asked for: the
           video model sometimes runs two shots together. Draw again for more.
         </p>
+        <!-- The picture they were filmed from leads the row, so each view is
+             judged against it; the zoom steps from it through the views. -->
         <div class="la-views">
-          <label
+          <div class="la-view la-view--original" data-testid="la-original">
+            <div class="la-tile">
+              <img :src="pictureThumbnailUrl(source)" alt="" @dblclick="openZoom(source)" />
+              <button
+                type="button"
+                class="la-mag"
+                :data-source="source"
+                aria-label="Zoom in on the picture you started from"
+                data-testid="la-zoom-open"
+                @click="openZoom(source)"
+              >
+                <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+              </button>
+            </div>
+            <span class="la-view__foot">Started from</span>
+          </div>
+          <div
             v-for="view in views"
             :key="view.restored_id"
             class="la-view"
             :class="{ 'la-view--bad': !view.ok }"
           >
-            <img :src="pictureThumbnailUrl(view.restored_id)" alt="" />
-            <span class="la-view__foot">
+            <div class="la-tile">
+              <img
+                :src="pictureThumbnailUrl(view.restored_id)"
+                alt=""
+                @dblclick="openZoom(view.restored_id)"
+              />
+              <button
+                type="button"
+                class="la-mag"
+                :data-source="view.restored_id"
+                :aria-label="`Zoom in on ${view.name}`"
+                data-testid="la-zoom-open"
+                @click="openZoom(view.restored_id)"
+              >
+                <v-icon size="16">mdi-magnify-plus-outline</v-icon>
+              </button>
+            </div>
+            <label class="la-view__foot">
               <input v-model="kept" type="checkbox" :value="view.restored_id" />
               {{ view.ok ? view.name : `${view.name} · ${view.reason}` }}
-            </span>
-          </label>
+            </label>
+          </div>
         </div>
         <p class="la-hint">
           <template v-if="isNew">
@@ -178,8 +269,8 @@
     <ZoomPopout
       :open="zoomedId != null"
       :src="zoomedId != null ? fullUrl(zoomedId) : ''"
-      :alt="zoomedId != null ? `Picture ${zoomPos + 1}` : ''"
-      :caption="zoomedId != null ? `Picture ${zoomPos + 1} of ${sources.length}` : ''"
+      :alt="zoomedId != null ? zoomCaption : ''"
+      :caption="zoomedId != null ? zoomCaption : ''"
       :has-prev="hasPrev"
       :has-next="hasNext"
       :entry="zoomEntry"
@@ -189,7 +280,14 @@
     >
       <template #actions>
         <AppButton
-          v-if="zoomedId != null"
+          v-if="zoomedId != null && phase === 'pick' && zoomedId !== source"
+          :variant="kept.includes(zoomedId) ? 'secondary' : 'primary'"
+          data-testid="la-zoom-keep"
+          @click="toggleKept(zoomedId)"
+          >{{ kept.includes(zoomedId) ? "Kept · drop it" : "Keep this view" }}</AppButton
+        >
+        <AppButton
+          v-else-if="zoomedId != null && phase === 'describe'"
           :variant="source === zoomedId ? 'secondary' : 'primary'"
           :disabled="source === zoomedId"
           data-testid="la-zoom-choose"
@@ -266,6 +364,7 @@ import {
   buildLocationShotsPrompt,
   buildSheetPrompt,
   checkLocationShots,
+  embellishPrompt,
   locationPictureThings,
   takeLocationShots,
 } from "../../api/characterSheets";
@@ -279,6 +378,7 @@ import {
   restoreScrapheap,
 } from "../../api/pictures";
 import {
+  exportWorkflow,
   getRunOutcome,
   getWorkflowCard,
   listWorkflowCards,
@@ -331,6 +431,21 @@ const LIGHTS = [
   "neon signs at night",
 ];
 const POLL_MS = 3000;
+// Text encoders that are chat LLMs, by their loader's type: ComfyUI's Generate
+// Text node can run them (MiniMax H3: Qwen3-VL; Qwen-Image, HunyuanImage,
+// OmniGen2, LongCat: Qwen2.5-VL; Z-Image and Lumina 2: Qwen3 or Gemma; FLUX.2:
+// Mistral or Qwen3).
+const LLM_LOADERS = new Set(["CLIPLoader", "CLIPLoaderGGUF"]);
+const LLM_TYPES = new Set([
+  "minimax",
+  "qwen_image",
+  "hunyuan_image",
+  "omnigen2",
+  "longcat_image",
+  "lumina2",
+  "flux2",
+  "ovis",
+]);
 
 const phase = ref("describe"); // place (new only) | describe | working | pick
 const source = ref(null);
@@ -346,6 +461,12 @@ const error = ref("");
 const working = ref(false);
 const views = ref([]);
 const kept = ref([]);
+// The wide pictures' prompt: written from the place, the owner's to change.
+const widePrompt = ref("");
+// The LLM the wide-picture workflow encodes with, when it is one:
+// `{ loader: {class_type, inputs}, name }`, else null.
+const llm = ref(null);
+const embellishing = ref(false);
 let videoId = null;
 let frameIds = [];
 // A new location's set once made: a Use that failed after it is retried
@@ -371,9 +492,24 @@ const placeDescription = computed(() =>
     : props.location?.description || props.location?.name || "",
 );
 
-// The pictures to start from, zoomed full size: the shared pop-out, stepping
-// through them in their order. Closing puts focus back on the zoom control.
-const sourceList = computed(() => sources.value);
+// Zoomed full size in the shared pop-out, stepping through them in order: the
+// pictures to start from, or at the end the one started from and its views,
+// so each view is compared with it. Closing refocuses the zoom control.
+const sourceList = computed(() =>
+  phase.value === "pick"
+    ? [source.value, ...views.value.map((v) => v.restored_id)]
+    : sources.value,
+);
+const zoomCaption = computed(() => {
+  if (phase.value !== "pick") return `Picture ${zoomPos.value + 1} of ${sources.value.length}`;
+  if (zoomedId.value === source.value) return "The picture you started from";
+  const view = views.value.find((v) => v.restored_id === zoomedId.value);
+  return view ? `${view.name}${view.ok ? "" : ` · ${view.reason}`}` : "";
+});
+
+function toggleKept(id) {
+  kept.value = kept.value.includes(id) ? kept.value.filter((k) => k !== id) : [...kept.value, id];
+}
 const {
   zoomedId,
   zoomEntry,
@@ -414,16 +550,22 @@ watch(source, async (id) => {
 
 // Each picture's format, for its full-size file; the thumbnail until known.
 const formats = ref({});
-watch(sources, async (ids) => {
+async function readFormats(ids, onlyDeleted) {
   if (!ids.length) return;
   try {
-    // A new location's pictures are held in the Scrapheap until one is used.
-    const rows = await listPicturesByIds(ids, { fields: "grid", onlyDeleted: isNew.value });
-    formats.value = Object.fromEntries((rows || []).map((r) => [r.id, r.format]));
+    const rows = await listPicturesByIds(ids, { fields: "grid", onlyDeleted });
+    formats.value = {
+      ...formats.value,
+      ...Object.fromEntries((rows || []).map((r) => [r.id, r.format])),
+    };
   } catch (e) {
     console.warn("Couldn't read the pictures' formats; zooming the thumbnails", ids, e);
   }
-}, { immediate: true });
+}
+// A new location's pictures are held in the Scrapheap until one is used, as
+// every restored view is until it is kept.
+watch(sources, (ids) => readFormats(ids, isNew.value), { immediate: true });
+watch(views, (list) => readFormats(list.map((v) => v.restored_id), true));
 
 function fullUrl(id) {
   const format = formats.value[id];
@@ -439,6 +581,8 @@ watch(
     name.value = "";
     description.value = "";
     candidates.value = [];
+    widePrompt.value = "";
+    if (isNew.value && !llm.value) findLlm();
     layout.value = "";
     light.value = "plain daylight";
     shots.value = [
@@ -523,9 +667,69 @@ async function start(body) {
   return (await startAll(body))[0];
 }
 
-/** A new location: draw its wide pictures, then choose one and its views. */
+/** The loader of the LLM the wide-picture workflow encodes its prompt with. */
+async function findLlm() {
+  try {
+    const { cards } = await listWorkflowCards();
+    const card = cards.find((c) => c.name === WIDE_WORKFLOW);
+    if (!card) return;
+    const { workflow } = await exportWorkflow(card.id);
+    const node = Object.values(workflow || {}).find(
+      (n) =>
+        LLM_LOADERS.has(n?.class_type) &&
+        LLM_TYPES.has(n?.inputs?.type) &&
+        typeof n?.inputs?.clip_name === "string",
+    );
+    if (!node) return;
+    const inputs = Object.fromEntries(
+      ["clip_name", "type", "device"]
+        .filter((k) => typeof node.inputs[k] === "string")
+        .map((k) => [k, node.inputs[k]]),
+    );
+    llm.value = { loader: { class_type: node.class_type, inputs }, name: inputs.clip_name };
+  } catch (e) {
+    console.warn("Couldn't find an LLM in the wide-picture workflow; no Embellish", e);
+  }
+}
+
+const llmTip = computed(() =>
+  llm.value
+    ? `Rewrites the prompt richer with ${llm.value.name}, the LLM ${WIDE_WORKFLOW} reads its prompt with. Every fact in it is kept.`
+    : "",
+);
+
+/** The server's prompt for one wide picture of the place, into the field. */
+async function writePrompt() {
+  const wide = await buildSheetPrompt({
+    kind: "location",
+    description: description.value.trim(),
+    single: true,
+  });
+  widePrompt.value = wide.prompt;
+  return wide;
+}
+
+async function embellish() {
+  if (!llm.value || embellishing.value) return;
+  embellishing.value = true;
+  error.value = "";
+  try {
+    if (!widePrompt.value.trim()) await writePrompt();
+    const { prompt } = await embellishPrompt(llm.value.loader, widePrompt.value);
+    if (alive) widePrompt.value = prompt;
+  } catch (e) {
+    console.warn("Embellishing the wide pictures' prompt failed", llm.value?.name, e);
+    error.value = `Couldn't embellish the prompt. ${errorMessage(e, "Please try again.")}`;
+  } finally {
+    embellishing.value = false;
+  }
+}
+
+/** A new location: draw its wide pictures, then choose one and its views.
+ * Again from the pictures step: four new ones in place of the four shown. */
 async function drawWide() {
   if (working.value || !description.value.trim()) return;
+  const again = candidates.value.length > 0;
   working.value = true;
   error.value = "";
   phase.value = "working";
@@ -537,12 +741,15 @@ async function drawWide() {
       getWorkflowCard(card.id),
       buildSheetPrompt({ kind: "location", description: description.value.trim(), single: true }),
     ]);
+    // The owner's prompt when they wrote or changed one; shown either way.
+    const prompt = widePrompt.value.trim() || wide.prompt;
+    widePrompt.value = prompt;
     const sizes = (full?.defaults || []).filter((d) => ["width", "height"].includes(d.input_name));
     if (!sizes.length) throw new Error(`${WIDE_WORKFLOW} has no picture size to set.`);
     status.value = `Drawing ${WIDE_COUNT} wide pictures…`;
     const keys = await startAll({
       workflow_id: card.id,
-      prompt: wide.prompt,
+      prompt,
       negative: wide.negative,
       values: sizes.map((d) => ({
         slot_label: d.slot_label,
@@ -554,8 +761,11 @@ async function drawWide() {
       hold: true,
       label: `New location · ${placeName.value}`,
     });
-    candidates.value = (await finished(keys)).map((ids) => ids.at(-1)).filter((id) => id != null);
-    if (!candidates.value.length) throw new Error("The runs made no picture.");
+    const drawn = (await finished(keys)).map((ids) => ids.at(-1)).filter((id) => id != null);
+    if (!drawn.length) throw new Error("The runs made no picture.");
+    // The four shown before stay in the Scrapheap; one drawn from goes back.
+    sendBack([...broughtBack]);
+    candidates.value = drawn;
     source.value = candidates.value[0];
     phase.value = "describe";
   } catch (e) {
@@ -566,7 +776,7 @@ async function drawWide() {
     if (!alive || !props.open) return;
     console.warn("Drawing a new location's wide pictures failed", e);
     error.value = `Couldn't draw the wide pictures. ${errorMessage(e, "Please try again.")}`;
-    phase.value = "place";
+    phase.value = again ? "describe" : "place";
   } finally {
     working.value = false;
   }
@@ -920,7 +1130,7 @@ async function use() {
 
 .la-views {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -928,7 +1138,37 @@ async function use() {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+.la-view__foot {
   cursor: pointer;
+}
+
+.la-view--original .la-view__foot {
+  cursor: default;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.la-prompt-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.la-redo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.la-redo > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+}
+
+.la-redo[open] > summary {
+  margin-bottom: var(--space-2);
 }
 
 .la-view img {

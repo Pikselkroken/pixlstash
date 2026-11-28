@@ -1579,6 +1579,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take a location's new views out of its shots video; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/item-sheets/prompt/embellish"): RoutePolicy(
+        _OWNER,
+        justification="Run a workflow's LLM text encoder on the owner's ComfyUI to rewrite a prompt; POST blocked for READ tokens; owner only",
+    ),
     ("POST", "/api/v1/item-sheets/shots/things"): RoutePolicy(
         _OWNER,
         justification="Name the things in a location's picture; POST blocked for READ tokens; owner only",
