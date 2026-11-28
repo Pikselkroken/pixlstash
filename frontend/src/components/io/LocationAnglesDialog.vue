@@ -93,6 +93,14 @@
             </div>
           </div>
         </section>
+        <p
+          v-if="isNew && candidates.length < WIDE_COUNT"
+          class="la-hint"
+          data-testid="la-wide-short"
+        >
+          {{ candidates.length }} of the {{ WIDE_COUNT }} wide pictures came back; the
+          other runs made nothing. Draw them again below for more.
+        </p>
         <details v-if="isNew" class="la-redo" data-testid="la-redo">
           <summary>None looks right? Change the prompt and draw them again</summary>
           <AppTextarea

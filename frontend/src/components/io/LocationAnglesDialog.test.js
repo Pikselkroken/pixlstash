@@ -451,6 +451,8 @@ describe("More angles", () => {
     await flushPromises();
     const ids = () => wrapper.findAll(".la-source img").map((i) => i.attributes("src"));
     expect(ids()).toEqual(["/thumb/41.webp", "/thumb/42.webp"]);
+    // Two of the four asked for: said, not left to be noticed.
+    expect(wrapper.find('[data-testid="la-wide-short"]').text()).toContain("2 of the 4");
     // The prompt it drew with is the one shown.
     const again = wrapper.find('[data-testid="la-prompt-again"] textarea');
     expect(again.element.value).toBe("WIDE");
