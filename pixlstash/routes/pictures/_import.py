@@ -34,7 +34,11 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.startup_permissions import makedirs_private
-from pixlstash.services import operation_log_service, scrapheap_service
+from pixlstash.services import (
+    import_dedup_service,
+    operation_log_service,
+    scrapheap_service,
+)
 from pixlstash.tasks import TaskType
 from pixlstash.tasks.picture_import_task import PictureImportTask
 from pixlstash.db_models.tag import (
@@ -609,14 +613,17 @@ def register_routes(router, server):
                     _mark_stage("persisting_new_pictures")
 
                     def import_task(session):
-                        session.add_all(new_pictures)
-                        session.flush()
-                        for pic in new_pictures:
+                        # A file the library scan indexed while this import
+                        # was still writing keeps the scan's row (§10).
+                        fresh = import_dedup_service.insert_or_adopt_in_session(
+                            session, new_pictures
+                        )
+                        for pic in fresh:
                             session.add(
                                 Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id)
                             )
                         session.commit()
-                        for pic in new_pictures:
+                        for pic in fresh:
                             session.refresh(pic)
                         return new_pictures
 

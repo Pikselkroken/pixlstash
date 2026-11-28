@@ -1704,12 +1704,15 @@ def _import_comfyui_outputs(
 
     def import_task(session):
         if new_pictures:
-            session.add_all(new_pictures)
-            session.flush()
-            for pic in new_pictures:
+            # A file the library scan indexed while this import was still
+            # writing keeps the scan's row (``insert_or_adopt_in_session``).
+            fresh = import_dedup_service.insert_or_adopt_in_session(
+                session, new_pictures
+            )
+            for pic in fresh:
                 session.add(Tag(tag=TAG_PENDING_SENTINEL, picture_id=pic.id))
             session.commit()
-            for pic in new_pictures:
+            for pic in fresh:
                 session.refresh(pic)
         return new_pictures
 

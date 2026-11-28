@@ -6256,7 +6256,15 @@ and updates `file_path` on the existing row instead.
   a copy-then-delete can still be paired. A rename keeps the mtime and is
   followed at once. Both the scan and the local-import commit also re-check the
   path inside their insert transaction, the one place their check-then-insert
-  cannot interleave, so whichever lands first owns the row.
+  cannot interleave, so whichever lands first owns the row. The settle window
+  only covers an import that saves its row within `_ROOT_SETTLE_S` of writing the
+  file. The staged import (`PictureImportTask`) therefore saves its rows in
+  batches as it goes (`_INSERT_BATCH` pictures or `_INSERT_EVERY_S` seconds),
+  not once after a run that can last an hour. Every import insert (staged,
+  one-shot, ComfyUI) goes through
+  `import_dedup_service.insert_or_adopt_in_session`, which re-checks the paths
+  the same way: a file the scan indexed first keeps the scan's row, and the
+  import adopts that row's id for its project, set and character.
   Removals are only ever believed for a subtree the walk actually read: a
   directory it could not list, a directory symlink it would not follow, a pruned
   folder and another reference folder's root all go into `unscanned_roots`, and

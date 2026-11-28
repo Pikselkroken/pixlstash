@@ -64,6 +64,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.sql_chunking import chunked
 
 
 logger = get_logger(__name__)
@@ -307,8 +308,8 @@ def stamp_full_sha(
     picture.full_sha_stat = stat_signature(st)
 
 
-def store_full_shas_in_session(session: Session, learned: LearnedShas) -> None:
-    """Write learned ``{picture id: (full sha, signature)}`` in one statement."""
+def _update_full_shas(session: Session, learned: LearnedShas) -> None:
+    """Write ``{picture id: (full sha, signature)}`` in one statement, uncommitted."""
     if not learned:
         return
     session.exec(
@@ -318,7 +319,68 @@ def store_full_shas_in_session(session: Session, learned: LearnedShas) -> None:
             for picture_id, (sha, signature) in learned.items()
         ],
     )
+
+
+def store_full_shas_in_session(session: Session, learned: LearnedShas) -> None:
+    """Write learned ``{picture id: (full sha, signature)}`` in one statement."""
+    if not learned:
+        return
+    _update_full_shas(session, learned)
     session.commit()
+
+
+def insert_or_adopt_in_session(
+    session: Session, pictures: list[Picture]
+) -> list[Picture]:
+    """Insert new pictures, adopting the row of any whose file already has one.
+
+    An import writes each new file before it inserts that file's row, and the
+    library root scan indexes any file that has sat there past its settle window
+    without one (``reference_folder_scan_task._ROOT_SETTLE_S``). Inserting the
+    import's own row after the scan got there would give one file two pictures.
+    So a picture whose ``file_path`` is already taken is not inserted: it takes
+    that row's id, so the caller's project, set and character still apply to
+    it, and its full hash is stored on that row.
+
+    Args:
+        session: The writer session; flushed here, committed by the caller.
+        pictures: Unsaved pictures, one per new file.
+
+    Returns:
+        The pictures actually inserted. Adopted ones carry the existing id.
+    """
+    paths = [p.file_path for p in pictures if p.file_path]
+    taken: dict[str, int] = {}
+    for chunk in chunked(paths):
+        taken.update(
+            session.exec(
+                select(Picture.file_path, Picture.id).where(
+                    Picture.file_path.in_(chunk)
+                )
+            ).all()
+        )
+    fresh = [p for p in pictures if p.file_path not in taken]
+    adopted = [p for p in pictures if p.file_path in taken]
+    if adopted:
+        for picture in adopted:
+            picture.id = taken[picture.file_path]
+        logger.info(
+            "Import: %d new file(s) were indexed by the library scan before the "
+            "import saved them; using those picture(s) %s instead of a second row.",
+            len(adopted),
+            sorted(p.id for p in adopted)[:20],
+        )
+        _update_full_shas(
+            session,
+            {
+                p.id: (p.full_sha, p.full_sha_stat)
+                for p in adopted
+                if p.full_sha and p.full_sha_stat
+            },
+        )
+    session.add_all(fresh)
+    session.flush()
+    return fresh
 
 
 def save_full_shas(db, learned: LearnedShas) -> None:

@@ -1,6 +1,7 @@
 import os
 import shutil
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,6 +26,15 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 
 logger = get_logger(__name__)
+
+# New pictures are saved in batches while the import runs, not once at the end.
+# Each file is written to the library as it is built, and the library root scan
+# indexes any file that has sat there past its settle window without a row
+# (``reference_folder_scan_task._ROOT_SETTLE_S``, 60 s), so rows held back for
+# a long import raced it. A batch is saved at this many pictures or this many
+# seconds after its first, whichever comes first.
+_INSERT_BATCH = 32
+_INSERT_EVERY_S = 10.0
 
 
 def _sidecar_stem(name: str) -> str:
@@ -174,7 +184,11 @@ class PictureImportTask(BaseTask):
         )
 
     def _run_task(self):
-        new_pictures: list[Picture] = []
+        # New pictures built but not yet saved, and when the first was built.
+        pending: list[Picture] = []
+        pending_since = 0.0
+        built_count = 0
+        imported_ids: list[int] = []
         duplicate_count = 0
         scrapheaped_count = 0
         failed_count = 0
@@ -184,9 +198,9 @@ class PictureImportTask(BaseTask):
         # arithmetic): several staged copies of one content name one id once.
         scrapheaped_picture_ids: list[int] = []
         seen_scrapheaped_ids: set[int] = set()
-        # Content hashes already accepted this batch. The DB dedupe below only
-        # catches files already committed; the batch is committed after the
-        # loop, so two byte-identical staged files would both pass the DB check.
+        # Content hashes already accepted this run. The DB dedupe below only
+        # catches files already committed; pictures are saved in batches, so two
+        # byte-identical staged files in one batch would both pass the DB check.
         # Track them here so an intra-batch duplicate is counted, not imported.
         seen_fingerprints: set[tuple[int, str]] = set()
         # Library-file full hashes this run had to read to confirm a match,
@@ -210,6 +224,12 @@ class PictureImportTask(BaseTask):
             )
 
         for index, entry in enumerate(self._staged_files):
+            if pending and (
+                len(pending) >= _INSERT_BATCH
+                or time.monotonic() - pending_since >= _INSERT_EVERY_S
+            ):
+                imported_ids.extend(self._insert_batch(pending))
+                pending = []
             if self._stop_event.is_set():
                 # Count the untouched tail explicitly. The buckets have to sum
                 # to the staged total on a cancelled run too, and deriving that
@@ -330,7 +350,10 @@ class PictureImportTask(BaseTask):
                 import_dedup_service.stamp_full_sha(
                     pic, fingerprint, self._db.image_root
                 )
-                new_pictures.append(pic)
+                if not pending:
+                    pending_since = time.monotonic()
+                pending.append(pic)
+                built_count += 1
                 seen_fingerprints.add(intra_batch_key)
                 self._record_outcome(entry, "new")
             except Exception as exc:
@@ -346,40 +369,8 @@ class PictureImportTask(BaseTask):
             finally:
                 self._processed_count += 1
 
-        imported_ids: list[int] = []
-        if new_pictures:
-            sidecar_tags_by_stem = self._sidecar_tags_by_stem
-
-            def insert_pictures(session: Session, pictures: list[Picture]):
-                session.add_all(pictures)
-                session.flush()
-                for pic in pictures:
-                    # Apply sidecar caption tags when the picture matches one by
-                    # basename stem; otherwise seed the pending sentinel so the
-                    # tagger picks it up (mirrors WatchFolderImportTask).
-                    tags = sidecar_tags_by_stem.get(
-                        _sidecar_stem(pic.original_file_name or "")
-                    )
-                    if tags:
-                        for tag_str in tags:
-                            session.add(Tag(picture_id=pic.id, tag=tag_str))
-                    else:
-                        session.add(Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL))
-                session.commit()
-                for pic in pictures:
-                    session.refresh(pic)
-                return [pic.id for pic in pictures if pic.id is not None]
-
-            imported_ids = self._db.run_task(
-                insert_pictures,
-                new_pictures,
-                priority=DBPriority.IMMEDIATE,
-            )
-
-            if imported_ids:
-                self._apply_project(imported_ids)
-                self._apply_set(imported_ids)
-                self._apply_character(imported_ids)
+        if pending:
+            imported_ids.extend(self._insert_batch(pending))
 
         import_dedup_service.save_full_shas(self._db, learned)
 
@@ -439,7 +430,7 @@ class PictureImportTask(BaseTask):
                 cancelled_count,
                 bucket_total,
                 self._total_count,
-                len(new_pictures),
+                built_count,
             )
         return {
             "staging_id": self._staging_id,
@@ -453,6 +444,48 @@ class PictureImportTask(BaseTask):
             "candidate_count": self._total_count,
             "origin_client_id": self._origin_client_id,
         }
+
+    def _insert_batch(self, pictures: list[Picture]) -> list[int]:
+        """Save one batch of new pictures and give them the drop targets.
+
+        A picture whose file the library scan already indexed is not saved
+        again; it takes that row (``import_dedup_service.insert_or_adopt_in_session``).
+
+        Args:
+            pictures: The batch's unsaved pictures.
+
+        Returns:
+            The batch's picture ids, adopted ones included.
+        """
+        sidecar_tags_by_stem = self._sidecar_tags_by_stem
+
+        def insert_pictures(session: Session, batch: list[Picture]) -> list[int]:
+            fresh = import_dedup_service.insert_or_adopt_in_session(session, batch)
+            for pic in fresh:
+                # Apply sidecar caption tags when the picture matches one by
+                # basename stem; otherwise seed the pending sentinel so the
+                # tagger picks it up (mirrors WatchFolderImportTask).
+                tags = sidecar_tags_by_stem.get(
+                    _sidecar_stem(pic.original_file_name or "")
+                )
+                if tags:
+                    for tag_str in tags:
+                        session.add(Tag(picture_id=pic.id, tag=tag_str))
+                else:
+                    session.add(Tag(picture_id=pic.id, tag=TAG_PENDING_SENTINEL))
+            session.commit()
+            for pic in fresh:
+                session.refresh(pic)
+            return [pic.id for pic in batch if pic.id is not None]
+
+        ids = self._db.run_task(
+            insert_pictures, pictures, priority=DBPriority.IMMEDIATE
+        )
+        if ids:
+            self._apply_project(ids)
+            self._apply_set(ids)
+            self._apply_character(ids)
+        return ids
 
     def _apply_project(self, imported_ids: list[int]) -> None:
         """Add imported pictures to the drop target project (mirrors the
