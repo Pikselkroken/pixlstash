@@ -711,6 +711,14 @@ function closeAngles() {
 
 <style scoped src="./SidebarNav.css"></style>
 <style scoped>
+/* The scope dropdown is this workspace's header slot, so it takes the slot's
+   height and top edge, not the 32px framed band it wears inside Media's list;
+   otherwise a switch to Studio moves the sidebar's top rule. */
+.studio-sidebar > .scope-slot {
+  height: var(--sidebar-slot-h);
+  border-top: 0;
+}
+
 .studio-sidebar__list {
   flex: 1;
   min-height: 0;
