@@ -1352,6 +1352,17 @@ def register_routes(router, server):
             return added > 0
 
         for upload_index, upload in enumerate(file):
+            if session["stage"] != "staging":
+                # Cancelled meanwhile (a zip's unpack noticed and removed the
+                # dir): the rest of this request has nowhere to go.
+                logger.info(
+                    "Staging %s: session stopped (stage=%s); skipping the "
+                    "request's remaining %d upload(s)",
+                    staging_id,
+                    session["stage"],
+                    len(file) - upload_index,
+                )
+                break
             current_key = keys[upload_index] if upload_index < len(keys) else None
             if not upload.filename:
                 continue
@@ -1631,7 +1642,15 @@ def register_routes(router, server):
         # this task, not discard the staging dir it is about to read.
         session["task"] = task
         session["stage"] = "importing"
-        task_id = server.vault.submit_task(task)
+        try:
+            task_id = server.vault.submit_task(task)
+        except Exception:
+            # Never submitted: put the session back, or it reads as importing
+            # for ever and a cancel stops a task nobody runs.
+            session["task"] = None
+            session["stage"] = "staging"
+            logger.exception("Staging %s: submitting the import failed", staging_id)
+            raise
         if task_id is None:
             session["task"] = None
             session["stage"] = "staging"

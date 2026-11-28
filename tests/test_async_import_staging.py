@@ -338,6 +338,35 @@ def test_staging_cancel_after_the_import_ended_is_refused_unpolled(owner_server)
     assert _wait_for_stage(client, staging_id)["imported_count"] == 1
 
 
+def test_commit_that_fails_to_submit_leaves_the_session_staging(
+    owner_server, monkeypatch
+):
+    """A submit that raises puts the session back, so it can be cancelled."""
+    srv, client = owner_server
+    staging_id = client.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("x.png", _png_bytes(), "image/png"))],
+    )
+
+    def broken_submit(task):
+        raise RuntimeError("test-runner refused the task")
+
+    monkeypatch.setattr(srv.vault, "submit_task", broken_submit)
+    failing = TestClient(srv.api, raise_server_exceptions=False)
+    failing.cookies = client.cookies
+    r = failing.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 500, r.text
+
+    session = srv.staging_sessions[staging_id]
+    assert session["stage"] == "staging"
+    assert session["task"] is None
+    r = client.delete(f"{API}/pictures/import/staging/{staging_id}")
+    assert r.json()["stage"] == "cancelled", r.text
+
+
 def test_staging_status_unknown_session_404(owner_server):
     _srv, client = owner_server
     r = client.get(f"{API}/pictures/import/staging/does-not-exist/status")
@@ -609,11 +638,16 @@ def test_staging_zip_stops_unpacking_when_cancelled(owner_server, monkeypatch):
     monkeypatch.setattr(import_routes.zipfile, "ZipFile", cancelling_zipfile)
     r = client.post(
         f"{API}/pictures/import/staging/{staging_id}/files",
-        files=[("file", ("bundle.zip", zip_data))],
+        files=[
+            ("file", ("bundle.zip", zip_data)),
+            ("file", ("after.png", _png_bytes((7, 8, 9)), "image/png")),
+        ],
     )
     assert r.status_code == 200, r.text
     assert r.json()["staged"] == 0, r.json()
-    assert r.json()["skipped"] == ["bundle.zip"]
+    # The upload after the zip is not tried against the removed dir either.
+    assert r.json()["skipped"] == ["bundle.zip"], r.json()
+    assert r.json()["received"] == [], r.json()
     assert not os.path.isdir(srv.staging_sessions[staging_id]["staging_dir"])
 
 
