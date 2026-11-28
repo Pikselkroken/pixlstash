@@ -476,6 +476,57 @@ describe("selecting Studio cards", () => {
   });
 });
 
+describe("adding existing outfits to a wardrobe", () => {
+  async function pickFor(personKey, ids) {
+    const overview = structuredClone(OVERVIEW);
+    overview.outfits.push(
+      { id: 25, name: "Yellow wellies", character_id: null, picture_ids: [26], favourite: false, scene_count: 0 },
+    );
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt(`/studio?section=cast&open=${personKey}`);
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    for (const id of ids) await wrapper.find(`[data-testid="outfit-pick-${id}"]`).trigger("click");
+    await wrapper.find('[data-testid="outfit-add"]').trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("makes an outfit that is no one's the person's, and copies another person's", async () => {
+    api.patchPictureSet.mockResolvedValue({});
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 90 } });
+    await pickFor("cast:6", [25, 20]);
+    expect(api.patchPictureSet).toHaveBeenCalledWith(25, { parent_character_id: 6 });
+    // Mira's raincoat is taken from nobody: Juno gets a set of the same pictures.
+    expect(api.patchPictureSet).not.toHaveBeenCalledWith(20, expect.anything());
+    expect(api.createPictureSet).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Mustard raincoat", parent_character_id: 6 }),
+    );
+    expect(api.bulkAddPicturesToSet).toHaveBeenCalledWith(90, [21, 22, 23, 24]);
+    expect(api.listSetInStudio).toHaveBeenCalledWith(90, "outfit");
+  });
+
+  it("names the copy for the person when its name is taken", async () => {
+    api.createPictureSet
+      .mockRejectedValueOnce(Object.assign(new Error("taken"), { response: { status: 409 } }))
+      .mockResolvedValueOnce({ picture_set: { id: 91 } });
+    await pickFor("cast:6", [20]);
+    expect(api.createPictureSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "Mustard raincoat (Juno)" }),
+    );
+    expect(api.listSetInStudio).toHaveBeenCalledWith(91, "outfit");
+  });
+
+  it("offers nothing the person already wears", async () => {
+    const overview = structuredClone(OVERVIEW);
+    api.getStudioOverview.mockResolvedValue(overview);
+    const wrapper = await mountAt("/studio?section=cast&open=cast:5");
+    await wrapper.find('[data-testid="studio-add-outfit"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="outfit-pick-20"]').exists()).toBe(false);
+  });
+});
+
 describe("a picture from the Studio in the Lightbox", () => {
   // Opened over All Pictures, and closed back onto the Studio as it was.
   async function opensAndComesBack(open) {

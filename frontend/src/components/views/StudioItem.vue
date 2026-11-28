@@ -45,6 +45,14 @@
           >
           <AppButton
             v-if="kind === 'cast'"
+            variant="ghost"
+            icon-left="wardrobe-outline"
+            data-testid="studio-add-outfit"
+            @click="outfitPickerOpen = true"
+            >Add existing outfit…</AppButton
+          >
+          <AppButton
+            v-if="kind === 'cast'"
             variant="secondary"
             icon-left="hanger"
             data-testid="studio-new-outfit"
@@ -240,6 +248,16 @@
       </div>
     </aside>
 
+    <OutfitPicker
+      v-if="kind === 'cast'"
+      :open="outfitPickerOpen"
+      :person="item"
+      :outfits="store.overview.outfits"
+      :people="store.overview.cast"
+      @close="outfitPickerOpen = false"
+      @add="addOutfits"
+    />
+
     <Teleport to="body">
       <div
         v-if="menu"
@@ -286,6 +304,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import OutfitPicker from "../widgets/OutfitPicker.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
@@ -295,6 +314,7 @@ import { useLocationDrawStore } from "../../stores/useLocationDrawStore";
 import { useStudioStore } from "../../stores/useStudioStore";
 import { errorMessage } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
+import { addOutfitToWardrobe } from "../../utils/studioCardActions";
 import {
   ITEM_ANGLES,
   KIND_LIST,
@@ -466,6 +486,27 @@ function drawSheets() {
   });
 }
 
+// ── Add existing outfit… ──────────────────────────────────────────────────
+const outfitPickerOpen = ref(false);
+
+/** Put the outfits picked in this person's wardrobe, then show them there. */
+async function addOutfits(outfits) {
+  outfitPickerOpen.value = false;
+  const failed = [];
+  for (const outfit of outfits) {
+    try {
+      await addOutfitToWardrobe(outfit, item.value);
+    } catch (e) {
+      console.warn("Couldn't add an outfit to the wardrobe", outfit.id, props.itemId, e);
+      failed.push(`${outfit.name}: ${errorMessage(e, "Please try again.")}`);
+    }
+  }
+  emit("changed");
+  if (failed.length) {
+    noticeStore.error(`Couldn't add ${failed.join("; ")}`, { key: "studio-add-outfit" });
+  }
+}
+
 function drawOutfit() {
   emit("item-sheets", { kind: "outfit", character: { id: item.value.id, name: item.value.name } });
 }
@@ -494,7 +535,7 @@ async function stopUsing() {
 }
 
 function onKey(event) {
-  if (locationDraw.dialogOpen) return;
+  if (locationDraw.dialogOpen || outfitPickerOpen.value) return;
   if (event.defaultPrevented || event.target?.closest?.("input, textarea, [role=dialog]")) return;
   // Esc closes the menu, then clears the selection, and only then the lightbox.
   if (event.key === "Escape" && menu.value) closeMenu({ refocus: true });

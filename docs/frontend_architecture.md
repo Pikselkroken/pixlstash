@@ -8862,6 +8862,15 @@ inside its lightboxes, so the rail is empty on `/studio`.
   one shown). `composables/useOpenInLightbox` pushes All Pictures with
   `?overlay=<id>&from=<the Studio's full path>`, so Esc or Back lands on the
   item again, query and all (`utils/lightboxRoute.js`).
+- **Add existing outfit…** in a person's lightbox opens
+  `widgets/OutfitPicker.vue`: every outfit not theirs, narrowed by whose it
+  is (*Not anyone's*, each person) and by name, several at once, a
+  double-click adding one. It wears the picture picker's frame
+  (`PicturePicker.css`, shared by both). `addOutfitToWardrobe`
+  (`utils/studioCardActions.js`) makes a no-one's outfit theirs
+  (`parent_character_id`) and copies another person's, the same pictures in
+  a set of their own, named for them when the name is taken: an outfit is
+  taken from nobody.
 - **An item's lightbox shows every picture** of an outfit, location or prop,
   the first four named as the sheet cuts them, and selects them with the
   grid's gestures (click, Ctrl, Shift, Esc clears before it closes). A bar

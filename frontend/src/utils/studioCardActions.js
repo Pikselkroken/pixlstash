@@ -134,3 +134,42 @@ export function deleteWords(cards) {
     danger: true,
   };
 }
+
+/**
+ * Put an outfit in *person*'s wardrobe: one that is no one's becomes theirs;
+ * another person's is copied for them, the same pictures in a set of their
+ * own, so it is taken from nobody. A copy keeps the outfit's name, or names
+ * the person when another set already has it. Returns the outfit's id.
+ */
+export async function addOutfitToWardrobe(outfit, person) {
+  if (outfit.character_id == null) {
+    await patchPictureSet(outfit.id, { parent_character_id: person.id });
+    return outfit.id;
+  }
+  const body = {
+    description: outfit.description ?? "",
+    project_ids: outfit.project_ids ?? [],
+    parent_character_id: person.id,
+  };
+  let made;
+  try {
+    ({ picture_set: made } = await createPictureSet({ ...body, name: outfit.name }));
+  } catch (e) {
+    if (e?.response?.status !== 409) throw e;
+    ({ picture_set: made } = await createPictureSet({
+      ...body,
+      name: `${outfit.name} (${person.name})`,
+    }));
+  }
+  try {
+    if (outfit.picture_ids?.length) await bulkAddPicturesToSet(made.id, outfit.picture_ids);
+    await listSetInStudio(made.id, "outfit");
+  } catch (e) {
+    // Half a copy is not a copy: take the half-made set away again.
+    await deletePictureSet(made.id).catch((err) =>
+      console.warn("Couldn't remove a half-made outfit copy", made.id, err),
+    );
+    throw e;
+  }
+  return made.id;
+}
