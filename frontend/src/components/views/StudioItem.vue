@@ -40,11 +40,13 @@
         <span
           v-else
           class="studio-title"
-          :title="item ? 'Double-click or F2 to rename' : undefined"
           data-testid="studio-item-title"
           @dblclick="startTitle"
-          >{{ item?.name ?? "Not found" }}</span
-        >
+          >{{ item?.name ?? "Not found" }}<Tooltip
+            v-if="item"
+            text="Double-click or F2 to rename"
+            activator="parent"
+        /></span>
         <span class="studio-spacer"></span>
         <template v-if="item">
           <AppButton
@@ -357,6 +359,7 @@ import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import OutfitPicker from "../widgets/OutfitPicker.vue";
 import DrawPlaceholder from "../widgets/DrawPlaceholder.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
