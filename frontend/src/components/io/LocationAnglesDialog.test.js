@@ -271,6 +271,40 @@ describe("More angles", () => {
     expect(wrapper.emitted("done")).toHaveLength(1);
   });
 
+  it("never sends the picture a failed Use was building on back to the Scrapheap", async () => {
+    api.createPictureSet.mockResolvedValue({ picture_set: { id: 79, name: "Yard" } });
+    api.bulkAddPicturesToSet.mockRejectedValueOnce(new Error("offline"));
+    api.deletePictures.mockResolvedValue({});
+    api.listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: "manual:wide", name: "MiniMax H3 Image T2I (PixlStash)" },
+        { id: "manual:shots", name: "MiniMax H3 Location Shots (PixlStash)" },
+        { id: "manual:restore", name: "MiniMax H3 Restore a Frame (PixlStash)" },
+      ],
+    });
+    api.getWorkflowCard.mockResolvedValue({ card: { defaults: [{ slot_label: "core:w", input_name: "width" }] } });
+    api.buildSheetPrompt.mockResolvedValue({ prompt: "WIDE", width: 2560, height: 1440 });
+    const shotRuns = api.runWorkflowCard.getMockImplementation();
+    api.runWorkflowCard.mockImplementation(async (body) =>
+      body.workflow_id === "manual:wide" ? { prompts: [{ run_id: "run-w1" }] } : shotRuns(body),
+    );
+    Object.assign(OUTPUTS, { "run-w1": [41] });
+    const wrapper = mount(LocationAnglesDialog, { props: { open: true, location: null } });
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a yard");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+    await wrapper.find('[data-testid="la-use"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.emitted("done")).toBeUndefined();
+
+    api.deletePictures.mockClear();
+    await wrapper.findAll("button").find((b) => b.text() === "Discard").trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).not.toHaveBeenCalledWith(expect.arrayContaining([41]));
+  });
+
   it("offers what is in the chosen picture as each view's words, read again when the picture changes", async () => {
     const wrapper = mountDialog();
     await flushPromises();

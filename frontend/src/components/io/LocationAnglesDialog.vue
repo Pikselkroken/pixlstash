@@ -718,6 +718,9 @@ async function useNew() {
   const set = madeSet;
   const ids = [source.value, videoId, ...kept.value];
   await restoreScrapheap([source.value, ...kept.value]);
+  // The location's from here: a Use that fails later and is then discarded
+  // must not send the picture it is built on back to the Scrapheap.
+  broughtBack.delete(source.value);
   await bulkAddPicturesToSet(set.id, ids);
   // The set is the location: the Studio lists it as one (#2819), once it
   // holds the pictures, so a Use that fails leaves no empty location there.
@@ -727,7 +730,6 @@ async function useNew() {
     console.warn("Couldn't list the new location in the Studio", set.id, e);
   }
   if (frameIds.length) await deletePictures(frameIds);
-  broughtBack.delete(source.value);
   sendBack([...broughtBack]);
   emit("done", kept.value.length, set, ids);
   emit("close");
