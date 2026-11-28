@@ -259,9 +259,11 @@ def create_router(server) -> APIRouter:
                 )
 
     def _scene_body(session: Session, scene: Scene, ended=()) -> dict:
+        # A take whose picture went to the Scrapheap is no take to show.
         takes = session.exec(
             select(SceneTake)
-            .where(SceneTake.scene_id == scene.id)
+            .join(Picture, Picture.id == SceneTake.picture_id)
+            .where(SceneTake.scene_id == scene.id, Picture.deleted.is_(False))
             .order_by(SceneTake.created_at.desc(), SceneTake.id.desc())
         ).all()
         formats = (
@@ -388,18 +390,22 @@ def create_router(server) -> APIRouter:
             elif scope is not None:
                 scene_query = scene_query.where(Scene.project_id == scope)
             scenes = session.exec(scene_query.order_by(Scene.updated_at.desc())).all()
+            # Only pictures still in the library count: one sent to the
+            # Scrapheap from a lightbox or a grid leaves the Studio with it.
             take_counts = dict(
                 session.exec(
-                    select(SceneTake.scene_id, func.count(SceneTake.id)).group_by(
-                        SceneTake.scene_id
-                    )
+                    select(SceneTake.scene_id, func.count(SceneTake.id))
+                    .join(Picture, Picture.id == SceneTake.picture_id)
+                    .where(Picture.deleted.is_(False))
+                    .group_by(SceneTake.scene_id)
                 ).all()
             )
             covers = dict(
                 session.exec(
-                    select(SceneTake.scene_id, func.max(SceneTake.picture_id)).group_by(
-                        SceneTake.scene_id
-                    )
+                    select(SceneTake.scene_id, func.max(SceneTake.picture_id))
+                    .join(Picture, Picture.id == SceneTake.picture_id)
+                    .where(Picture.deleted.is_(False))
+                    .group_by(SceneTake.scene_id)
                 ).all()
             )
             all_scenes = session.exec(select(Scene)).all()
@@ -449,7 +455,11 @@ def create_router(server) -> APIRouter:
             if set_ids:
                 for set_id, picture_id in session.exec(
                     select(PictureSetMember.set_id, PictureSetMember.picture_id)
-                    .where(PictureSetMember.set_id.in_(set_ids))
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(
+                        PictureSetMember.set_id.in_(set_ids),
+                        Picture.deleted.is_(False),
+                    )
                     .order_by(PictureSetMember.picture_id)
                 ).all():
                     members[set_id].append(picture_id)

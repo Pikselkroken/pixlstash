@@ -352,6 +352,33 @@ def test_the_studio_reads_the_library_open_now_not_the_one_it_started_with(env):
     assert "run_immediate_read_task" in used
 
 
+def test_a_take_sent_to_the_scrapheap_leaves_the_scene(env):
+    client = env.client
+    path = os.path.join(env.temp_dir, "gone-take.png")
+    Image.new("RGB", (80, 60), (10, 200, 40)).save(path)
+    with open(path, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("gone-take.png", f.read(), "image/png"))]
+        )
+    picture_id = status["results"][0]["picture_id"]
+    scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Gone"}).json()
+    url = f"{API_PREFIX}/studio/scenes/{scene['id']}"
+    key = f"run-{uuid.uuid4().hex}"
+    client.post(f"{url}/runs", json={"runs": [{"key": key}]})
+    comfyui_service.record_run_outcome(key, "completed", picture_ids=[picture_id])
+    assert [t["picture_id"] for t in client.get(url).json()["takes"]] == [picture_id]
+
+    resp = client.request(
+        "DELETE", f"{API_PREFIX}/pictures", json={"picture_ids": [picture_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert client.get(url).json()["takes"] == []
+    card = {
+        c["id"]: c for c in client.get(f"{API_PREFIX}/studio/overview").json()["scenes"]
+    }[scene["id"]]
+    assert card["take_count"] == 0 and card["cover_picture_id"] is None
+
+
 def test_an_items_card_takes_the_shape_of_its_pictures(env):
     client = env.client
     path = os.path.join(env.temp_dir, "wide-view.png")
@@ -372,6 +399,15 @@ def test_an_items_card_takes_the_shape_of_its_pictures(env):
     assert {i["id"]: i["aspect"] for i in overview["locations"]}[location] == 1.7778
     # Nothing to measure: no shape, and the card keeps its own.
     assert {i["id"]: i["aspect"] for i in overview["props"]}[empty] is None
+
+    # Deleted, to the Scrapheap: it leaves the location with it.
+    resp = client.request(
+        "DELETE", f"{API_PREFIX}/pictures", json={"picture_ids": [picture_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    overview = client.get(f"{API_PREFIX}/studio/overview").json()
+    shown = {i["id"]: i["picture_ids"] for i in overview["locations"]}[location]
+    assert picture_id not in shown
 
 
 def test_a_prop_is_held_only_by_someone_in_the_cast(env):
