@@ -57,6 +57,13 @@ DEFAULT_WORDS = {
 SHOT_SECONDS = 2
 # Frames right after a cut still carry the cut's blend and the settle.
 SETTLE_FRAMES = 6
+# Stability is judged over this many frames each side: one frame's difference
+# is noisy (0.02 beside 0.24 in a still shot), and a pan has single-frame dips.
+STEADY_RADIUS = 3
+# Up to this much sharpness is traded for a frame nearer the shot's middle,
+# away from the cuts and the clip's last frames; a still shot's sharpness
+# wanders about this much from frame to frame.
+CENTRE_WEIGHT = 0.1
 # A cut is a frame difference far above the static shots' (~0.3 against 20+
 # while a camera turns, on 0-255 grey).
 CUT_FLOOR = 8.0
@@ -105,13 +112,14 @@ def shots_seconds(shot_count: int) -> int:
     return SHOT_SECONDS * (shot_count + 1)
 
 
-def find_cuts(diffs: list[float], cuts: int) -> list[int]:
-    """The frame index each of *cuts* hard cuts starts at.
+def find_cuts(diffs: list[float]) -> list[int]:
+    """The frame index each hard cut in the video starts at.
 
     *diffs[i]* is the mean grey difference between frames *i* and *i+1*. A
-    run of high differences is one cut. Raises :class:`ShotsNotFound` when
-    the video holds another number of cuts: a guess would hand back frames of
-    the wrong shot.
+    run of high differences is one cut. The video model does not always film
+    the shots it is asked for (it merges two into one, or pans through
+    them), so every cut it did make is kept. Raises :class:`ShotsNotFound`
+    only when there is none: then the video holds no new view at all.
     """
     values = np.asarray(diffs, dtype=float)
     if values.size == 0:
@@ -124,20 +132,43 @@ def find_cuts(diffs: list[float], cuts: int) -> list[int]:
         if high and not previous:
             found.append(index + 1)
         previous = high
-    if len(found) != cuts:
+    if not found:
         raise ShotsNotFound(
-            f"The video has {len(found)} hard cuts where {cuts} were asked for, "
-            "so its shots can't be told apart. Draw it again."
+            "The video is one shot with no cut, so it holds no new view. Draw it again."
         )
     return found
 
 
-def sharpest_frames(path: str, shot_count: int) -> list[int]:
-    """The sharpest frame index of each new shot (the picture's shot left out).
+def pick_frame(
+    start: int, end: int, sharpness: list[float], motion: list[float]
+) -> int:
+    """The steadiest, sharpest frame of the shot spanning frames *start* to *end*.
 
-    Sharpness is the Laplacian variance, with motion weighted against, past
-    the first frames after each cut.
+    *motion[i]* is the grey difference into frame *i*. The settle after the
+    cut and the frames before the next cut are left out when the shot is long
+    enough; each frame scores its sharpness over (1 + the mean motion around
+    it), less up to :data:`CENTRE_WEIGHT` for its distance from the middle.
     """
+    first, last = start + SETTLE_FRAMES, end - SETTLE_FRAMES
+    if last <= first:
+        first, last = start, end
+    middle = (start + end - 1) / 2
+    half = max((end - start) / 2, 1.0)
+
+    def score(i: int) -> float:
+        around = motion[
+            max(i - STEADY_RADIUS, start + 1) : min(i + STEADY_RADIUS + 1, end)
+        ]
+        steadiness = 1.0 + (float(np.mean(around)) if around else 0.0)
+        centred = 1.0 - CENTRE_WEIGHT * abs(i - middle) / half
+        return sharpness[i] / steadiness * centred
+
+    return max(range(first, last), key=score)
+
+
+def sharpest_frames(path: str) -> list[int]:
+    """The steadiest, sharpest frame index of each new shot (the picture's
+    shot left out), one per shot the video holds: see :func:`pick_frame`."""
     capture = cv2.VideoCapture(path)
     diffs: list[float] = []
     sharpness: list[float] = []
@@ -159,22 +190,19 @@ def sharpest_frames(path: str, shot_count: int) -> list[int]:
         capture.release()
     if len(sharpness) < 2:
         raise ShotsNotFound("The video could not be read frame by frame.")
-    starts = find_cuts(diffs, shot_count)
+    starts = find_cuts(diffs)
+    motion = [0.0, *diffs]
     bounds = [*starts, len(sharpness)]
-    picked: list[int] = []
-    for start, end in zip(bounds, bounds[1:]):
-        first = min(start + SETTLE_FRAMES, end - 1)
-        motion = [
-            diffs[i - 1] if 0 < i <= len(diffs) else 0.0 for i in range(first, end)
-        ]
-        scores = [sharpness[i] / (1.0 + motion[i - first]) for i in range(first, end)]
-        picked.append(first + int(np.argmax(scores)))
-    return picked
+    return [
+        pick_frame(start, end, sharpness, motion)
+        for start, end in zip(bounds, bounds[1:])
+    ]
 
 
 def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
     """Import the sharpest frame of each new shot as a picture made from the
-    video, in shot order. Raises :class:`SheetNotFound`,
+    video, in shot order: as many as the video holds, which may be more or
+    fewer than the *shot_count* asked for. Raises :class:`SheetNotFound`,
     :class:`SheetUnreadable` or :class:`ShotsNotFound`."""
     found = server.vault.db.run_immediate_read_task(pictures_in_session, [video_id])
     if found is None:
@@ -185,7 +213,16 @@ def frames_of_video(server, video_id: int, shot_count: int) -> list[int]:
         raise SheetUnreadable(
             f"Picture {video_id} is not a video this server can read."
         )
-    indices = sharpest_frames(path, shot_count)
+    indices = sharpest_frames(path)
+    if len(indices) != shot_count:
+        logger.info(
+            "Location shots video %s holds %d new shots where %d were asked for; "
+            "keeping the %d it has",
+            video_id,
+            len(indices),
+            shot_count,
+            len(indices),
+        )
     frames = VideoUtils.extract_video_frames(path, indices)
     if len(frames) != len(indices):
         raise SheetUnreadable(f"Couldn't read frames {indices} of video {video_id}.")

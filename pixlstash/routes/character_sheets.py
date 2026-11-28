@@ -483,9 +483,10 @@ def create_router(server) -> APIRouter:
         summary="Take a location's new views out of its shots video",
         description=(
             "Finds the hard cuts in the video and imports the sharpest frame "
-            "of each new shot as a picture made from it, in shot order. 409 "
-            "when the video holds another number of cuts than `shots`, or "
-            "cannot be read; 404 for a picture that is not there."
+            "of each new shot as a picture made from it, in shot order. The "
+            "video model may film fewer or more shots than `shots`; every one "
+            "it made is returned. 409 when the video has no cut (no new view) "
+            "or cannot be read; 404 for a picture that is not there."
         ),
         response_model=UsedSheets,
     )

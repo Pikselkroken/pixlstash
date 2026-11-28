@@ -554,24 +554,40 @@ def test_the_shots_prompt_has_the_picture_first_and_a_cut_per_shot():
     assert location_angles.shots_seconds(3) == 8
 
 
-def test_cuts_are_found_where_the_difference_jumps_and_a_wrong_count_refuses():
+def test_every_cut_the_video_made_is_found_and_none_refuses():
     diffs = [0.3] * 47
     for at in (11, 23, 35):
         diffs[at] = 30.0
     diffs[24] = 28.0  # one cut spread over two frames is still one cut
-    assert location_angles.find_cuts(diffs, 3) == [12, 24, 36]
-    with pytest.raises(location_angles.ShotsNotFound, match="3 hard cuts where 2"):
-        location_angles.find_cuts(diffs, 2)
+    assert location_angles.find_cuts(diffs) == [12, 24, 36]
+    # The model merged two shots: the cuts it did make are kept.
+    diffs[23] = diffs[24] = 0.3
+    assert location_angles.find_cuts(diffs) == [12, 36]
+    with pytest.raises(location_angles.ShotsNotFound, match="no cut"):
+        location_angles.find_cuts([0.3] * 47)
 
 
 def test_the_sharpest_frame_of_each_new_shot_is_past_the_settle(tmp_path):
     path = str(tmp_path / "shots.mp4")
     _shots_video(path)
-    picked = location_angles.sharpest_frames(path, 3)
+    picked = location_angles.sharpest_frames(path)
     assert len(picked) == 3
     for shot, index in enumerate(picked, start=1):
         # Each pick inside its own shot, after the blurred settle.
         assert shot * 24 + 8 <= index < (shot + 1) * 24
+
+
+def test_the_picked_frame_is_steady_over_its_neighbours_and_near_the_middle():
+    # A still shot, every frame as sharp: the middle wins, not an edge.
+    still = location_angles.pick_frame(0, 48, [100.0] * 48, [0.05] * 48)
+    assert 22 <= still <= 25
+    # A pan with a one-frame dip at 12: the dip's neighbours still move, so
+    # the steady stretch at 30-36 wins although no frame there is sharper.
+    motion = [2.0] * 48
+    motion[12] = 0.0
+    for i in range(28, 39):
+        motion[i] = 0.1
+    assert 30 <= location_angles.pick_frame(0, 48, [100.0] * 48, motion) <= 36
 
 
 def test_a_restore_that_turns_back_into_the_original_is_refused():
@@ -601,14 +617,10 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
     ).json()
     assert prompt["seconds"] == 8 and "SHOT 4" in prompt["prompt"]
 
-    wrong = client.post(
-        f"{API_PREFIX}/item-sheets/shots",
-        json={"video_picture_id": video_id, "shots": 2},
-    )
-    assert wrong.status_code == 409, wrong.text
+    # Four new shots asked for, three filmed: the three are kept.
     made = client.post(
         f"{API_PREFIX}/item-sheets/shots",
-        json={"video_picture_id": video_id, "shots": 3},
+        json={"video_picture_id": video_id, "shots": 4},
     )
     assert made.status_code == 200, made.text
     frames = made.json()["picture_ids"]
@@ -632,6 +644,20 @@ def test_the_shots_routes_take_frames_out_of_a_video_and_check_them(env):
         ).status_code
         == 404
     )
+
+    # One shot and no cut: no new view, so it is refused.
+    single = os.path.join(env.temp_dir, "single.mp4")
+    _shots_video(single, shots=1)
+    with open(single, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("single.mp4", f.read(), "video/mp4"))]
+        )
+    assert status["status"] == "completed", status
+    refused = client.post(
+        f"{API_PREFIX}/item-sheets/shots",
+        json={"video_picture_id": status["results"][0]["picture_id"], "shots": 3},
+    )
+    assert refused.status_code == 409 and "no cut" in refused.json()["detail"]
 
 
 def test_only_an_item_that_exists_is_starred(env):

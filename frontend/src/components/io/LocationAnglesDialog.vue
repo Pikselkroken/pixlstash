@@ -77,6 +77,10 @@
           restored at full size; a view that drifted or turned back into the
           picture you started from is marked.
         </p>
+        <p v-if="views.length !== shots.length" class="la-hint" data-testid="la-count">
+          The video made {{ views.length }} of the {{ shots.length }} views asked for: the
+          video model sometimes runs two shots together. Draw again for more.
+        </p>
         <div class="la-views">
           <label
             v-for="view in views"
@@ -380,9 +384,12 @@ async function draw() {
       source.value,
       frameIds.map((frameId, i) => ({ frame_id: frameId, restored_id: restored[i] })),
     );
+    // A shot short or extra and the names no longer line up with the rows:
+    // which one the model ran together is not known, so number them.
+    const named = checked.length === shots.value.length;
     views.value = checked.map((view, i) => ({
       ...view,
-      name: PRESET_NAMES[shots.value[i]?.preset] ?? `View ${i + 1}`,
+      name: (named && PRESET_NAMES[shots.value[i]?.preset]) || `View ${i + 1}`,
     }));
     kept.value = checked.filter((v) => v.ok).map((v) => v.restored_id);
     phase.value = "pick";

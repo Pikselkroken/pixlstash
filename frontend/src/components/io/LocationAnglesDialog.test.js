@@ -137,6 +137,25 @@ describe("More angles", () => {
     expect(wrapper.emitted("done")[0]).toEqual([2]);
   });
 
+  it("keeps the views a video with too few shots made, numbered rather than misnamed", async () => {
+    api.takeLocationShots.mockResolvedValue({ picture_ids: [701, 702] });
+    api.checkLocationShots.mockResolvedValue({
+      views: [
+        { frame_id: 701, restored_id: 601, ok: true, reason: "" },
+        { frame_id: 702, restored_id: 602, ok: true, reason: "" },
+      ],
+    });
+    const wrapper = mountDialog();
+    expect(wrapper.find('[data-testid="la-count"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="la-draw"]').trigger("click");
+    await flushPromises();
+
+    expect(api.runWorkflowCard.mock.calls).toHaveLength(3); // the video and two restores
+    expect(wrapper.find('[data-testid="la-count"]').text()).toContain("2 of the 3 views");
+    const names = wrapper.findAll(".la-view__foot").map((foot) => foot.text());
+    expect(names).toEqual(["View 1", "View 2"]);
+  });
+
   it("keeps Discard out of reach while the kept views are being put away", async () => {
     let finish;
     api.bulkAddPicturesToSet.mockReturnValue(new Promise((resolve) => (finish = resolve)));

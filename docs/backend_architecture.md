@@ -13899,10 +13899,14 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   joined by hard cuts, shot 1 being the picture, from the prompt `POST
   /item-sheets/shots/prompt` writes (the place, a layout sentence said once,
   then a preset and words per shot). `POST /item-sheets/shots` finds the cuts
-  by frame difference (a run of high differences is one cut; another count
-  than asked is a 409, never a guess) and imports the sharpest frame of each
-  new shot (Laplacian variance over motion, past the first frames after the
-  cut). *MiniMax H3 Restore a Frame* restores each frame from the frame
+  by frame difference (a run of high differences is one cut) and imports the
+  sharpest frame of each new shot the video holds. The video model is not
+  deterministic: it often runs two asked-for shots together, so every shot it
+  made is kept, fewer or more than asked, and only a video with no cut is a
+  409. Which shot went missing is unknown, so the dialog then numbers the
+  views instead of naming them by preset. The frame is picked clear of both
+  cuts (`pick_frame`): Laplacian variance over the mean motion of the frames
+  either side, leaning towards the shot's middle. *MiniMax H3 Restore a Frame* restores each frame from the frame
   itself (VAE-encoded, denoise 0.75, 2560x1440) with the picture as `<Picture
   2>`; restoring from noise flips back to the picture, so `POST
   /item-sheets/shots/check` refuses a view that matches the picture better
