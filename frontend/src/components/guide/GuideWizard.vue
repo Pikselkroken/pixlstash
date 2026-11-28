@@ -4,7 +4,8 @@
 //
 // Each step can first go somewhere (a route, or a Settings pane), then rings
 // its `target` once it is on screen and waits for the user to click,
-// right-click or double-click inside it. The card never offers Next: doing the
+// right-click or double-click inside it. A target matching many things (the
+// grid's pictures, the sidebar's people) rings all of them on screen at once. The card never offers Next: doing the
 // ringed thing is how a step moves on. While a target is not on screen (a
 // menu not open yet, a control this library does not show) there is no scrim
 // at all, only the card, so nothing is ever blocked; Skip step moves on.
@@ -14,6 +15,7 @@ import { VIcon } from "vuetify/components";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import { useGuideStore } from "../../stores/useGuideStore";
+import { lightboxCloseTarget } from "../../utils/lightboxRoute";
 
 const props = defineProps({
   /** Opens a Settings pane by its tab id (App.vue owns the dialog). */
@@ -40,8 +42,12 @@ async function arrive(s) {
     props.openSettings(go.slice("settings:".length));
     return;
   }
-  if (typeof go === "string" && go && route.path !== go) {
-    await router.push(go);
+  if (typeof go === "string" && go) {
+    if (route.path !== go) await router.push(go);
+    // The lightbox is a query on the page it covers, so being on the path is
+    // not being on the page: Back from a lightbox step has to close it.
+    else if (route.query.overlay)
+      await router.replace(lightboxCloseTarget(route.query, false));
     return;
   }
   // A step that names nowhere to go still has to leave the Guide: its
@@ -55,42 +61,71 @@ watch(step, (s) => arrive(s), { immediate: true });
 // shows in a profile.
 const rect = ref(null);
 const viewport = ref({ w: 0, h: 0 });
-let targetEl = null;
+// Every visible match of the step's target, and the one last acted on.
+let targets = [];
+let actedOn = null;
+let scrolledTo = null;
+// Each step may scroll once, even to the element the last step scrolled to.
+watch(step, () => (scrolledTo = null));
 let frame = 0;
 const PAD = 4;
 
-function visibleMatch(selector) {
+function visibleMatches(selector) {
   let nodes;
   try {
     nodes = document.querySelectorAll(selector);
   } catch (e) {
     console.error("Guide: a step's target is not a valid selector:", selector, e);
-    return null;
+    return [];
   }
-  for (const el of nodes) {
+  return [...nodes].filter((el) => {
     const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && !el.closest(".gwz")) return el;
-  }
-  return null;
+    return r.width > 0 && r.height > 0 && !el.closest(".gwz");
+  });
 }
 
 function measure() {
-  const found = step.value?.target ? visibleMatch(step.value.target) : null;
+  targets = step.value?.target ? visibleMatches(step.value.target) : [];
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // A target names a kind of thing ("a picture", "a person"), so any match on
+  // screen will do: the hole spans all of them, clipped to the window since a
+  // grid renders rows past the fold.
+  let box = null;
+  let anyWhole = false;
+  for (const el of targets) {
+    const r = el.getBoundingClientRect();
+    const x1 = Math.max(r.left, 0);
+    const y1 = Math.max(r.top, 0);
+    const x2 = Math.min(r.right, vw);
+    const y2 = Math.min(r.bottom, vh);
+    if (x2 <= x1 || y2 <= y1) continue;
+    if (r.left >= 0 && r.top >= 0 && r.right <= vw && r.bottom <= vh)
+      anyWhole = true;
+    box = box
+      ? {
+          x1: Math.min(box.x1, x1),
+          y1: Math.min(box.y1, y1),
+          x2: Math.max(box.x2, x2),
+          y2: Math.max(box.y2, y2),
+        }
+      : { x1, y1, x2, y2 };
+  }
   // The scrim takes the wheel, so a target below the fold could never be
-  // scrolled to: bring it into view once, as it appears.
-  if (found && found !== targetEl)
-    found.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  targetEl = found;
-  const r = targetEl?.getBoundingClientRect();
-  rect.value = r
+  // scrolled to: with none wholly on screen, bring the first into view once.
+  if (!anyWhole && targets[0] && targets[0] !== scrolledTo) {
+    scrolledTo = targets[0];
+    scrolledTo.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }
+  rect.value = box
     ? {
-        x: r.left - PAD,
-        y: r.top - PAD,
-        w: r.width + PAD * 2,
-        h: r.height + PAD * 2,
+        x: box.x1 - PAD,
+        y: box.y1 - PAD,
+        w: box.x2 - box.x1 + PAD * 2,
+        h: box.y2 - box.y1 + PAD * 2,
       }
     : null;
-  viewport.value = { w: window.innerWidth, h: window.innerHeight };
+  viewport.value = { w: vw, h: vh };
   frame = requestAnimationFrame(measure);
 }
 
@@ -113,8 +148,10 @@ const cardAtTop = computed(
 // After the app has had the event: the next step's target (the menu the
 // right-click opens) only exists once it has.
 function onAct(event) {
-  if (!targetEl || !(event.target instanceof Node)) return;
-  if (!targetEl.contains(event.target)) return;
+  if (!(event.target instanceof Node)) return;
+  const hit = targets.find((el) => el.contains(event.target));
+  if (!hit) return;
+  actedOn = hit;
   const at = index.value;
   setTimeout(() => {
     if (guide.wizard && guide.wizard.step === at) guide.nextStep();
@@ -145,7 +182,7 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(frame);
   // Focus would drop to body with the card: onto the last ringed control
   // when it is still there, which is where the user's work is.
-  const last = targetEl;
+  const last = targets.includes(actedOn) ? actedOn : targets[0];
   nextTick(() => {
     if (last?.isConnected) last.focus?.();
   });

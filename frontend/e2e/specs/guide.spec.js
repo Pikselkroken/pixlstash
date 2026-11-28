@@ -65,6 +65,41 @@ test('F1 opens the Guide; a concept opens in place and a wizard rings its contro
   await expect(wizard).toBeHidden()
 })
 
+test('Crop and rotate takes any picture, rings the Edit tab, and Back returns to the grid', async ({
+  page,
+}) => {
+  await openApp(page)
+  await page.goto('/guide/edit-picture')
+  await page.getByTestId('guide-show-crop-and-rotate').click()
+  const wizard = page.getByTestId('guide-wizard')
+  const say = wizard.getByTestId('guide-wizard-say')
+  const ring = page.locator('.gwz-ring')
+  await expect(say).toContainText('Double-click a picture')
+  await expect(ring).toBeVisible()
+
+  // Not the first picture: every picture on screen is inside the ring (the
+  // step card covers part of the top row).
+  await page.locator('.thumbnail-card').nth(9).dblclick()
+  await expect(page).toHaveURL(/overlay=/)
+  await expect(say).toContainText('Click the Edit tab')
+  const tab = page.locator('.lightbox-sidebar [data-tab="edit"]')
+  await expect(tab).toBeVisible()
+  await expect
+    .poll(async () => {
+      const t = await tab.boundingBox()
+      const r = await ring.boundingBox()
+      return r && Math.abs(r.x + r.width / 2 - (t.x + t.width / 2)) < 3
+    })
+    .toBe(true)
+
+  // Back is the grid again, not step 1 over an open lightbox.
+  await wizard.getByRole('button', { name: 'Back' }).click()
+  await expect(page).not.toHaveURL(/overlay=/)
+  await expect(say).toContainText('Double-click a picture')
+  await page.keyboard.press('Escape')
+  await expect(wizard).toBeHidden()
+})
+
 test('the welcome shows once, and Not now records it as seen', async ({
   page,
   apiContext,

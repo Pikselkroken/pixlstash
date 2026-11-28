@@ -82,6 +82,7 @@
           class="inspector-tab"
           :class="{ 'inspector-tab--active': tab.value === modelValue }"
           type="button"
+          :data-tab="tab.value"
           :aria-pressed="tab.value === modelValue ? 'true' : 'false'"
           :disabled="tab.disabled"
           @click="emit('update:modelValue', tab.value)"

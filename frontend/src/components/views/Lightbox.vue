@@ -1027,7 +1027,7 @@
                immediately, with Undo on the receipt; greyed with the reason
                when the file cannot carry a turn every viewer agrees on. -->
           <template #quick-changes>
-            <div class="lightbox-quick">
+            <div class="lightbox-quick" data-guide="edit-picture.quick-changes">
               <div class="section-label section-label--on-dark">
                 Quick changes
               </div>

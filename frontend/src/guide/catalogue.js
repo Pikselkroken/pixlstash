@@ -1264,7 +1264,7 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture made in ComfyUI." },
-          { target: '[data-band="recipe"]', say: "Open the Recipe tab." },
+          { target: '.lightbox-sidebar [data-tab="recipe"]', say: "Open the Recipe tab." },
         ],
       },
       {
@@ -1276,7 +1276,7 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture made in ComfyUI." },
-          { target: '[data-band="recipe"]', say: "Open the Recipe tab and click Run…." },
+          { target: '.lightbox-sidebar [data-tab="recipe"]', say: "Open the Recipe tab and click Run…." },
         ],
       },
       {
@@ -1288,7 +1288,7 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture made in ComfyUI." },
-          { target: '[data-band="recipe"]', say: "Open the Recipe tab and click Save as recipe." },
+          { target: '.lightbox-sidebar [data-tab="recipe"]', say: "Open the Recipe tab and click Save as recipe." },
         ],
       },
       {
@@ -1565,7 +1565,8 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture." },
-          { target: '[data-band="edit"]', say: "Open the Edit tab, then Quick changes." },
+          { target: '.lightbox-sidebar [data-tab="edit"]', say: "Click the Edit tab." },
+          { target: '[data-guide="edit-picture.quick-changes"]', say: "Click Rotate left or Rotate right to turn the picture. To crop, click Crop, set the frame on the picture, then press Crop to a new picture." },
         ],
       },
       {
@@ -1577,7 +1578,7 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture." },
-          { target: '[data-band="edit"]', say: "Open the Edit tab." },
+          { target: '.lightbox-sidebar [data-tab="edit"]', say: "Click the Edit tab." },
           { target: '[data-guide="edit-picture.mark-where"]', say: "Under Mark where, draw the area to change, then choose an Inpaint workflow." },
         ],
       },
@@ -1590,7 +1591,7 @@ export const CONCEPTS = [
         unstable: true,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture." },
-          { target: '[data-band="edit"]', say: "Open the Edit tab." },
+          { target: '.lightbox-sidebar [data-tab="edit"]', say: "Click the Edit tab." },
           { target: '[data-guide="edit-picture.mark-where"]', say: "Under Mark where, choose Extend (X) and drag the edges outwards." },
         ],
       },
@@ -1615,8 +1616,8 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture." },
-          { target: '[data-band="edit"]', say: "Open the Edit tab, then Upscale…." },
-          { target: '[data-testid="lightbox-upscale"]', say: "Choose the factor and the model, then start the upscale." },
+          { target: '.lightbox-sidebar [data-tab="edit"]', say: "Click the Edit tab." },
+          { target: '[data-testid="lightbox-upscale"]', say: "Click Upscale…, choose the factor and the model, then start the upscale." },
         ],
       },
       {
@@ -1628,7 +1629,8 @@ export const CONCEPTS = [
         unstable: false,
         steps: [
           { go: "/", target: '[data-guide="browse-inspect.open-lightbox"]', say: "Double-click a picture." },
-          { target: '[data-band="edit"]', say: "Open the Edit tab, then Filters…." },
+          { target: '.lightbox-sidebar [data-tab="edit"]', say: "Click the Edit tab." },
+          { target: '[data-guide="edit-picture.quick-changes"]', say: "Click Filters… and choose a filter." },
         ],
       },
       {
