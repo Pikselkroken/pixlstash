@@ -1666,9 +1666,11 @@ def _import_comfyui_outputs(
         [(sampled, size) for sampled, size, _full in fingerprints],
         False,
     )
+    learned: import_dedup_service.LearnedShas = {}
     existing_map, _scrapheaped_map = import_dedup_service.partition_confirmed_matches(
-        candidates, fingerprints, server.vault.image_root
+        candidates, fingerprints, server.vault.image_root, learned
     )
+    import_dedup_service.save_full_shas(server.vault.db, learned)
 
     # Placement on write (v1.11 Phase 4b). `None` whenever `output_dir` is set:
     # an edit written beside its original in a reference folder is already where
@@ -1694,6 +1696,9 @@ def _import_comfyui_outputs(
             output_dir=output_dir,
             reference_folder_id=reference_folder_id,
             subfolder=subfolder,
+        )
+        import_dedup_service.stamp_full_sha(
+            new_picture_map[fingerprint], fingerprint, server.vault.image_root
         )
     new_pictures = list(new_picture_map.values())
 

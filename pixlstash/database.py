@@ -77,6 +77,10 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         "ocr_words",
         # Colour summary (#2151): derived from the thumbnail, regenerable.
         "colour_shares",
+        # The import confirm's full-hash cache: filled lazily by imports, and
+        # the stat signature names this machine's inode and timestamps.
+        "full_sha",
+        "full_sha_stat",
     }
 )
 

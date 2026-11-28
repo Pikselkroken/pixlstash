@@ -219,6 +219,10 @@ class Picture(SQLModel, table=True):
     # ``GET /pictures/{id}/{field}`` reader still returns the raw columns, under
     # the same picture scope.
     OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
+    # The import confirm's private cache (``import_dedup_service``), never a
+    # fact anybody reads: left out of ``metadata_fields()`` so it rides no
+    # payload.
+    FULL_SHA_FIELDS: ClassVar[frozenset] = frozenset({"full_sha", "full_sha_stat"})
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -310,6 +314,12 @@ class Picture(SQLModel, table=True):
     # unprocessable-image registry until that file changes.
     colour_shares: Optional[str] = Field(default=None)
     pixel_sha: Optional[str] = Field(default=None, index=True)
+    # Full-file SHA-256, cached so an import confirming a ``pixel_sha`` candidate
+    # need not re-read the library file. Trusted only while the file's
+    # ``full_sha_stat`` (``size:mtime_ns:ctime_ns:inode``, taken before the
+    # read) still matches; filled lazily, NULL means "read the file".
+    full_sha: Optional[str] = Field(default=None)
+    full_sha_stat: Optional[str] = Field(default=None)
     deleted: bool = Field(default=False, index=True)
     # When the picture was soft-deleted to the scrapheap (UTC). Stamped on the
     # False -> True transition and cleared on restore, so it always describes the
@@ -1338,6 +1348,7 @@ class Picture(SQLModel, table=True):
             cls.scalar_fields()
             - cls.large_binary_fields()
             - cls.OCR_FIELDS
+            - cls.FULL_SHA_FIELDS
             - {"colour_shares"}
         )
 

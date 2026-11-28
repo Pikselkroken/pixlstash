@@ -189,6 +189,9 @@ class PictureImportTask(BaseTask):
         # loop, so two byte-identical staged files would both pass the DB check.
         # Track them here so an intra-batch duplicate is counted, not imported.
         seen_fingerprints: set[tuple[int, str]] = set()
+        # Library-file full hashes this run had to read to confirm a match,
+        # stored in one write at the end so the next import need not read them.
+        learned: import_dedup_service.LearnedShas = {}
 
         # Placement on write (v1.11 Phase 4b): where the library's layout says
         # a picture with these assignments belongs. Resolved once for the whole
@@ -277,7 +280,7 @@ class PictureImportTask(BaseTask):
             # already visible.
             candidates = self._db.run_task(find_candidates, content_key)
             match = import_dedup_service.confirmed_match(
-                candidates, fingerprint, self._db.image_root
+                candidates, fingerprint, self._db.image_root, learned
             )
             if match is not None and match.deleted:
                 logger.info(
@@ -324,6 +327,9 @@ class PictureImportTask(BaseTask):
                 pic.imported_at = datetime.now(timezone.utc)
                 if original_file_name:
                     pic.original_file_name = original_file_name
+                import_dedup_service.stamp_full_sha(
+                    pic, fingerprint, self._db.image_root
+                )
                 new_pictures.append(pic)
                 seen_fingerprints.add(intra_batch_key)
                 self._record_outcome(entry, "new")
@@ -374,6 +380,8 @@ class PictureImportTask(BaseTask):
                 self._apply_project(imported_ids)
                 self._apply_set(imported_ids)
                 self._apply_character(imported_ids)
+
+        import_dedup_service.save_full_shas(self._db, learned)
 
         if scrapheaped_picture_ids:
             matched_ids = scrapheaped_picture_ids
