@@ -163,6 +163,7 @@ def serialize_user_config(user) -> dict:
         "embed_watermark",
         "keep_workflow_on_export",
         "last_seen_version",
+        "guide_welcome_seen",
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
@@ -259,16 +260,19 @@ def _load_whats_changed(user) -> dict | None:
     return parsed
 
 
-def _normalize_last_seen_version(value) -> str | None:
-    """Validate a last_seen_version patch; blank, null or whitespace clears it."""
+def _normalize_short_text(value, key: str) -> str | None:
+    """Validate a short text patch (last_seen_version, guide_welcome_seen).
+
+    Blank, null or whitespace clears it.
+    """
     if value in ("", None, "null"):
         return None
     if not isinstance(value, str):
-        raise ValueError("last_seen_version must be a string")
+        raise ValueError(f"{key} must be a string")
     text = value.strip()
     if len(text) > LAST_SEEN_VERSION_MAX_LENGTH:
         raise ValueError(
-            f"last_seen_version must be at most {LAST_SEEN_VERSION_MAX_LENGTH} characters"
+            f"{key} must be at most {LAST_SEEN_VERSION_MAX_LENGTH} characters"
         )
     return text or None
 
@@ -368,6 +372,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "keep_workflow_on_export",
         "last_seen_version",
         "whats_changed",
+        "guide_welcome_seen",
         "tagger_settings",
     }
 
@@ -669,10 +674,10 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 user.hide_purge_snapshot_warning = new_value
                 updated = True
             continue
-        if key == "last_seen_version":
-            new_value = _normalize_last_seen_version(value)
-            if user.last_seen_version != new_value:
-                user.last_seen_version = new_value
+        if key in ("last_seen_version", "guide_welcome_seen"):
+            new_value = _normalize_short_text(value, key)
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "whats_changed":

@@ -38,7 +38,7 @@ import { createPictureSet } from "./api/pictureSets";
 import { errorDetail } from "./utils/apiError";
 import { buildingSetOf, freeTrainingSetName } from "./utils/trainingSetBuild";
 import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
-import { useWhatsChangedStore } from "./stores/useWhatsChangedStore";
+import { useGuideStore } from "./stores/useGuideStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -71,8 +71,8 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
-import WhatsChangedRail from "./components/panels/WhatsChangedRail.vue";
-import WhatsChangedTour from "./components/widgets/WhatsChangedTour.vue";
+import GuideWelcome from "./components/guide/GuideWelcome.vue";
+import GuideWizard from "./components/guide/GuideWizard.vue";
 import InspectorEdgeTab from "./components/widgets/InspectorEdgeTab.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
@@ -120,6 +120,13 @@ const WorkflowsView = defineAsyncComponent(
 // The screen draws its own inspector in a lightbox, so the rail stays empty.
 const StudioSidebar = defineAsyncComponent(
   () => import("./components/panels/StudioSidebar.vue"),
+);
+// The Guide (#2825), async like the other places of its own.
+const GuideSidebar = defineAsyncComponent(
+  () => import("./components/guide/GuideSidebar.vue"),
+);
+const GuideView = defineAsyncComponent(
+  () => import("./components/guide/GuideView.vue"),
 );
 const StudioView = defineAsyncComponent(
   () => import("./components/views/StudioView.vue"),
@@ -177,7 +184,8 @@ const { activeLibrary, importingName } = storeToRefs(librariesStore);
 const { overlayOpen: librarySwitchOverlayOpen } =
   storeToRefs(librarySwitchStore);
 const noticeStore = useNoticeStore();
-const whatsChanged = useWhatsChangedStore();
+const guide = useGuideStore();
+const guideViewRef = ref(null);
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -261,6 +269,7 @@ const {
   isInboxView,
   isWorkflowsView,
   isStudioView,
+  isGuideView,
   handleSelectInsights,
   handleSelectMoves,
   handleSelectInbox,
@@ -321,7 +330,15 @@ const {
 
 useSearchBarSync();
 
-useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
+useGlobalKeydown({
+  gridContainer,
+  sidebarRef,
+  shortcutsDialogOpen,
+  openGuide: () =>
+    isGuideView.value
+      ? guideViewRef.value?.focusSearch?.()
+      : router.push("/guide"),
+});
 useWindowFileImport({ sidebarRef });
 
 const {
@@ -455,6 +472,7 @@ const tagReviewBackLabel = computed(() => {
   if (isWorkflowsView.value) return "Workflows";
   if (isModelsView.value) return "Models";
   if (isStudioView.value) return "Studio";
+  if (isGuideView.value) return "Guide";
   return activeCategoryLabel.value;
 });
 
@@ -730,51 +748,24 @@ function offerLoosePictures() {
   return sidebarRef.value?.offerLoosePictures?.();
 }
 
-// ── What's changed in 2.0 (#2145) ──────────────────────────────────────────
-// Whether this launch is the upgrade needs the stored config, the running
-// version and whether the library holds pictures; decided once all three are
-// in. The upgrade launch puts both rails on screen, so the checklist and the
-// tour card are seen: the one time the app opens a rail by itself.
+// ── The Guide's welcome (#2825) ─────────────────────────────────────────────
+// Decided once the owner's config and the library's first count are in, and
+// only once nothing else is asking for the screen: the library mapping
+// wizard and the telemetry question come first.
 const libraryEmpty = ref(null);
 watch(
-  [() => whatsChanged.loaded, appVersion, libraryEmpty],
-  ([loaded, version, empty]) => {
-    if (!loaded || !version || empty === null) return;
-    whatsChanged.evaluate({ version, libraryEmpty: empty });
+  [
+    () => guide.configLoaded,
+    libraryEmpty,
+    librarySettled,
+    telemetryConsentOpen,
+    () => mappingStore.wizardOpen,
+  ],
+  ([loaded, empty, settled, consentOpen, mapping]) => {
+    if (!loaded || empty === null || !settled || consentOpen || mapping) return;
+    guide.evaluateWelcome({ libraryEmpty: empty });
   },
 );
-
-// Settings' What's new: the checklist lives on the media rail, which the
-// Workflows and Models workspaces do not have.
-watch(
-  () => whatsChanged.reopened,
-  () => {
-    if (isModelsView.value || isWorkflowsView.value || isStudioView.value)
-      router.push("/");
-  },
-);
-
-// The training tour's moves through the app (WhatsChangedTour.vue).
-const tourActions = {
-  select: (s) =>
-    s.type === "character"
-      ? handleSelectCharacter({ id: s.id, label: s.name })
-      : handleSelectSet({ id: s.id, label: s.name }),
-  openMenu: (s) => sidebarRef.value?.openEntityMenu?.(s),
-  closeMenu: () => sidebarRef.value?.closeEntityMenu?.(),
-  openTrain: (s) => {
-    sidebarRef.value?.closeEntityMenu?.();
-    return handleTrainLora({ type: s.type, id: s.id, name: s.name });
-  },
-  closeTrain: () => trainingStore.closeDialog(),
-  goModels: () => router.push("/models/runs"),
-  isSelected: (s) =>
-    s.type === "character"
-      ? selectionStore.selectedCharacter === s.id
-      : selectionStore.selectedSet === s.id,
-  trainOpen: () => trainingStore.trainDialogOpen,
-  onModels: () => isModelsView.value,
-};
 
 /** The first count is in; an empty library gets its import offer first. */
 async function onLibraryLoaded({ empty, pictures }) {
@@ -834,6 +825,7 @@ const isGridView = computed(
     !isMovesView.value &&
     !isWorkflowsView.value &&
     !isStudioView.value &&
+    !isGuideView.value &&
     !buildingSet.value,
 );
 watch(
@@ -849,7 +841,6 @@ watch(
 
 /** What the closed rail would describe: the rail's own head, or `N pictures`. */
 const statsEdgeTabLabel = computed(() => {
-  if (whatsChanged.railShown) return "What's changed";
   const count = selectionStore.selectedImageIds.length;
   if (count > 1) return `${count.toLocaleString()} pictures`;
   if (count === 0) return "";
@@ -1112,6 +1103,7 @@ defineExpose({
             v-if="isWorkflowsView"
             @open-settings="openSettingsDialog"
           />
+          <GuideSidebar v-else-if="isGuideView" />
           <ModelsSideBar v-else-if="isModelsView" />
           <StudioSidebar
             v-else-if="isStudioView"
@@ -1119,7 +1111,7 @@ defineExpose({
             @new-person="(project, done) => sidebarRef?.createCharacter(project, done)"
           />
           <div
-            v-show="!isWorkflowsView && !isModelsView && !isStudioView"
+            v-show="!isWorkflowsView && !isModelsView && !isStudioView && !isGuideView"
             style="display: contents"
           >
           <SideBar
@@ -1245,6 +1237,10 @@ defineExpose({
                 v-else-if="isWorkflowsView"
                 @open-settings="openSettingsDialog"
               />
+              <GuideView
+                v-else-if="isGuideView"
+                ref="guideViewRef"
+              />
               <StudioView
                 v-else-if="isStudioView"
                 @item-sheets="openSheets($event)"
@@ -1332,19 +1328,15 @@ defineExpose({
              stats rail to inspect, so on any route it rides over the rail is
              its Reviews inspector (open reviews, archived receipts, stickers)
              instead. -->
-        <!-- The 2.0 What's changed checklist (#2145) is a second pane on the
-             media rail, beside Details in the band both panes draw, so it
-             sits just ahead of the stats panel. -->
         <ReviewsInspector v-if="reviewSessionsStore.overlayOpen" />
         <!-- The Studio draws its inspector inside its own lightboxes. -->
-        <template v-else-if="isStudioView"></template>
+        <template v-else-if="isStudioView || isGuideView"></template>
         <template v-else>
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />
         <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
-        <WhatsChangedRail v-else-if="whatsChanged.railShown" />
         <StatsSidebar v-else
           v-show="!buildingSet"
           ref="statsSidebarRef"
@@ -1412,8 +1404,8 @@ defineExpose({
       :disabled="librarySwitchOverlayOpen"
       @click="shortcutsDialogOpen = true"
     >
-      <Tooltip text="Keyboard shortcuts (F1)" activator="parent" />
-      <v-icon size="18">mdi-keyboard</v-icon><span>F1</span>
+      <Tooltip text="Keyboard shortcuts (?)" activator="parent" />
+      <v-icon size="18">mdi-keyboard</v-icon><span>?</span>
     </button>
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
     <ConfirmDialog />
@@ -1435,7 +1427,8 @@ defineExpose({
       @close="faceClustersCharacter = null"
     />
     <LibrarySwitchOverlay />
-    <WhatsChangedTour v-if="whatsChanged.tourStep" :actions="tourActions" />
+    <GuideWelcome />
+    <GuideWizard v-if="guide.wizard" :open-settings="openSettingsDialog" />
   </v-app>
 </template>
 <style src="./App.css"></style>

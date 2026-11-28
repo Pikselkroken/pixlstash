@@ -15,6 +15,7 @@
         size="sm"
         variant="primary"
         icon-left="folder-plus-outline"
+        data-guide="import-pictures.watched-folder"
         @click="openEditor(null)"
       >
         Add import folder…

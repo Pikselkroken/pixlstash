@@ -19,7 +19,6 @@ import SidebarScopeSlot from "./SidebarScopeSlot.vue";
 import SidebarResizeHandle from "./SidebarResizeHandle.vue";
 import UserSettingsDialog from "../settings/UserSettingsDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
-import HeadlineTourCard from "./HeadlineTourCard.vue";
 import KeyCap from "../widgets/KeyCap.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -111,7 +110,6 @@ import {
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSetTreeExpansion } from "../../composables/useSetTreeExpansion";
@@ -150,7 +148,6 @@ const entityNames = useEntityNamesStore();
 // context menu and the review scope pickers, so they live in one store (§4).
 const entityLists = useEntityListsStore();
 const sidebarStore = useSidebarStore();
-const whatsChanged = useWhatsChangedStore();
 const lockedSetsStore = useLockedSetsStore();
 // Failures and outcomes report through the notice surface rather than a
 // blocking native alert() (docs/design/notice-surface.md §1).
@@ -5174,7 +5171,7 @@ defineExpose({
               <span class="sidebar-list-icon"
                 ><v-icon size="16">mdi-image-multiple-outline</v-icon></span
               >
-              <span class="sidebar-list-label">All media</span>
+              <span class="sidebar-list-label" data-guide="libraries.all-media">All media</span>
               <span class="sidebar-list-count">{{
                 categoryCounts[ALL_PICTURES_ID] ?? ""
               }}</span>
@@ -5193,7 +5190,7 @@ defineExpose({
               <span class="sidebar-list-icon"
                 ><v-icon size="16">mdi-heart-outline</v-icon></span
               >
-              <span class="sidebar-list-label">Favourites</span>
+              <span class="sidebar-list-label" data-guide="browse-inspect.favourites">Favourites</span>
               <span class="sidebar-list-count">{{
                 favouriteCount ?? ""
               }}</span>
@@ -5210,7 +5207,7 @@ defineExpose({
             <span class="sidebar-list-icon"
               ><v-icon size="16">mdi-trash-can-outline</v-icon></span
             >
-            <span class="sidebar-list-label">Scrapheap</span>
+            <span class="sidebar-list-label" data-guide="undo-recovery.scrapheap">Scrapheap</span>
             <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
                  and 0 is an answer, so it renders. Only a count that has
                  not arrived yet is blank. This is the same distinction
@@ -5273,6 +5270,7 @@ defineExpose({
                 v-if="!isReadOnly"
                 type="button"
                 :class="['sidebar-list-item', { active: isInboxView }]"
+                data-guide="review-clean-up.inbox"
                 :aria-current="isInboxView ? 'page' : undefined"
                 @click="emit('select-inbox')"
               >
@@ -5307,7 +5305,7 @@ defineExpose({
                 <span class="sidebar-list-icon"
                   ><v-icon size="16">mdi-content-duplicate</v-icon></span
                 >
-                <span class="sidebar-list-label">Duplicates</span>
+                <span class="sidebar-list-label" data-guide="stacks-duplicates.duplicates-queue">Duplicates</span>
                 <span v-if="dedupStore.isScanning" class="sidebar-dedup-scanning">
                   <Tooltip
                     text="Still looking for duplicates. Groups appear as they are found."
@@ -5386,7 +5384,7 @@ defineExpose({
                   <span class="sidebar-list-icon"
                     ><v-icon size="14">mdi-plus</v-icon></span
                   >
-                  <span class="sidebar-list-label">New review…</span>
+                  <span class="sidebar-list-label" data-guide="review-clean-up.tag-reviews">New review…</span>
                 </button>
               </template>
               <!-- Moves: a to-do queue, not a permanent destination, so it earns
@@ -5406,7 +5404,7 @@ defineExpose({
                 <span class="sidebar-list-icon"
                   ><v-icon size="16">mdi-folder-move-outline</v-icon></span
                 >
-                <span class="sidebar-list-label">Moves</span>
+                <span class="sidebar-list-label" data-guide="review-clean-up.moves">Moves</span>
                 <span v-if="movesStore.hasPending" class="sidebar-list-count">{{
                   movesStore.pendingCount
                 }}</span>
@@ -6599,10 +6597,6 @@ defineExpose({
       </template>
     </div>
     <!-- end sidebar-scroll -->
-    <!-- The 2.0 training tour's card (#2145), at the foot until dismissed. -->
-    <HeadlineTourCard
-      v-if="!sidebarStore.effectiveDocked && whatsChanged.cardShown"
-    />
     <!-- The footer band (#2159): one amber Import that names where the
          pictures will land, then the other things made here. Owner only, and
          not on the docked rail. -->
@@ -6695,6 +6689,7 @@ defineExpose({
              sidebar, so its context menu is where owners now find it. -->
         <button
           class="ctx-item"
+          data-guide="libraries.about-library"
           :disabled="isReadOnly"
           @click="
             emit('select-insights');
@@ -6770,7 +6765,7 @@ defineExpose({
                them, so repeating the name only bought an ellipsis: the menu is
                260px wide and "Suggest more pictures of <a real name>" does not
                fit. The title below still names them in full. -->
-          <span class="ctx-label-text">Suggest more pictures</span>
+          <span class="ctx-label-text" data-guide="similar-faces.suggest-pictures">Suggest more pictures</span>
         </button>
         <button
           v-if="!isReadOnly && filterStore.comfyuiConfigured"
@@ -6788,7 +6783,7 @@ defineExpose({
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
           <!-- The reason is in the label as well as the tooltip, as on the
                duplicates row below: a disabled row cannot be focused. -->
-          <span class="ctx-label-text">{{
+          <span class="ctx-label-text" data-guide="consistent-characters.create-with-lora">{{
             sidebarCtxLoraState === "none"
               ? "No LoRA attached"
               : "Create with LoRA…"
@@ -6841,7 +6836,6 @@ defineExpose({
         </button>
         <button
           class="ctx-item"
-          data-tour="train-lora"
           :disabled="isReadOnly"
           @click="
             emit('train-lora', {
@@ -6853,7 +6847,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA…</span>
+          <span class="ctx-label-text" data-guide="consistent-characters.train-lora">Train LoRA…</span>
         </button>
         <button
           class="ctx-item"
@@ -6869,7 +6863,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-face-recognition</v-icon>
-          <span class="ctx-label-text">Faces and reference cluster…</span>
+          <span class="ctx-label-text" data-guide="similar-faces.face-clusters">Faces and reference cluster…</span>
         </button>
         <button
           class="ctx-item"
@@ -6886,7 +6880,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-draw</v-icon>
-          <span class="ctx-label-text">Generate character sheets…</span>
+          <span class="ctx-label-text" data-guide="consistent-characters.character-sheets">Generate character sheets…</span>
         </button>
         <button
           class="ctx-item"
@@ -6905,7 +6899,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-hanger</v-icon>
-          <span class="ctx-label-text">Draw outfit sheets…</span>
+          <span class="ctx-label-text" data-guide="studio.outfit-sheets">Draw outfit sheets…</span>
         </button>
         <button
           class="ctx-item"
@@ -6921,7 +6915,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-image-multiple-outline</v-icon>
-          <span class="ctx-label-text">Create a training set…</span>
+          <span class="ctx-label-text" data-guide="consistent-characters.training-set">Create a training set…</span>
         </button>
         <button
           class="ctx-item"
@@ -6949,6 +6943,7 @@ defineExpose({
             !isReadOnly &&
             (openCharacterEditor(sidebarCtxCharacter), closeSidebarCtxMenu())
           "
+          data-guide="people.pick-thumbnail"
         >
           <v-icon class="ctx-icon">mdi-pencil</v-icon>
           Edit
@@ -6964,6 +6959,7 @@ defineExpose({
               sidebarCtxCharacter.name,
             )
           "
+          data-guide="share-links.remove-shares"
         >
           <v-icon class="ctx-icon">mdi-link-variant-off</v-icon>
           Remove all shares
@@ -6989,7 +6985,6 @@ defineExpose({
              under it lead the menu. -->
         <button
           class="ctx-item"
-          data-tour="train-lora"
           :disabled="isReadOnly"
           @click="
             emit('train-lora', {
@@ -7001,7 +6996,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-school-outline</v-icon>
-          <span class="ctx-label-text">Train LoRA…</span>
+          <span class="ctx-label-text" data-guide="consistent-characters.train-lora">Train LoRA…</span>
         </button>
         <button
           class="ctx-item"
@@ -7023,7 +7018,7 @@ defineExpose({
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-folder-plus-outline</v-icon>
-          <span class="ctx-label-text"
+          <span class="ctx-label-text" data-guide="sets-projects.nest-sets"
             >New set inside "{{ sidebarCtxSet.name }}"…</span
           >
         </button>
@@ -7039,7 +7034,7 @@ defineExpose({
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-image-search</v-icon>
-          <span class="ctx-label-text">Suggest more pictures</span>
+          <span class="ctx-label-text" data-guide="similar-faces.suggest-pictures">Suggest more pictures</span>
         </button>
         <!-- Hidden on a locked set for the same reason: the run files its
              pictures into the set, and a locked set refuses them. -->
@@ -7059,7 +7054,7 @@ defineExpose({
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
-          <span class="ctx-label-text">{{
+          <span class="ctx-label-text" data-guide="consistent-characters.create-with-lora">{{
             sidebarCtxLoraState === "none"
               ? "No LoRA attached"
               : "Create with LoRA…"
@@ -7101,7 +7096,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-share-variant-outline</v-icon>
-          <span class="ctx-label-text">Share "{{ sidebarCtxSet.name }}"</span>
+          <span class="ctx-label-text" data-guide="share-links.share-set">Share "{{ sidebarCtxSet.name }}"</span>
         </button>
         <button
           class="ctx-item"
@@ -7130,7 +7125,7 @@ defineExpose({
                 : "mdi-layers-triple"
             }}
           </v-icon>
-          Icon
+          <span data-guide="sets-projects.icon-color">Icon</span>
           <v-icon class="ctx-arrow">mdi-chevron-right</v-icon>
         </button>
         <Teleport to="body">
@@ -7321,6 +7316,7 @@ defineExpose({
         <button
           class="ctx-item"
           :disabled="isReadOnly || !!sidebarCtxSet.building"
+          data-guide="sets-projects.lock-set"
           @click="toggleSetLock(sidebarCtxSet)"
         >
           <v-icon class="ctx-icon">{{
@@ -7498,7 +7494,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-map-marker-outline</v-icon>
-          Draw location sheets…
+          <span data-guide="studio.location-sheets">Draw location sheets…</span>
         </button>
         <button
           class="ctx-item"
@@ -7513,7 +7509,7 @@ defineExpose({
           "
         >
           <v-icon class="ctx-icon">mdi-umbrella-outline</v-icon>
-          Draw prop sheets…
+          <span data-guide="studio.props">Draw prop sheets…</span>
         </button>
       </template>
       <!-- ── Empty-space menu (right-click uncovered sidebar area) ── -->

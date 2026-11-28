@@ -68,7 +68,7 @@
           </div>
         </label>
         <label class="tbm-field">
-          <span class="tbm-label">Bounding boxes</span>
+          <span class="tbm-label" data-guide="export.bounding-boxes">Bounding boxes</span>
           <div class="tbm-select-wrap">
             <select v-model="tbExportBboxModeModel" class="tbm-select">
               <option
@@ -154,6 +154,7 @@
         class="tb-export-folder-btn"
         icon-left="folder-download-outline"
         block
+        data-guide="export.export-to-folder"
         tooltip="Write straight into a folder on this machine, then open it - no ZIP or download step"
         @click="folderBrowserOpen = true"
       >

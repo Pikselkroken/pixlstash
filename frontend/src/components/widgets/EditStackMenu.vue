@@ -16,6 +16,7 @@
       role="menuitem"
       aria-haspopup="menu"
       :aria-expanded="open ? 'true' : 'false'"
+      data-guide="stacks-duplicates.edit-stack"
       @click="open = !open"
     >
       <v-icon class="ctx-icon">mdi-layers-edit</v-icon>
@@ -37,7 +38,7 @@
           @click="emit('stack-move', 'cover')"
         >
           <v-icon class="ctx-icon">mdi-star-outline</v-icon>
-          <span>Make cover</span>
+          <span data-guide="stacks-duplicates.choose-cover">Make cover</span>
           <span class="ctx-shortcut" aria-hidden="true">{{ keys.cover.hint }}</span>
         </button>
         <button

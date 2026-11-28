@@ -12,6 +12,7 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 
 import { WORK_INFO } from './electron-setup.js'
+import { WELCOME_EDITION } from '../../src/guide/catalogue.js'
 
 // Same frame as the old browser captures: 1600x1000 CSS px at 2x.
 const WIDTH = 1600
@@ -233,12 +234,13 @@ export const test = base.extend({
       // collapsed rail shows only icons). The first-run prompts are answered
       // so no consent scrim lands in a shot, and the update check and
       // telemetry stay off a throwaway install.
-      // The running version counts as seen, so no shot carries the 2.0
-      // What's changed checklist (#2145).
+      // The running version and the Guide's welcome count as seen, so no shot
+      // carries the welcome carousel (#2825).
       const { version } = await (await ctx.get('/version')).json()
       const config = await ctx.patch('/api/v1/users/me/config', {
         data: {
           last_seen_version: version,
+          guide_welcome_seen: WELCOME_EDITION,
           check_for_updates: false,
           telemetry_send_install_id: false,
           telemetry_send_feature_usage: false,

@@ -169,7 +169,7 @@
               :tooltip="exportTitle"
               :aria-label="exportTitle"
             >
-              <span class="pill-verb-label">Export</span>
+              <span class="pill-verb-label" data-guide="export.export-zip">Export</span>
             </AppBarButton>
           </template>
           <TbExportPanel

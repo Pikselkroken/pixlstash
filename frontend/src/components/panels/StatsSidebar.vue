@@ -43,10 +43,6 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWsStore } from "../../stores/useWsStore";
 import { useInboxStore } from "../../stores/useInboxStore";
 import {
-  INSPECTOR_BAND,
-  useWhatsChangedStore,
-} from "../../stores/useWhatsChangedStore";
-import {
   isGroupToken,
   useTagGroupsStore,
 } from "../../stores/useTagGroupsStore";
@@ -67,7 +63,6 @@ const sidebarStore = useSidebarStore();
 const wsStore = useWsStore();
 const inboxStore = useInboxStore();
 // While the 2.0 checklist is up, Details sits beside it in a band (#2145).
-const whatsChanged = useWhatsChangedStore();
 
 
 // The two folder facets are derived from the sidebar's folder selection, same
@@ -1254,10 +1249,6 @@ function handleResolutionBarClick(label) {
     label="Inspector"
     :open="sidebarStore.statsOpen"
     :tabs="bandTabs"
-    :band="whatsChanged.checklistShown ? INSPECTOR_BAND : []"
-    band-value="details"
-    @update:band-value="whatsChanged.showTab($event)"
-    @close-band="whatsChanged.leave()"
   >
     <!-- One head row on the toolbar's line (#2161): what the rail is about -
          the view, the one picture, or how many - and, while anything is

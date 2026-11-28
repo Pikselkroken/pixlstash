@@ -1,5 +1,5 @@
-// Settings' version and What's new pill (#2145): both bring back the 2.0
-// checklist and the training tour card, and the dialog gets out of the way.
+// Settings' version and What's new pill: both open the Guide on New in 2.x
+// (#2825, which retired the 2.0 checklist), and the dialog gets out of the way.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -14,6 +14,8 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 vi.mock("../../api/config", () => ({ patchUserConfig: vi.fn(async () => ({})) }));
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("vue-router", () => ({ useRouter: () => router }));
 
 vi.mock("vuetify/components", () => ({
   VIcon: { template: "<i><slot /></i>" },
@@ -56,22 +58,22 @@ vi.mock("./ComfyuiHostSection.vue", () => ({ default: sectionStub }));
 
 import UserSettingsDialog from "./UserSettingsDialog.vue";
 import { isReadOnly } from "../../utils/apiClient";
-import { useWhatsChangedStore } from "../../stores/useWhatsChangedStore";
 
 beforeEach(() => {
   setActivePinia(createPinia());
   isReadOnly.value = false;
+  router.push.mockClear();
 });
 
 describe("Settings' What's new", () => {
   for (const testid of ["settings-version", "settings-whats-new"]) {
-    it(`${testid} reopens both and closes the dialog`, async () => {
-      const store = useWhatsChangedStore();
+    it(`${testid} opens the Guide on New in 2.x and closes the dialog`, async () => {
       const w = mount(UserSettingsDialog, { props: { open: true } });
       await w.find(`[data-testid="${testid}"]`).trigger("click");
-      expect(store.checklist).toBe(true);
-      expect(store.card).toBe(true);
-      expect(store.reopened).toBe(1);
+      expect(router.push).toHaveBeenCalledWith({
+        path: "/guide",
+        query: { in: "new" },
+      });
       expect(w.emitted("update:open")?.at(-1)).toEqual([false]);
     });
   }

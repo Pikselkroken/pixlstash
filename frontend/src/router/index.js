@@ -108,6 +108,8 @@ const routes = [
   { path: "/models/runs", name: "models-runs", component: App },
   { path: "/workflows", name: "workflows", component: App },
   { path: "/studio", name: "studio", component: App },
+  { path: "/guide", name: "guide", component: App },
+  { path: "/guide/:concept", name: "guide-concept", component: App },
   // The runs were briefly a destination of their own. They are a view of the
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },

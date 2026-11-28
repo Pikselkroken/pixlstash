@@ -453,6 +453,7 @@ onUnmounted(() => window.clearTimeout(copyResetTimer));
                     openMenuUuid = '';
                     captionsDialogOpen = true;
                   "
+                  data-guide="import-pictures.caption-files"
                 >
                   Caption files…
                 </button>

@@ -304,6 +304,13 @@ def create_router(server) -> APIRouter:
                 '"card": bool}. Null resets it.'
             ),
         )
+        guide_welcome_seen: Optional[str] = Field(
+            default=None,
+            description=(
+                "The newest New in 2.x headline the Guide's welcome was shown "
+                "for. Blank or null resets it, so the welcome shows again."
+            ),
+        )
         embed_watermark: Optional[bool] = None
         keep_workflow_on_export: Optional[bool] = Field(
             default=None,

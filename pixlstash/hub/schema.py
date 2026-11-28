@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS user (
     keep_workflow_on_export     INTEGER,
     last_seen_version           TEXT,
     whats_changed               TEXT,
+    guide_welcome_seen          TEXT,
 
     -- Library-scoped by §5; present only so the shared ``User`` model maps.
     -- Never read from the hub; the vault's library_settings row owns them.
@@ -2149,6 +2150,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("last_seen_version", "whats_changed"):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
+    # The Guide's welcome (#2825): NULL reads as never shown.
+    if "guide_welcome_seen" not in user_columns:
+        conn.execute("ALTER TABLE user ADD COLUMN guide_welcome_seen TEXT")
     # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
     # (NOT NULL DEFAULT 1), the switch of the removed pull of ComfyUI's saved
     # workflows (#1854). Nothing reads or adds it; it is not worth a migration

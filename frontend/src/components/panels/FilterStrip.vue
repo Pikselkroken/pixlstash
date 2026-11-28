@@ -36,6 +36,7 @@
         class="filter-strip-clear"
         type="button"
         data-testid="save-smart-set"
+        data-guide="filters-smart-sets.save-smart-set"
         @click="onSaveSmartSet()"
       >
         Save as smart set…

@@ -185,6 +185,21 @@ def test_patch_user_config():
         cfg = client.get("/users/me/config").json()
         assert cfg["last_seen_version"] is None
         assert cfg["whats_changed"] is None
+
+        # The Guide's welcome (#2825): unset, a round trip, a refusal, a reset.
+        assert cfg["guide_welcome_seen"] is None
+        resp = client.patch(
+            "/users/me/config", json={"guide_welcome_seen": " smart-sets "}
+        )
+        assert resp.status_code == 200
+        assert client.get("/users/me/config").json()["guide_welcome_seen"] == (
+            "smart-sets"
+        )
+        for bad in ({"guide_welcome_seen": "g" * 65}, {"guide_welcome_seen": 3}):
+            assert client.patch("/users/me/config", json=bad).status_code == 400, bad
+        resp = client.patch("/users/me/config", json={"guide_welcome_seen": ""})
+        assert resp.status_code == 200
+        assert client.get("/users/me/config").json()["guide_welcome_seen"] is None
     finally:
         server.close()
         temp_dir.cleanup()

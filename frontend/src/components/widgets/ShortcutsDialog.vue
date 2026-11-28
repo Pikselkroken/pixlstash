@@ -250,8 +250,12 @@ const open = computed(() => props.modelValue);
           <td>Rename or edit the person or picture set on screen</td>
         </tr>
         <tr>
-          <td><kbd>?</kbd> / <kbd class="kbd-or">F1</kbd></td>
+          <td><kbd>?</kbd></td>
           <td>Show / hide this dialog</td>
+        </tr>
+        <tr :class="{ 'shortcut-disabled': isReadOnly }">
+          <td><kbd>F1</kbd></td>
+          <td>Open the Guide</td>
         </tr>
       </tbody>
     </table>

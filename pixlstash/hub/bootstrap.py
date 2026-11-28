@@ -307,6 +307,7 @@ _USER_COLUMNS_TO_COPY = (
     "keep_workflow_on_export",
     "last_seen_version",
     "whats_changed",
+    "guide_welcome_seen",
 )
 
 _TOKEN_COLUMNS_TO_COPY = (
