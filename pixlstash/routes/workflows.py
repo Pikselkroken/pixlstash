@@ -225,7 +225,7 @@ from pixlstash.services.edit_selection import (
     upright_size,
     write_masked_picture,
 )
-from pixlstash.services import prompt_assist
+from pixlstash.services import prompt_assist, prompt_llm
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -2095,6 +2095,22 @@ class RunRequest(BaseModel):
     # seed of the picture its graph was read from is "Clone picture", and any
     # other is named after its workflow.
     label: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
+
+
+class LlmLoader(BaseModel):
+    """A workflow's text-encoder loader node, whose encoder is a chat LLM."""
+
+    class_type: str = Field(max_length=100)
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+class EmbellishRequest(BaseModel):
+    loader: LlmLoader
+    prompt: str = Field(min_length=1, max_length=4000)
+
+
+class Embellished(BaseModel):
+    prompt: str
 
 
 class UpscaleRequest(BaseModel):
@@ -8748,6 +8764,39 @@ def create_router(server) -> APIRouter:
                 )
             )
         return UpscalePreflight(pictures=pictures)
+
+    @router.post(
+        "/item-sheets/prompt/embellish",
+        summary="Rewrite a prompt richer with a workflow's own LLM",
+        description=(
+            "Runs the text encoder *loader* loads (a workflow's CLIPLoader whose "
+            "encoder is a chat LLM, such as MiniMax H3's Qwen3-VL) through "
+            "ComfyUI's Generate Text node, asked to rewrite *prompt* richer "
+            "while keeping every fact it gives, and answers with the rewrite. "
+            "A file this ComfyUI does not list is loaded off the shelf, as a "
+            "run loads it. 409 when the loader cannot run as an LLM or ComfyUI "
+            "wrote nothing; 502 when ComfyUI refused or stopped answering."
+        ),
+        response_model=Embellished,
+    )
+    def embellish_prompt(request: Request, payload: EmbellishRequest):
+        server.auth.ensure_secure_when_required(request)
+        comfyui_url = _comfyui_url(_user(request))
+        object_info = _require_object_info(
+            _read_object_info(comfyui_url), "to embellish the prompt"
+        )
+        try:
+            text = prompt_llm.embellish(
+                comfyui_url,
+                payload.loader.model_dump(),
+                payload.prompt,
+                prepare=lambda graph: _swap_in_shelf_loaders(
+                    request, "embellish", graph, object_info
+                ),
+            )
+        except prompt_llm.PromptLlmUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Embellished(prompt=text)
 
     @router.post(
         "/workflows/upscale",

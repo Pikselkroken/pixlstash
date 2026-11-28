@@ -82,7 +82,10 @@
                   class="studio-card"
                   @click="emit('go', 'outfit', outfit.id)"
                 >
-                  <span class="studio-card__ph">
+                  <span
+                    class="studio-card__ph"
+                    :style="outfit.aspect ? { '--tile-aspect': outfit.aspect } : undefined"
+                  >
                     <img
                       v-if="outfit.picture_ids[0]"
                       :src="pictureThumbnailUrl(outfit.picture_ids[0])"

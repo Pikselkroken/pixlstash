@@ -352,6 +352,28 @@ def test_the_studio_reads_the_library_open_now_not_the_one_it_started_with(env):
     assert "run_immediate_read_task" in used
 
 
+def test_an_items_card_takes_the_shape_of_its_pictures(env):
+    client = env.client
+    path = os.path.join(env.temp_dir, "wide-view.png")
+    Image.new("RGB", (160, 90), (40, 120, 200)).save(path)
+    with open(path, "rb") as f:
+        status = upload_pictures_and_wait(
+            client, [("file", ("wide-view.png", f.read(), "image/png"))]
+        )
+    picture_id = status["results"][0]["picture_id"]
+    location = _item(client, "location")
+    empty = _item(client, "prop")
+    resp = client.post(
+        f"{API_PREFIX}/picture_sets/{location}/members",
+        json={"picture_ids": [picture_id]},
+    )
+    assert resp.status_code == 200, resp.text
+    overview = client.get(f"{API_PREFIX}/studio/overview").json()
+    assert {i["id"]: i["aspect"] for i in overview["locations"]}[location] == 1.7778
+    # Nothing to measure: no shape, and the card keeps its own.
+    assert {i["id"]: i["aspect"] for i in overview["props"]}[empty] is None
+
+
 def test_a_prop_is_held_only_by_someone_in_the_cast(env):
     client = env.client
     scene = client.post(f"{API_PREFIX}/studio/scenes", json={"name": "Alone"}).json()
@@ -430,7 +452,7 @@ def test_a_scene_naming_a_missing_set_is_refused(env):
 def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     client = env.client
     path = os.path.join(env.temp_dir, "take.png")
-    Image.new("RGB", (64, 64), (200, 40, 40)).save(path)
+    Image.new("RGB", (96, 64), (200, 40, 40)).save(path)
     with open(path, "rb") as f:
         status = upload_pictures_and_wait(
             client, [("file", ("take.png", f.read(), "image/png"))]
@@ -455,6 +477,9 @@ def test_a_finished_run_becomes_takes_and_a_lost_one_is_said(env):
     assert [t["picture_id"] for t in filed["takes"]] == [picture_id]
     assert filed["takes"][0]["format"].lower() == "png"
     assert filed["ended"][0]["picture_count"] == 1
+    # The scene's card takes its cover's shape.
+    cards = client.get(f"{API_PREFIX}/studio/overview").json()["scenes"]
+    assert {c["id"]: c["cover_aspect"] for c in cards}[scene["id"]] == 1.5
 
     # A picture already filed is not filed again, by another run or twice.
     again = f"run-{uuid.uuid4().hex}"

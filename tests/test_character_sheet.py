@@ -18,6 +18,7 @@ from pixlstash.server import Server
 from pixlstash.event_types import EventType
 from pixlstash.routes.comfyui import WORKFLOW_BUILTIN_DIR
 from pixlstash.services import character_sheet, comfyui_service, scrapheap_service
+from pixlstash.routes import workflows as workflows_routes
 from pixlstash.services import prompt_llm, workflow_run_service
 from pixlstash.services.comfyui_recipe_service import plan_lora_insertion
 from pixlstash.services.prompt_assist import assemble
@@ -1672,6 +1673,10 @@ def test_a_workflow_llm_rewrites_a_prompt_through_generate_text(client, monkeypa
     monkeypatch.setattr(prompt_llm, "_submit_comfyui_prompt", submit)
     monkeypatch.setattr(prompt_llm, "_fetch_comfyui_history", lambda *_: next(answers))
     monkeypatch.setattr(prompt_llm, "POLL_SECONDS", 0)
+    # The route reads ComfyUI's node map to load off the shelf as a run does.
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda *_a, **_k: ({}, None)
+    )
     loader = {
         "class_type": "CLIPLoader",
         "inputs": {"clip_name": "qwen3vl.safetensors", "type": "minimax", "evil": "x"},
@@ -1704,6 +1709,37 @@ def test_a_workflow_llm_rewrites_a_prompt_through_generate_text(client, monkeypa
             json={"loader": bad, "prompt": "a pub"},
         )
         assert refused.status_code == 409, (bad, refused.text)
+
+
+def test_embellish_prepares_the_graph_before_it_is_sent(monkeypatch):
+    order = []
+
+    def submit(_base_url, graph, client_id=None):
+        order.append(("submit", graph["1"]["class_type"]))
+        return {"prompt_id": "p2"}
+
+    def prepare(graph):
+        order.append(("prepare", graph["1"]["class_type"]))
+        graph["1"]["class_type"] = "PixlStashClipLoader"
+
+    monkeypatch.setattr(prompt_llm, "_submit_comfyui_prompt", submit)
+    monkeypatch.setattr(
+        prompt_llm,
+        "_fetch_comfyui_history",
+        lambda *_: {
+            "p2": {
+                "status": {"status_str": "success"},
+                "outputs": {"3": {"text": ["ok"]}},
+            }
+        },
+    )
+    loader = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "q.safetensors", "type": "minimax"},
+    }
+    assert prompt_llm.embellish("http://x", loader, "a pub", prepare=prepare) == "ok"
+    # The shelf's loader is what ComfyUI is sent.
+    assert order == [("prepare", "CLIPLoader"), ("submit", "PixlStashClipLoader")]
 
 
 def test_using_a_sheet_files_six_panels_on_the_character(client, sheet_id):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from typing import Callable, Optional
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_service import (
@@ -97,12 +98,21 @@ def preview_text(entry: dict) -> str:
     return ""
 
 
-def embellish(base_url: str, loader: dict, prompt: str) -> str:
+def embellish(
+    base_url: str,
+    loader: dict,
+    prompt: str,
+    prepare: Optional[Callable[[dict], object]] = None,
+) -> str:
     """*prompt* rewritten richer by the LLM *loader* loads, on ComfyUI at
-    *base_url*. Raises :class:`PromptLlmUnavailable` with the reason."""
+    *base_url*. *prepare* changes the graph in place before it is sent: a run
+    loads a file this ComfyUI does not list off PixlStash's shelf, and so must
+    this. Raises :class:`PromptLlmUnavailable` with the reason."""
     graph = generate_graph(
         loader, prompt, EMBELLISH_INSTRUCTION, secrets.randbelow(2**32)
     )
+    if prepare is not None:
+        prepare(graph)
     prompt_id = _submit_comfyui_prompt(base_url, graph).get("prompt_id")
     if not prompt_id:
         raise PromptLlmUnavailable("ComfyUI did not take the prompt.")

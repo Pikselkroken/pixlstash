@@ -685,7 +685,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                        |
 | PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                     |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                         |
-| POST   | /api/v1/item-sheets/prompt/embellish                                          | characters      | Rewrite a prompt richer with a workflow's own LLM             |
+| POST   | /api/v1/item-sheets/prompt/embellish                                          | workflows       | Rewrite a prompt richer with a workflow's own LLM             |
 | POST   | /api/v1/item-sheets/rank                                                      | characters      | Rank drawn outfit, location or prop sheets                    |
 | POST   | /api/v1/item-sheets/shots                                                     | characters      | Take a location's new views out of its shots video            |
 | POST   | /api/v1/item-sheets/shots/check                                               | characters      | Check a location's restored views                             |
@@ -13928,7 +13928,9 @@ stills or video clips. Models in `db_models/studio.py`, routes in
   (`TextGenerateV2`, the rewrite instruction as its system prompt) and
   *Preview as Text*, waits on the history and answers with the preview's
   text. Only `CLIPLoader`/`CLIPLoaderGGUF` and their own string inputs
-  reach the graph.
+  reach the graph, and a file the ComfyUI does not list is loaded off the
+  shelf by `_swap_in_shelf_loaders` as a run's is (the route lives in
+  `routes/workflows.py` for that helper).
 - **Not built yet.** Multi-pass engines (one masked pass per person, as the
   design proposes): a shot is one run of one workflow.
 

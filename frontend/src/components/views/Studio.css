@@ -86,7 +86,7 @@
 
 .studio-card__ph {
   position: relative;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: var(--tile-aspect, 1 / 1);
   border-radius: var(--radius-md);
   overflow: hidden;
   background: rgb(var(--v-theme-surface));

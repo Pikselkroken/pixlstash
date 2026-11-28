@@ -729,6 +729,26 @@ describe("the sheet tiles", () => {
     expect(take.findAll(".studio-tile-chips img")).toHaveLength(2);
   });
 
+  it("shapes an item's and a scene's card as their pictures, never cropping them", async () => {
+    const overview = structuredClone(OVERVIEW);
+    overview.locations[0].aspect = 1.7778;
+    overview.outfits[0].aspect = 0.8;
+    overview.scenes[0].cover_aspect = 1.5;
+    api.getStudioOverview.mockResolvedValue(overview);
+    const shape = (w, key) =>
+      w.find(`[data-testid="studio-card-${key}"] .studio-tile-media`).attributes("style") ?? "";
+    const places = await mountAt("/studio?section=locations");
+    expect(shape(places, "location-30")).toContain("--tile-aspect: 1.7778");
+    places.unmount();
+    const clothes = await mountAt("/studio?section=wardrobe");
+    expect(shape(clothes, "outfit-20")).toContain("--tile-aspect: 0.8");
+    clothes.unmount();
+    const scenes = await mountAt("/studio?section=scenes");
+    expect(shape(scenes, "scene-1")).toContain("--tile-aspect: 1.5");
+    // Not measured: the card keeps the shape its kind's sheet has.
+    expect(shape(scenes, "scene-2")).not.toContain("--tile-aspect");
+  });
+
   it("shows an item short of its four angles as its first picture, whole", async () => {
     api.getStudioOverview.mockResolvedValue({
       ...OVERVIEW,

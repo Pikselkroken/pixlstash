@@ -476,6 +476,25 @@ def create_router(server) -> APIRouter:
             ).all():
                 people_projects.setdefault(char_id, []).append(pid)
 
+            # Each card takes the shape of its pictures: width over height of
+            # a set's first picture and a scene's cover, None when unknown.
+            shown = [ids[0] for ids in members.values() if ids] + [
+                pid for pid in covers.values() if pid
+            ]
+            aspects = {
+                pid: round(width / height, 4)
+                for pid, width, height in (
+                    session.exec(
+                        select(Picture.id, Picture.width, Picture.height).where(
+                            Picture.id.in_(shown)
+                        )
+                    ).all()
+                    if shown
+                    else []
+                )
+                if width and height
+            }
+
             lists: dict[str, list] = {kind: [] for kind in ITEM_KINDS}
             for row, pset in item_rows:
                 if row.kind == "outfit":
@@ -495,6 +514,7 @@ def create_router(server) -> APIRouter:
                         "description": pset.description or "",
                         "character_id": pset.parent_character_id,
                         "picture_ids": members.get(pset.id, []),
+                        "aspect": aspects.get((members.get(pset.id) or [None])[0]),
                         "project_ids": set_projects.get(pset.id, []),
                         "scene_count": used.get((row.kind, pset.id), 0),
                         "favourite": (row.kind, pset.id) in favourites,
@@ -525,6 +545,7 @@ def create_router(server) -> APIRouter:
                         "take_count": take_counts.get(s.id, 0),
                         "running": len(s.runs or []),
                         "cover_picture_id": covers.get(s.id),
+                        "cover_aspect": aspects.get(covers.get(s.id)),
                         "updated_at": s.updated_at,
                         "favourite": ("scene", s.id) in favourites,
                     }

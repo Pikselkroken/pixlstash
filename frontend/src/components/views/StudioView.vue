@@ -135,6 +135,7 @@
               <span
                 class="studio-card__ph studio-tile-media"
                 :class="`studio-tile-media--${card.tile.shape}`"
+                :style="card.tile.aspect ? { '--tile-aspect': card.tile.aspect } : undefined"
               >
                 <span
                   v-for="panel in card.tile.panels"
@@ -512,10 +513,12 @@ function metaOf(kind, item) {
   return `In ${item.scene_count} ${item.scene_count === 1 ? "scene" : "scenes"}`;
 }
 
-// Each card is a small copy of the sheet its kind is drawn on (5:3): a
-// person's four headshots two by two and two body shots, an item's four views
-// or angles two by two. A scene has no sheet: its latest take, 3:2, with the
-// cast's faces on it. Fewer pictures than slots never leaves a hole.
+// Each card is a small copy of the sheet its kind is drawn on: a person's four
+// headshots two by two and two body shots (5:3), an item's four views or
+// angles two by two. A scene has no sheet: its latest take with the cast's
+// faces on it. Fewer pictures than slots never leaves a hole. An item's and a
+// scene's card take the shape of their pictures (`aspect`, width over height),
+// so nothing is cropped: four equal panels two by two have the panel's shape.
 const HEAD_AREAS = ["1 / 1", "1 / 2", "2 / 1", "2 / 2"];
 
 function castTile(item) {
@@ -562,6 +565,7 @@ function tileOf(kind, item) {
     const thumb = thumbOf(kind, item);
     return {
       shape: "scene",
+      aspect: item.cover_aspect ?? null,
       panels: thumb ? [{ key: "cover", area: "1 / 1", src: thumb }] : [],
       chips: item.cast_ids.map((id) => characterThumbnailUrl(id)),
       prompt: null,
@@ -571,6 +575,7 @@ function tileOf(kind, item) {
   if (ids.length < 4) {
     return {
       shape: "one",
+      aspect: item.aspect ?? null,
       panels: ids.length ? [{ key: ids[0], area: "1 / 1", src: pictureThumbnailUrl(ids[0]) }] : [],
       chips: [],
       prompt: null,
@@ -579,6 +584,7 @@ function tileOf(kind, item) {
   const labels = kind === "location" ? LOCATION_VIEWS : ITEM_ANGLES;
   return {
     shape: "quad",
+    aspect: item.aspect ?? null,
     panels: ids.slice(0, 4).map((id, i) => ({
       key: id,
       area: HEAD_AREAS[i],
@@ -1119,10 +1125,11 @@ async function addSet() {
   gap: var(--space-4) var(--space-3);
 }
 
+/* `--tile-aspect` is the pictures' own shape where it is known. */
 .studio-tile-media {
   display: grid;
   gap: var(--space-1);
-  aspect-ratio: 5 / 3;
+  aspect-ratio: var(--tile-aspect, 5 / 3);
   background: rgb(var(--v-theme-background));
 }
 
@@ -1143,7 +1150,7 @@ async function addSet() {
 
 .studio-tile-media--scene {
   grid-template-columns: 1fr;
-  aspect-ratio: 3 / 2;
+  aspect-ratio: var(--tile-aspect, 3 / 2);
   background: rgb(var(--v-theme-surface));
 }
 
