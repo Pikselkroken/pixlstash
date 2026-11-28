@@ -8892,6 +8892,9 @@ inside its lightboxes, so the rail is empty on `/studio`.
   CLIPLoader's `type` is in `LLM_TYPES`) and rewrites the field with it. At
   the end the picture started from leads the row of views, and the zoom
   steps from it through them, with Keep in the pop-out.
+  The number of new views is picked, one to four (`la-view-count`); the
+  video is two seconds a view longer, set through the shots workflow's
+  *duration* input (`GET /workflows/{id}/form-inputs`).
 - **Category colours** are `--kind-cast` (raspberry), `--kind-location`
   (teal) and `--kind-prop` (violet), aliases of the theme fills in
   `design-tokens.css`, drawn as a rounded tile with a white glyph and always
