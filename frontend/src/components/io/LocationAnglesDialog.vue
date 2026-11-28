@@ -725,13 +725,16 @@ function stop() {
 watch(
   () => drawStore.epoch,
   () => {
-    stop();
+    // What it made is let go first, so the stop has nothing to report back
+    // into the store the reset has just emptied.
     candidates.value = [];
     views.value = [];
     kept.value = [];
     broughtBack = new Set();
     madeSet = null;
+    stop();
     phase.value = "place";
+    drawStore.report(null);
   },
 );
 

@@ -738,6 +738,20 @@ describe("More angles", () => {
     expect(draws.job).toBeNull();
   });
 
+  it("leaves no draw behind a session change while wide pictures wait to be chosen", async () => {
+    const wrapper = newLocation();
+    await flushPromises();
+    await wrapper.find('[data-testid="la-description"] textarea').setValue("a pub");
+    await wrapper.find('[data-testid="la-wide"]').trigger("click");
+    await flushPromises();
+    const draws = useLocationDrawStore();
+    expect(draws.job).toMatchObject({ locationId: null, ready: true });
+    draws.reset();
+    await flushPromises();
+    expect(draws.job).toBeNull();
+    expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
   it("stops following its runs when stopped mid-draw", async () => {
     api.getRunOutcome.mockResolvedValue({ status: "running", picture_ids: [] });
     const draws = useLocationDrawStore();
