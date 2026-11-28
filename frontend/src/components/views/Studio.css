@@ -201,6 +201,8 @@
 }
 
 .studio-lightbox__main {
+  /* The selection pill floats over the end of the pictures. */
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -354,13 +356,6 @@
   background: var(--active-wash);
   box-shadow: var(--selection-ring);
   pointer-events: none;
-}
-
-.studio-selbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
 }
 
 .studio-ctx-menu {

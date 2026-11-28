@@ -235,6 +235,22 @@
       </div>
     </template>
 
+    <!-- The selection pill, floated over the end of the grid as the photo
+         grid's is; the right-click menu holds the same verbs in words. -->
+    <div v-if="!openKind && selectedKeys.length" class="selbar-float">
+      <StudioSelectionBar
+        :count="selectedKeys.length"
+        noun="item"
+        plural="items"
+        :verbs="pillVerbs"
+        :project="{ subjectIds: selectedKeys, membership: projectMembership }"
+        @verb="runPillVerb"
+        @clear="selectedKeys = []"
+        @select-all="selectedKeys = cards.map(cardKey)"
+        @project="onProjectPicked"
+      />
+    </div>
+
     <Teleport to="body">
       <div
         v-if="cardMenu"
@@ -381,6 +397,7 @@ import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import Segmented from "../widgets/Segmented.vue";
 import StudioItem from "./StudioItem.vue";
 import DrawProgress from "../widgets/DrawProgress.vue";
+import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import StudioScene from "./StudioScene.vue";
 import { characterThumbnailUrl } from "../../api/characters";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -889,6 +906,23 @@ const menuEntries = computed(() => {
   );
   return entries;
 });
+
+// The pill's verbs: the menu's, but Project (its own popover) and the rows.
+const pillVerbs = computed(() =>
+  menuEntries.value
+    .filter((entry) => entry !== SEP && entry.key !== "project")
+    .map((entry) => ({
+      key: entry.key,
+      icon: entry.icon.replace(/^mdi-/, ""),
+      label: entry.label.replace(/…$/, ""),
+      danger: !!entry.danger,
+      reason: entry.reason ?? "",
+    })),
+);
+
+function runPillVerb(key) {
+  menuEntries.value.find((entry) => entry !== SEP && entry.key === key)?.run();
+}
 
 // Each selected card in each project it is in, for the Project flyout's ticks.
 const projectMembership = computed(() => {

@@ -8848,6 +8848,10 @@ inside its lightboxes, so the rail is empty on `/studio`.
   Ctrl/Cmd+click adds or takes away, Shift+click takes the run from the first
   selected, Ctrl+A takes all, Esc or a click on the empty grid clears;
   double-click or Enter opens. A key is `kind:id`, since kinds share ids.
+  A selection wears the app's pill (`panels/StudioSelectionBar.vue` on
+  `.selbar`, floated by `.selbar-float`): the count with Select all and
+  Clear, the verbs as round buttons, Project in a popover, Delete last, then
+  Clear; an item's pictures wear the same pill.
   Right-click (Menu key, Shift+F10) opens the sidebar's `.ctx-menu` for the
   selection, selecting a card outside it alone first: Open, the favourite,
   Duplicate, Project (`AddToEntityControl` fed `project_ids` from the

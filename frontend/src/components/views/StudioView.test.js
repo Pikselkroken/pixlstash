@@ -341,6 +341,28 @@ describe("selecting Studio cards", () => {
     expect(selected(wrapper)).toEqual([]);
   });
 
+  it("wears the selection pill: its verbs act on the selection, and Clear ends it", async () => {
+    api.confirm.mockResolvedValue(true);
+    const wrapper = await mountAt("/studio?section=scenes");
+    expect(wrapper.find('[data-testid="studio-selbar"]').exists()).toBe(false);
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await wrapper.find('[data-key="scene:2"]').trigger("click", { ctrlKey: true });
+    const pill = () => wrapper.find('[data-testid="studio-selbar"]');
+    expect(pill().exists()).toBe(true);
+    const verbs = pill().findAll("[data-verb]").map((b) => b.attributes("data-verb"));
+    // Destructive last, then Clear.
+    expect(verbs.slice(-2)).toEqual(["delete", "clear"]);
+    expect(verbs).toContain("duplicate");
+
+    await pill().find('[data-verb="delete"]').trigger("click");
+    await flushPromises();
+    expect(api.deleteScene.mock.calls.map(([id]) => id)).toEqual([1, 2]);
+
+    await wrapper.find('[data-key="scene:1"]').trigger("click");
+    await pill().find('[data-verb="clear"]').trigger("click");
+    expect(pill().exists()).toBe(false);
+  });
+
   it("opens the menu on a right-click, on that card alone when it was not selected", async () => {
     const wrapper = await mountAt("/studio?section=scenes");
     await wrapper.find('[data-key="scene:2"]').trigger("click");
@@ -607,11 +629,22 @@ describe("a location's pictures", () => {
     await pic(wrapper, 31).trigger("click");
     await pic(wrapper, 33).trigger("click", { ctrlKey: true });
     expect(chosen(wrapper)).toEqual(["studio-pic-31", "studio-pic-33"]);
-    await wrapper.find('[data-testid="studio-pics-remove"]').trigger("click");
+    // The selection pill, as on every grid.
+    await wrapper.find('[data-testid="studio-pics-bar"] [data-verb="remove"]').trigger("click");
     await flushPromises();
     expect(api.removePictureFromSet.mock.calls).toEqual([[30, 31], [30, 33]]);
     // The picture is only taken out of the location, never deleted.
     expect(api.deletePictures).not.toHaveBeenCalled();
+  });
+
+  it("deletes the selected pictures from the pill, to the Scrapheap", async () => {
+    api.deletePictures.mockResolvedValue({});
+    const wrapper = await mountAt("/studio?section=locations&open=location:30");
+    await pic(wrapper, 32).trigger("click");
+    await wrapper.find('[data-testid="studio-pics-bar"] [data-verb="delete"]').trigger("click");
+    await flushPromises();
+    expect(api.deletePictures).toHaveBeenCalledWith([32]);
+    expect(wrapper.find('[data-testid="studio-pics-bar"]').exists()).toBe(false);
   });
 
   it("deletes a Shift range with the Delete key, and Esc clears before it closes", async () => {

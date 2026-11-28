@@ -120,32 +120,6 @@
         <template v-else>
           <!-- Click selects (Ctrl adds, Shift ranges), Esc clears, Delete or
                right-click acts on the selection: the picture grid's gestures. -->
-          <div
-            v-if="selected.length"
-            class="studio-selbar"
-            role="toolbar"
-            aria-label="Selected pictures"
-            data-testid="studio-pics-bar"
-          >
-            <span class="studio-sub">{{ selected.length }} selected</span>
-            <AppButton
-              size="sm"
-              icon-left="playlist-remove"
-              data-testid="studio-pics-remove"
-              @click="removeSelected"
-              >Remove from this {{ noun }}</AppButton
-            >
-            <AppButton
-              size="sm"
-              variant="danger"
-              icon-left="delete-outline"
-              tooltip="To the Scrapheap, where it can be restored (Del)"
-              data-testid="studio-pics-delete"
-              @click="deleteSelected"
-              >Delete</AppButton
-            >
-            <AppButton size="sm" variant="ghost" @click="selected = []">Clear</AppButton>
-          </div>
           <div class="studio-angles" @click.self="selected = []">
             <figure
               v-for="(pid, i) in item.picture_ids"
@@ -172,6 +146,19 @@
             </p>
           </div>
         </template>
+      </div>
+      <!-- The selection pill over the pictures, as on every grid. -->
+      <div v-if="selected.length" class="selbar-float">
+        <StudioSelectionBar
+          :count="selected.length"
+          noun="picture"
+          plural="pictures"
+          :verbs="pictureVerbs"
+          testid="studio-pics-bar"
+          @verb="pictureVerb"
+          @clear="selected = []"
+          @select-all="selected = [...(item?.picture_ids ?? [])]"
+        />
       </div>
     </div>
     <aside class="studio-inspector" aria-label="Inspector">
@@ -305,6 +292,7 @@ import { VIcon } from "vuetify/components";
 import AppButton from "../widgets/AppButton.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import OutfitPicker from "../widgets/OutfitPicker.vue";
+import StudioSelectionBar from "../panels/StudioSelectionBar.vue";
 import { deletePictures, pictureThumbnailUrl } from "../../api/pictures";
 import { removePictureFromSet } from "../../api/pictureSets";
 import { setStudioFavourite, stopUsingSetInStudio } from "../../api/studio";
@@ -379,6 +367,22 @@ watch(
 watch(() => props.itemId, () => {
   selected.value = [];
 });
+
+// The pill's verbs, the same two the right-click menu has.
+const pictureVerbs = computed(() => [
+  { key: "remove", icon: "playlist-remove", label: `Remove from this ${noun.value}` },
+  {
+    key: "delete",
+    icon: "delete-outline",
+    label: "Delete: to the Scrapheap, where it can be restored (Del)",
+    danger: true,
+  },
+]);
+
+function pictureVerb(key) {
+  if (key === "remove") removeSelected();
+  else if (key === "delete") deleteSelected();
+}
 
 /** Take the selected pictures out of this item; they stay in the library. */
 async function removeSelected() {
